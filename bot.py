@@ -159,15 +159,15 @@ def admin_panel(message):
     if message.from_user.id != ADMIN_CHAT_ID:
         return
     markup = InlineKeyboardMarkup()
-    markup.row(InlineKeyboardButton("📋 لیست کاربران و تایید پرداخت‌ها", callback_data="admin_users"))
-    markup.row(InlineKeyboardButton("👝 لیست یکجای ولت‌ها", callback_data="admin_wallets"))
+    markup.row(InlineKeyboardButton("👝 دریافت فایل لیست ولت‌ها و کاربران تایید شده", callback_data="admin_wallets_file"))
     markup.row(InlineKeyboardButton("📊 آمار کلی ربات", callback_data="admin_stats"))
-    markup.row(InlineKeyboardButton("📁 دریافت فایل خروجی CSV", callback_data="admin_export"))
+    markup.row(InlineKeyboardButton("📁 دریافت فایل خروجی کامل CSV", callback_data="admin_export"))
     
     help_text = (
-        "👑 *پنل مدیریت ایردراپ*\n\n"
+        "👑 *پنل مدیریت ایردراپ (نسخه بهینه شده برای حجم بالا)*\n\n"
         "دستورات متنی ادمین:\n"
         "🔍 جستجو (آیدی، اینستا، ولت):\n`/search متن_یا_آیدی`\n\n"
+        "✅ تایید پرداخت کاربر با آیدی عددی:\n`/payuser آیدی_عددی`\n\n"
         "❌ حذف کاربر:\n`/deleteuser آیدی_عددی`\n\n"
         "📢 ارسال همگانی به همه:\n`/sendall متن پیام`"
     )
@@ -177,48 +177,34 @@ def admin_panel(message):
 def admin_callbacks(call):
     if call.from_user.id != ADMIN_CHAT_ID:
         return
-    if call.data == "admin_users":
-        show_eligible_users_direct(call.message)
-    elif call.data == "admin_wallets":
-        get_all_wallets_direct(call.message)
+    if call.data == "admin_wallets_file":
+        get_all_wallets_file(call.message)
     elif call.data == "admin_stats":
         show_stats_direct(call.message)
     elif call.data == "admin_export":
         export_csv_direct(call.message)
     bot.answer_callback_query(call.id)
 
-def show_eligible_users_direct(message):
+def get_all_wallets_file(message):
     conn = sqlite3.connect('/tmp/referrals.db')
     cursor = conn.cursor()
-    cursor.execute("SELECT user_id, ref_count, paid, instagram_id, wallet FROM users WHERE submitted = 1 ORDER BY paid ASC, ref_count DESC")
+    cursor.execute("SELECT user_id, ref_count, wallet, instagram_id, paid FROM users WHERE submitted = 1 ORDER BY ref_count DESC")
     rows = cursor.fetchall()
     conn.close()
+    
     if not rows:
-        bot.send_message(ADMIN_CHAT_ID, "⚠️ هنوز هیچ کاربری فرم اطلاعاتش را نفرستاده است.")
+        bot.send_message(ADMIN_CHAT_ID, "⚠️ هیچ کاربری هنوز فرم اطلاعاتش را ارسال نکرده است.")
         return
-    for uid, ref_cnt, paid_status, insta, wlt in rows:
-        earned_tokens = calculate_tokens(ref_cnt)
-        status_text = "✅ پرداخت شده" if paid_status == 1 else "⏳ در انتظار پرداخت"
-        text = f"👤 آیدی عددی: `{uid}`\n📸 اینستاگرام: `{insta}`\n👝 ولت: `{wlt}`\n👥 دعوت: `{ref_cnt}`\n🎁 توکن: `{earned_tokens}`\n📌 وضعیت: `{status_text}`"
-        markup = InlineKeyboardMarkup()
-        btn_text = "❌ لغو" if paid_status == 1 else "✅ تایید"
-        markup.row(InlineKeyboardButton(btn_text, callback_data=f"pay_{uid}"))
-        bot.send_message(ADMIN_CHAT_ID, text, reply_markup=markup, parse_mode="Markdown")
-
-def get_all_wallets_direct(message):
-    conn = sqlite3.connect('/tmp/referrals.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT user_id, ref_count, wallet, instagram_id FROM users WHERE submitted = 1 AND paid = 0 ORDER BY ref_count DESC")
-    rows = cursor.fetchall()
-    conn.close()
-    if not rows:
-        bot.send_message(ADMIN_CHAT_ID, "⚠️ کاربر در انتظار پرداختی نیست.")
-        return
-    text = "👝 لیست ولت‌ها:\n\n"
-    for uid, ref_cnt, wlt, insta in rows:
+        
+    text = "👝 لیست کامل ولت‌ها و کاربران ثبت‌نام کرده:\n\n"
+    for uid, ref_cnt, wlt, insta, paid in rows:
         tokens = calculate_tokens(ref_cnt)
-        text += f"📌 آیدی: `{uid}`\nاینستا: `{insta}`\nولت: `{wlt}`\nمقدار: `{tokens}`\n---\n"
-    bot.send_message(ADMIN_CHAT_ID, text, parse_mode="Markdown")
+        status = "✅ پرداخت شده" if paid == 1 else "⏳ در انتظار پرداخت"
+        text += f"📌 آیدی: `{uid}`\nاینستا: `{insta}`\nولت: `{wlt}`\nمقدار: `{tokens} PRS` | وضعیت: `{status}`\n------------------\n"
+    
+    file_bytes = io.BytesIO(text.encode('utf-8'))
+    file_bytes.name = 'wallets_list.txt'
+    bot.send_document(ADMIN_CHAT_ID, file_bytes, caption="📁 فایل متنی لیست ولت‌ها برای جلوگیری از محدودیت ارسال پیام.")
 
 def show_stats_direct(message):
     conn = sqlite3.connect('/tmp/referrals.db')
@@ -230,7 +216,7 @@ def show_stats_direct(message):
     cursor.execute("SELECT COUNT(*) FROM users WHERE paid = 1")
     t_p = cursor.fetchone()[0]
     conn.close()
-    bot.send_message(ADMIN_CHAT_ID, f"📊 آمار:\nکل: {t_u}\nثبت فرم: {t_s}\nپرداختی: {t_p}", parse_mode="Markdown")
+    bot.send_message(ADMIN_CHAT_ID, f"📊 آمار کلی ربات:\n\n👤 کل کاربران استارت کرده: {t_u}\n📝 تعداد ثبت‌فرم‌ها: {t_s}\n💰 پرداخت‌شده‌ها: {t_p}", parse_mode="Markdown")
 
 def export_csv_direct(message):
     conn = sqlite3.connect('/tmp/referrals.db')
@@ -244,8 +230,8 @@ def export_csv_direct(message):
         output.write(",".join(str(v) if v is not None else '' for v in row) + '\n')
     output.seek(0)
     file_bytes = io.BytesIO(output.getvalue().encode('utf-8'))
-    file_bytes.name = 'users.csv'
-    bot.send_document(ADMIN_CHAT_ID, file_bytes)
+    file_bytes.name = 'users_backup.csv'
+    bot.send_document(ADMIN_CHAT_ID, file_bytes, caption="📊 فایل پشتیبان کامل اطلاعات دیتابیس (CSV)")
 
 def show_main_menu(chat_id, user_id):
     user_data = get_user_data(user_id)
@@ -258,7 +244,6 @@ def show_main_menu(chat_id, user_id):
         InlineKeyboardButton("📸 اینستاگرام", url=INSTAGRAM_URL)
     )
     markup.row(InlineKeyboardButton("🐦 توییتر (ایکس)", url=TWITTER_URL))
-    markup.row(InlineKeyboardButton("🔄 بررسی عضویت در کانال", callback_data="check_join"))
     markup.row(InlineKeyboardButton("🔗 دریافت لینک دعوت جذاب و اختصاصی", callback_data="get_ref_link"))
     markup.row(InlineKeyboardButton("🏆 برترین دعوت‌کنندگان", callback_data="leaderboard"))
     markup.row(InlineKeyboardButton("📊 وضعیت من", callback_data="my_status"), InlineKeyboardButton("📝 ارسال اطلاعات و ولت", callback_data="submit_info"))
@@ -267,11 +252,8 @@ def show_main_menu(chat_id, user_id):
         f"🔴 *به ربات رسمی ایردراپ توکن هواداری پرسپولیس (PRS) خوش آمدید* 🏆\n\n"
         f"🪙 *معرفی پروژه:* توکن هواداری پرسپولیس بستری مدرن برای هواداران عزیز است تا در اکوسیستم دیجیتال باشگاه سهم داشته باشند.\n\n"
         f"🎁 *سیستم پاداش‌دهی و ایردراپ:*\n"
-        f"▫️ پاداش پایه: `{BASE_REWARD} PRS` (پس از دعوت حداقل `{REQUIRED_REFERRALS}` دوست)\n"
+        f"▫️ پاداش پایه: `{BASE_REWARD} PRS` (پس از عضویت در کانال و دعوت `{REQUIRED_REFERRALS}` دوست)\n"
         f"▫️ پاداش به ازای هر دعوت مازاد: `{EXTRA_REWARD} PRS`\n\n"
-        f"⚠️ *شرایط مهم:*\n"
-        f"۱. عضویت در کانال تلگرام و پیوستن به اینستاگرام/توییتر الزامی است.\n"
-        f"۲. برای ارسال اطلاعات و ولت، باید حداقل `{REQUIRED_REFERRALS}` نفر را دعوت کرده باشید.\n\n"
         f"📊 *وضعیت شما در ربات:*\n"
         f"👥 دعوت‌های شما: `{ref_count} / {REQUIRED_REFERRALS}`\n"
         f"🎁 توکن کسب‌شده: `{earned} PRS`"
@@ -315,6 +297,18 @@ def handle_all_messages(message):
                 res += f"👤 آیدی: `{r[0]}`\n👥 رفال: `{r[2]}`\n📸 اینستا: `{r[6]}`\n👝 ولت: `{r[7]}`\n📌 ثبت فرم: `{r[3]}` | پرداخت: `{r[4]}`\n---\n"
             bot.send_message(ADMIN_CHAT_ID, res, parse_mode="Markdown")
             return
+        elif text.startswith("/payuser "):
+            target_id = text.replace("/payuser", "").strip()
+            if target_id.isdigit():
+                res = toggle_paid_status(int(target_id))
+                if res is not None:
+                    status_str = "✅ پرداخت‌شده" if res == 1 else "⏳ در انتظار پرداخت"
+                    bot.send_message(ADMIN_CHAT_ID, f"وضعیت پرداخت کاربر `{target_id}` به **{status_str}** تغییر یافت.", parse_mode="Markdown")
+                else:
+                    bot.send_message(ADMIN_CHAT_ID, "❌ کاربر مورد نظر پیدا نشد.")
+            else:
+                bot.send_message(ADMIN_CHAT_ID, "⚠️ آیدی عددی وارد شده معتبر نیست.")
+            return
         elif text.startswith("/deleteuser "):
             target_id = text.replace("/deleteuser", "").strip()
             if target_id.isdigit():
@@ -356,11 +350,7 @@ def handle_all_messages(message):
             conn.commit()
             conn.close()
             register_user_after_verify(user_id, referrer_id)
-            
-            if not check_channel(user_id):
-                bot.send_message(user_id, f"❌ شما هنوز در کانال {CHANNEL_ID} عضو نیستید. لطفاً ابتدا عضو کانال شوید و سپس روی دکمه بررسی عضویت بزنید.", parse_mode="Markdown")
-            else:
-                show_main_menu(user_id, user_id)
+            show_main_menu(user_id, user_id)
         else:
             conn.close()
             bot.send_message(user_id, "❌ پاسخ اشتباه است. دوباره تلاش کنید.")
@@ -374,12 +364,6 @@ def handle_all_messages(message):
     conn.close()
 
     if is_submitting:
-        user_data = get_user_data(user_id)
-        ref_count = user_data[0] if user_data else 0
-        if ref_count < REQUIRED_REFERRALS:
-            bot.send_message(user_id, f"❌ شما هنوز به حد نصاب دعوت نرسیده‌اید. تعداد دعوت‌های فعلی شما: {ref_count} از {REQUIRED_REFERRALS}")
-            return
-        
         parts = text.split('\n')
         if len(parts) >= 2:
             save_submission(user_id, parts[0], parts[1])
@@ -391,13 +375,7 @@ def handle_all_messages(message):
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
     user_id = call.from_user.id
-    if call.data == "check_join":
-        if check_channel(user_id):
-            bot.answer_callback_query(call.id, "✅ عضویت شما تایید شد!")
-            show_main_menu(call.message.chat.id, user_id)
-        else:
-            bot.answer_callback_query(call.id, f"❌ شما هنوز در کانال {CHANNEL_ID} عضو نیستید!", show_alert=True)
-    elif call.data == "get_ref_link":
+    if call.data == "get_ref_link":
         bot.answer_callback_query(call.id)
         ref_link = f"https://t.me/{BOT_USERNAME}?start={user_id}"
         
@@ -438,17 +416,27 @@ def handle_callbacks(call):
         earned = calculate_tokens(ref_count)
         bot.answer_callback_query(call.id, f"📊 دعوت‌ها: {ref_count}/{REQUIRED_REFERRALS} | توکن: {earned} PRS", show_alert=True)
     elif call.data == "submit_info":
+        is_member = check_channel(user_id)
         user_data = get_user_data(user_id)
         ref_count = user_data[0] if user_data else 0
+
+        errors = []
+        if not is_member:
+            errors.append(f"❌ شما هنوز در کانال رسمی ربات ({CHANNEL_ID}) عضو نشده‌اید.")
         if ref_count < REQUIRED_REFERRALS:
-            bot.answer_callback_query(call.id, f"❌ برای ارسال اطلاعات باید حداقل {REQUIRED_REFERRALS} نفر دعوت کرده باشید! (تعداد فعلی: {ref_count})", show_alert=True)
+            errors.append(f"❌ تعداد دعوت‌های شما ({ref_count} نفر) به حد نصاب نرسیده است. (حداقل مورد نیاز: {REQUIRED_REFERRALS} نفر)")
+
+        if errors:
+            bot.answer_callback_query(call.id, "⚠️ شرایط لازم برای ثبت اطلاعات را ندارید!", show_alert=True)
+            bot.send_message(
+                user_id,
+                "⚠️ **امکان ثبت اطلاعات وجود ندارد:**\n\n" + "\n".join(errors) + "\n\nلطفاً پس از رفع موانع دوباره تلاش کنید.",
+                parse_mode="Markdown"
+            )
             return
+
         bot.answer_callback_query(call.id)
         bot.send_message(user_id, "لطفاً اطلاعات خود را دقیقاً در ۲ خط بفرستید:\nخط ۱: آیدی اینستاگرام\nخط ۲: آدرس ولت (ارز دیجیتال)")
-    elif call.data.startswith("pay_") and user_id == ADMIN_CHAT_ID:
-        target_uid = int(call.data.split("_")[1])
-        toggle_paid_status(target_uid)
-        bot.answer_callback_query(call.id, "وضعیت پرداخت تغییر کرد.")
 
 if __name__ == "__main__":
     print("Bot is starting with Long Polling...")
