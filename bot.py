@@ -61,17 +61,19 @@ def register_user_after_verify(user_id, referrer_id):
     cursor = conn.cursor()
     cursor.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
     if not cursor.fetchone():
-        cursor.execute("INSERT INTO users (user_id, referred_by, verified) VALUES (?, ?, 1)", (user_id, referrer_id))
-        if referrer_id and referrer_id != user_id:
-            cursor.execute("UPDATE users SET ref_count = ref_count + 1 WHERE user_id = ?", (referrer_id,))
+        actual_referrer = referrer_id if (referrer_id and referrer_id != user_id) else None
+        cursor.execute("INSERT INTO users (user_id, referred_by, verified) VALUES (?, ?, 1)", (user_id, actual_referrer))
+        
+        if actual_referrer:
+            cursor.execute("UPDATE users SET ref_count = ref_count + 1 WHERE user_id = ?", (actual_referrer,))
             conn.commit()
             try:
-                cursor.execute("SELECT ref_count FROM users WHERE user_id = ?", (referrer_id,))
+                cursor.execute("SELECT ref_count FROM users WHERE user_id = ?", (actual_referrer,))
                 ref_row = cursor.fetchone()
                 current_refs = ref_row[0] if ref_row else 1
                 earned_now = calculate_tokens(current_refs)
                 bot.send_message(
-                    referrer_id,
+                    actual_referrer,
                     f"🎉 *یک زیرمجموعه جدید با لینک شما وارد شد!*\n\n"
                     f"👥 تعداد کل دعوت‌های شما: `{current_refs}`\n"
                     f"🎁 مجموع توکن کسب‌شده: `{earned_now}` PRS",
@@ -97,19 +99,12 @@ def save_submission(user_id, instagram_id, wallet):
     conn.commit()
     conn.close()
 
-def toggle_paid_status(user_id):
+def set_paid_status(user_id, status):
     conn = sqlite3.connect('/tmp/referrals.db')
     cursor = conn.cursor()
-    cursor.execute("SELECT paid FROM users WHERE user_id = ?", (user_id,))
-    row = cursor.fetchone()
-    if row:
-        new_status = 0 if row[0] == 1 else 1
-        cursor.execute("UPDATE users SET paid = ? WHERE user_id = ?", (new_status, user_id))
-        conn.commit()
-        conn.close()
-        return new_status
+    cursor.execute("UPDATE users SET paid = ? WHERE user_id = ?", (status, user_id))
+    conn.commit()
     conn.close()
-    return None
 
 def calculate_tokens(ref_count):
     if ref_count < REQUIRED_REFERRALS:
@@ -130,6 +125,14 @@ def send_welcome(message):
     args = message.text.split()
     referrer_id = int(args[1]) if len(args) > 1 and args[1].isdigit() else None
     
+    if referrer_id == user_id:
+        user_data = get_user_data(user_id)
+        if user_data and user_data[3] == 1:
+            show_main_menu(message.chat.id, user_id)
+        else:
+            bot.send_message(message.chat.id, "⚠️ شما نمی‌توانید از لینک دعوت خودتان استفاده کنید!")
+        return
+
     user_data = get_user_data(user_id)
     if user_data and user_data[3] == 1:
         show_main_menu(message.chat.id, user_id)
@@ -159,7 +162,7 @@ def admin_panel(message):
     if message.from_user.id != ADMIN_CHAT_ID:
         return
     markup = InlineKeyboardMarkup()
-    markup.row(InlineKeyboardButton("👝 دریافت فایل لیست ولت‌ها و کاربران تایید شده", callback_data="admin_wallets_file"))
+    markup.row(InlineKeyboardButton("👝 مدیریت و لیست ولت‌ها (تایید پرداخت)", callback_data="admin_wallets_list"))
     markup.row(InlineKeyboardButton("📊 آمار کلی ربات", callback_data="admin_stats"))
     markup.row(InlineKeyboardButton("📁 دریافت فایل خروجی کامل CSV", callback_data="admin_export"))
     
@@ -167,7 +170,6 @@ def admin_panel(message):
         "👑 *پنل مدیریت ایردراپ*\n\n"
         "دستورات متنی ادمین:\n"
         "🔍 جستجو (آیدی، اینستا، ولت):\n`/search متن_یا_آیدی`\n\n"
-        "✅ تایید پرداخت کاربر با آیدی عددی:\n`/payuser آیدی_عددی`\n\n"
         "❌ حذف کاربر:\n`/deleteuser آیدی_عددی`\n\n"
         "📢 ارسال همگانی به همه:\n`/sendall متن پیام`"
     )
@@ -177,34 +179,91 @@ def admin_panel(message):
 def admin_callbacks(call):
     if call.from_user.id != ADMIN_CHAT_ID:
         return
-    if call.data == "admin_wallets_file":
-        get_all_wallets_file(call.message)
-    elif call.data == "admin_stats":
+    
+    data = call.data
+    if data == "admin_wallets_list":
+        send_paginated_wallets(call.message, offset=0)
+    elif data == "admin_stats":
         show_stats_direct(call.message)
-    elif call.data == "admin_export":
+    elif data == "admin_export":
         export_csv_direct(call.message)
+    elif data.startswith("admin_pay_"):
+        parts = data.split("_")
+        target_id = int(parts[2])
+        action = parts[3] # "yes" or "no"
+        new_val = 1 if action == "yes" else 0
+        set_paid_status(target_id, new_val)
+        
+        bot.answer_callback_query(call.id, "✅ وضعیت پرداخت به‌روز شد.")
+        # آپدیت همان پیام لیست
+        try:
+            update_wallet_message(call.message)
+        except Exception:
+            pass
+    elif data.startswith("admin_page_"):
+        offset = int(data.split("_")[2])
+        send_paginated_wallets(call.message, offset=offset, edit=True)
+        bot.answer_callback_query(call.id)
+        return
+
     bot.answer_callback_query(call.id)
 
-def get_all_wallets_file(message):
+def send_paginated_wallets(message, offset=0, edit=False):
     conn = sqlite3.connect('/tmp/referrals.db')
     cursor = conn.cursor()
     cursor.execute("SELECT user_id, ref_count, wallet, instagram_id, paid FROM users WHERE submitted = 1 ORDER BY ref_count DESC")
     rows = cursor.fetchall()
     conn.close()
-    
+
     if not rows:
-        bot.send_message(ADMIN_CHAT_ID, "⚠️ هیچ کاربری هنوز فرم اطلاعاتش را ارسال نکرده است.")
+        msg = "⚠️ هیچ کاربری هنوز فرم اطلاعاتش را ارسال نکرده است."
+        if edit:
+            bot.edit_message_text(msg, chat_id=ADMIN_CHAT_ID, message_id=message.message_id)
+        else:
+            bot.send_message(ADMIN_CHAT_ID, msg)
         return
-        
-    text = "👝 لیست کامل ولت‌ها و کاربران ثبت‌نام کرده:\n\n"
-    for uid, ref_cnt, wlt, insta, paid in rows:
+
+    limit = 5 # تعداد کاربر در هر صفحه برای خوانایی بهتر تلگرام
+    page_rows = rows[offset:offset+limit]
+
+    text = f"👝 **لیست کاربران ثبت‌نام کرده (مجموع: {len(rows)} نفر):**\n\n"
+    markup = InlineKeyboardMarkup()
+
+    for uid, ref_cnt, wlt, insta, paid in page_rows:
         tokens = calculate_tokens(ref_cnt)
-        status = "✅ پرداخت شده" if paid == 1 else "⏳ در انتظار پرداخت"
-        text += f"📌 آیدی: `{uid}`\nاینستا: `{insta}`\nولت: `{wlt}`\nمقدار: `{tokens} PRS` | وضعیت: `{status}`\n------------------\n"
-    
-    file_bytes = io.BytesIO(text.encode('utf-8'))
-    file_bytes.name = 'wallets_list.txt'
-    bot.send_document(ADMIN_CHAT_ID, file_bytes, caption="📁 فایل متنی لیست ولت‌ها برای جلوگیری از محدودیت ارسال پیام.")
+        status_str = "✅ پرداخت‌شده" if paid == 1 else "⏳ در انتظار پرداخت"
+        
+        text += f"📌 آیدی: `{uid}`\n" \
+                f"👤 اینستا: `{insta}`\n" \
+                f"👝 ولت: `{wlt}`\n" \
+                f"🎁 مقدار: `{tokens} PRS` | وضعیت: *{status_str}*\n" \
+                f"----------------------------------\n"
+        
+        # دکمه‌های شیشه‌ای تایید و لغو پرداخت برای هر کاربر
+        btn_pay = InlineKeyboardButton(f"✅ تایید ({uid})", callback_data=f"admin_pay_{uid}_yes")
+        btn_unpay = InlineKeyboardButton(f"❌ لغو ({uid})", callback_data=f"admin_pay_{uid}_no")
+        markup.row(btn_pay, btn_unpay)
+
+    # دکمه‌های صفحه بندی (قبلی / بعدی)
+    nav_buttons = []
+    if offset > 0:
+        nav_buttons.append(InlineKeyboardButton("⬅️ صفحه قبل", callback_data=f"admin_page_{offset - limit}"))
+    if offset + limit < len(rows):
+        nav_buttons.append(InlineKeyboardButton("صفحه بعد ➡️", callback_data=f"admin_page_{offset + limit}"))
+    if nav_buttons:
+        markup.row(*nav_buttons)
+
+    if edit:
+        try:
+            bot.edit_message_text(text, chat_id=ADMIN_CHAT_ID, message_id=message.message_id, reply_markup=markup, parse_mode="Markdown")
+        except Exception:
+            pass
+    else:
+        bot.send_message(ADMIN_CHAT_ID, text, reply_markup=markup, parse_mode="Markdown")
+
+def update_wallet_message(message):
+    # برای به‌روزرسانی صفحه فعلی پس از کلیک روی دکمه‌ها
+    send_paginated_wallets(message, offset=0, edit=True)
 
 def show_stats_direct(message):
     conn = sqlite3.connect('/tmp/referrals.db')
@@ -296,18 +355,6 @@ def handle_all_messages(message):
             for r in rows:
                 res += f"👤 آیدی: `{r[0]}`\n👥 رفال: `{r[2]}`\n📸 اینستا: `{r[6]}`\n👝 ولت: `{r[7]}`\n📌 ثبت فرم: `{r[3]}` | پرداخت: `{r[4]}`\n---\n"
             bot.send_message(ADMIN_CHAT_ID, res, parse_mode="Markdown")
-            return
-        elif text.startswith("/payuser "):
-            target_id = text.replace("/payuser", "").strip()
-            if target_id.isdigit():
-                res = toggle_paid_status(int(target_id))
-                if res is not None:
-                    status_str = "✅ پرداخت‌شده" if res == 1 else "⏳ در انتظار پرداخت"
-                    bot.send_message(ADMIN_CHAT_ID, f"وضعیت پرداخت کاربر `{target_id}` به **{status_str}** تغییر یافت.", parse_mode="Markdown")
-                else:
-                    bot.send_message(ADMIN_CHAT_ID, "❌ کاربر مورد نظر پیدا نشد.")
-            else:
-                bot.send_message(ADMIN_CHAT_ID, "⚠️ آیدی عددی وارد شده معتبر نیست.")
             return
         elif text.startswith("/deleteuser "):
             target_id = text.replace("/deleteuser", "").strip()
