@@ -1,39 +1,3 @@
-from collections import defaultdict
-import io
-import os
-import random
-import sqlite3
-from telebot import TeleBot
-from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
-
-# ==================== اطلاعات اختصاصی پروژه ====================
-TOKEN = "8629221284:AAFRFeQuMoeBHcnNU8ifQAIRLTu4CTYVU4E"
-BOT_USERNAME = "PRS_Airdrop_Bot"
-CHANNEL_ID = "@persepolisToken6"
-ADMIN_CHAT_ID = 6661478622
-REQUIRED_REFERRALS = 5
-
-BASE_REWARD = 1000
-EXTRA_REWARD = 200
-
-BANNER_FILE_ID = "AgACAgQAAxkBAAMfamINNXWkFr-wk1ONFWAEHF2z-vGAAsgNaxtnhwABU-cbUHZe_7c6AQADAgADeQADPQQ"
-
-# استفاده از حالت لانگ پولینگ پایدار
-bot = TeleBot(TOKEN, threaded=True)
-
-
-def init_db():
-    conn = sqlite3.connect("/tmp/referrals.db")
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            referred_by INTEGER,
-            ref_count INTEGER DEFAULT 0,
-            submitted INTEGER DEFAULT 0,
-            paid INTEGER DEFAULT 0,
-            verified INTEGER DEFAULT 0,
-            user_info TEXT,
             instagram_id TEXT,
             wallet TEXT
         )
