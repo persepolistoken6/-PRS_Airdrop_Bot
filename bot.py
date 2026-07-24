@@ -17,7 +17,7 @@ REQUIRED_REFERRALS = 5
 
 BASE_REWARD = 1000
 EXTRA_REWARD = 200
-DAILY_REWARD = 20  # مقدار پاداش روزانه
+DAILY_REWARD = 10  # پاداش روزانه به 10 توکن تغییر یافت
 
 BANNER_FILE_ID = "AgACAgQAAxkBAAMfamINNXWkFr-wk1ONFWAEHF2z-vGAAsgNaxtnhwABU-cbUHZe_7c6AQADAgADeQADPQQ"
 
@@ -36,7 +36,8 @@ def init_db():
             verified INTEGER DEFAULT 0,
             instagram_id TEXT,
             wallet TEXT,
-            last_daily INTEGER DEFAULT 0
+            last_daily INTEGER DEFAULT 0,
+            daily_count INTEGER DEFAULT 0
         )
     ''')
     cursor.execute('''
@@ -54,7 +55,7 @@ init_db()
 def get_user_data(user_id):
     conn = sqlite3.connect('/tmp/referrals.db')
     cursor = conn.cursor()
-    cursor.execute("SELECT ref_count, submitted, paid, verified, last_daily FROM users WHERE user_id = ?", (user_id,))
+    cursor.execute("SELECT ref_count, submitted, paid, verified, last_daily, daily_count FROM users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
     conn.close()
     return row
@@ -71,10 +72,11 @@ def register_user_after_verify(user_id, referrer_id):
             cursor.execute("UPDATE users SET ref_count = ref_count + 1 WHERE user_id = ?", (actual_referrer,))
             conn.commit()
             try:
-                cursor.execute("SELECT ref_count FROM users WHERE user_id = ?", (actual_referrer,))
+                cursor.execute("SELECT ref_count, daily_count FROM users WHERE user_id = ?", (actual_referrer,))
                 ref_row = cursor.fetchone()
                 current_refs = ref_row[0] if ref_row else 1
-                earned_now = calculate_tokens(current_refs)
+                d_count = ref_row[1] if ref_row else 0
+                earned_now = calculate_total_tokens(current_refs, d_count)
                 bot.send_message(
                     actual_referrer,
                     f"🎉 *یک زیرمجموعه جدید با لینک شما وارد شد!*\n\n"
@@ -114,6 +116,11 @@ def calculate_tokens(ref_count):
         return 0
     extra = ref_count - REQUIRED_REFERRALS
     return BASE_REWARD + (extra * EXTRA_REWARD)
+
+def calculate_total_tokens(ref_count, daily_count):
+    base_ref_tokens = calculate_tokens(ref_count)
+    daily_tokens = daily_count * DAILY_REWARD
+    return base_ref_tokens + daily_tokens
 
 def get_ref_details(ref_count):
     if ref_count >= REQUIRED_REFERRALS:
@@ -224,7 +231,7 @@ def admin_callbacks(call):
 def send_paginated_wallets(message, offset=0, edit=False):
     conn = sqlite3.connect('/tmp/referrals.db')
     cursor = conn.cursor()
-    cursor.execute("SELECT user_id, ref_count, wallet, instagram_id, paid FROM users WHERE submitted = 1 ORDER BY ref_count DESC")
+    cursor.execute("SELECT user_id, ref_count, wallet, instagram_id, paid, daily_count FROM users WHERE submitted = 1 ORDER BY ref_count DESC")
     rows = cursor.fetchall()
     conn.close()
 
@@ -242,8 +249,8 @@ def send_paginated_wallets(message, offset=0, edit=False):
     text = f"👝 **لیست کاربران ثبت‌نام کرده (مجموع: {len(rows)} نفر):**\n\n"
     markup = InlineKeyboardMarkup()
 
-    for uid, ref_cnt, wlt, insta, paid in page_rows:
-        tokens = calculate_tokens(ref_cnt)
+    for uid, ref_cnt, wlt, insta, paid, d_count in page_rows:
+        total_tokens = calculate_total_tokens(ref_cnt, d_count)
         base_used, extra_count = get_ref_details(ref_cnt)
         status_str = "✅ پرداخت‌شده" if paid == 1 else "⏳ در انتظار پرداخت"
         
@@ -251,7 +258,8 @@ def send_paginated_wallets(message, offset=0, edit=False):
                 f"👤 اینستا: `{insta}`\n" \
                 f"👝 ولت: `{wlt}`\n" \
                 f"👥 دعوت ثابت: {base_used} | مازاد: {extra_count} (کل: {ref_cnt})\n" \
-                f"🎁 مقدار توکن: `{tokens} PRS` | وضعیت: *{status_str}*\n" \
+                f"🎁 توکن کل: `{total_tokens} PRS` (پاداش روزانه: {d_count} بار)\n" \
+                f"وضعیت: *{status_str}*\n" \
                 f"----------------------------------\n"
         
         btn_pay = InlineKeyboardButton(f"✅ تایید ({uid})", callback_data=f"admin_pay_{uid}_yes")
@@ -280,7 +288,7 @@ def update_wallet_message(message):
 def send_detailed_report_file(message):
     conn = sqlite3.connect('/tmp/referrals.db')
     cursor = conn.cursor()
-    cursor.execute("SELECT user_id, ref_count, wallet, instagram_id, paid FROM users WHERE submitted = 1 ORDER BY paid ASC, ref_count DESC")
+    cursor.execute("SELECT user_id, ref_count, wallet, instagram_id, paid, daily_count FROM users WHERE submitted = 1 ORDER BY paid ASC, ref_count DESC")
     rows = cursor.fetchall()
     conn.close()
 
@@ -294,15 +302,15 @@ def send_detailed_report_file(message):
     paid_count = 0
     unpaid_count = 0
 
-    for uid, ref_cnt, wlt, insta, paid in rows:
-        tokens = calculate_tokens(ref_cnt)
+    for uid, ref_cnt, wlt, insta, paid, d_count in rows:
+        total_tokens = calculate_total_tokens(ref_cnt, d_count)
         base_used, extra_count = get_ref_details(ref_cnt)
         user_block = (
             f"📌 آیدی عددی: `{uid}`\n"
             f"👤 اینستاگرام: `{insta}`\n"
             f"👝 آدرس ولت: `{wlt}`\n"
             f"👥 رفال ثابت: {base_used} | مازاد: {extra_count} (کل: {ref_cnt})\n"
-            f"🎁 توکن کل: {tokens} PRS\n"
+            f"🎁 توکن کل: {total_tokens} PRS (پاداش روزانه اخذ شده: {d_count} بار)\n"
             f"----------------------------------\n"
         )
         if paid == 1:
@@ -337,29 +345,30 @@ def show_stats_direct(message):
 def export_csv_direct(message):
     conn = sqlite3.connect('/tmp/referrals.db')
     cursor = conn.cursor()
-    cursor.execute("SELECT user_id, referred_by, ref_count, submitted, paid, verified, instagram_id, wallet FROM users")
+    cursor.execute("SELECT user_id, referred_by, ref_count, submitted, paid, verified, instagram_id, wallet, daily_count FROM users")
     rows = cursor.fetchall()
     conn.close()
 
     output = io.StringIO()
-    output.write("user_id,instagram_id,wallet,total_referrals,fixed_referrals(5),extra_referrals,tokens_earned,paid_status\n")
+    output.write("user_id,instagram_id,wallet,total_referrals,fixed_referrals(5),extra_referrals,daily_claims,total_tokens_earned,paid_status\n")
     for row in rows:
-        uid, referred_by, ref_count, submitted, paid, verified, instagram_id, wallet = row
+        uid, referred_by, ref_count, submitted, paid, verified, instagram_id, wallet, daily_count = row
         if submitted == 1:
-            tokens = calculate_tokens(ref_count)
+            total_tokens = calculate_total_tokens(ref_count, daily_count)
             base_used, extra_count = get_ref_details(ref_count)
             status_str = "Paid" if paid == 1 else "Unpaid"
-            output.write(f"{uid},{instagram_id},{wallet},{ref_count},{base_used},{extra_count},{tokens},{status_str}\n")
+            output.write(f"{uid},{instagram_id},{wallet},{ref_count},{base_used},{extra_count},{daily_count},{total_tokens},{status_str}\n")
             
     output.seek(0)
     file_bytes = io.BytesIO(output.getvalue().encode('utf-8'))
     file_bytes.name = 'detailed_users_export.csv'
-    bot.send_document(ADMIN_CHAT_ID, file_bytes, caption="📊 فایل خروجی دقیق CSV شامل تفکیک رفال ثابت و مازاد، ولت و وضعیت پرداخت.")
+    bot.send_document(ADMIN_CHAT_ID, file_bytes, caption="📊 فایل خروجی دقیق CSV شامل تفکیک رفال، پاداش روزانه، توکن کل و وضعیت پرداخت.")
 
 def show_main_menu(chat_id, user_id):
     user_data = get_user_data(user_id)
     ref_count = user_data[0] if user_data else 0
-    earned = calculate_tokens(ref_count)
+    d_count = user_data[5] if user_data and len(user_data) > 5 else 0
+    total_earned = calculate_total_tokens(ref_count, d_count)
     
     markup = InlineKeyboardMarkup()
     markup.row(
@@ -368,7 +377,7 @@ def show_main_menu(chat_id, user_id):
     )
     markup.row(InlineKeyboardButton("🐦 توییتر (ایکس)", url=TWITTER_URL))
     markup.row(InlineKeyboardButton("🔗 دریافت لینک دعوت جذاب و اختصاصی", callback_data="get_ref_link"))
-    markup.row(InlineKeyboardButton("🎁 پاداش روزانه (20 PRS)", callback_data="daily_bonus"))
+    markup.row(InlineKeyboardButton("🎁 پاداش روزانه (10 PRS)", callback_data="daily_bonus"))
     markup.row(InlineKeyboardButton("🏆 برترین دعوت‌کنندگان", callback_data="leaderboard"))
     markup.row(InlineKeyboardButton("📊 وضعیت من", callback_data="my_status"), InlineKeyboardButton("📝 ارسال اطلاعات و ولت", callback_data="submit_info"))
     
@@ -377,11 +386,11 @@ def show_main_menu(chat_id, user_id):
         f"🪙 *معرفی پروژه:* توکن هواداری پرسپولیس بستری مدرن برای هواداران عزیز است تا در اکوسیستم دیجیتال باشگاه سهم داشته باشند.\n\n"
         f"🎁 *سیستم پاداش‌دهی و ایردراپ:*\n"
         f"▫️ پاداش پایه: `{BASE_REWARD} PRS` (پس از عضویت در کانال و دعوت `{REQUIRED_REFERRALS}` دوست)\n"
-        f"▫️ پاداش روزانه: `{DAILY_REWARD} PRS` (هر ۲۴ ساعت یک‌بار)\n"
+        f"▫️ پاداش روزانه: `{DAILY_REWARD} PRS` (فعال‌سازی پس از تکمیل ۵ دعوت و هر ۲۴ ساعت یک‌بار)\n"
         f"▫️ پاداش به ازای هر دعوت مازاد: `{EXTRA_REWARD} PRS`\n\n"
         f"📊 *وضعیت شما در ربات:*\n"
         f"👥 دعوت‌های شما: `{ref_count} / {REQUIRED_REFERRALS}`\n"
-        f"🎁 توکن کسب‌شده: `{earned} PRS`"
+        f"🎁 مجموع توکن کسب‌شده: `{total_earned} PRS`"
     )
     
     try:
@@ -410,7 +419,7 @@ def handle_all_messages(message):
             query = text.replace("/search", "").strip()
             conn = sqlite3.connect('/tmp/referrals.db')
             cursor = conn.cursor()
-            cursor.execute("SELECT user_id, referred_by, ref_count, submitted, paid, verified, instagram_id, wallet FROM users WHERE user_id = ? OR instagram_id LIKE ? OR wallet LIKE ?", 
+            cursor.execute("SELECT user_id, referred_by, ref_count, submitted, paid, verified, instagram_id, wallet, daily_count FROM users WHERE user_id = ? OR instagram_id LIKE ? OR wallet LIKE ?", 
                            (int(query) if query.isdigit() else 0, f"%{query}%", f"%{query}%"))
             rows = cursor.fetchall()
             conn.close()
@@ -420,8 +429,10 @@ def handle_all_messages(message):
             res = "🔍 *نتیجه جستجوی ادمین:*\n\n"
             for r in rows:
                 ref_cnt = r[2]
+                d_cnt = r[8] if len(r) > 8 else 0
+                total_tokens = calculate_total_tokens(ref_cnt, d_cnt)
                 base_used, extra_count = get_ref_details(ref_cnt)
-                res += f"👤 آیدی: `{r[0]}`\n👥 کل رفال: {ref_cnt} (ثابت: {base_used} | مازاد: {extra_count})\n📸 اینستا: `{r[6]}`\n👝 ولت: `{r[7]}`\n📌 ثبت فرم: `{r[3]}` | پرداخت: `{r[4]}`\n---\n"
+                res += f"👤 آیدی: `{r[0]}`\n👥 کل رفال: {ref_cnt} (ثابت: {base_used} | مازاد: {extra_count})\n🎁 توکن کل: {total_tokens} PRS\n📸 اینستا: `{r[6]}`\n👝 ولت: `{r[7]}`\n📌 ثبت فرم: `{r[3]}` | پرداخت: `{r[4]}`\n---\n"
             bot.send_message(ADMIN_CHAT_ID, res, parse_mode="Markdown")
             return
         elif text.startswith("/deleteuser "):
@@ -544,23 +555,31 @@ def handle_callbacks(call):
                 text=link_text
             )
     elif call.data == "daily_bonus":
-        current_time = int(time.time())
         user_data = get_user_data(user_id)
+        ref_count = user_data[0] if user_data else 0
+        
+        # شرط فعال‌سازی پاداش روزانه: حداقل ۵ رفال
+        if ref_count < REQUIRED_REFERRALS:
+            bot.answer_callback_query(call.id, f"⚠️ پاداش روزانه قفل است!\nبرای باز شدن آن باید حداقل {REQUIRED_REFERRALS} دوست دعوت کنید (현재: {ref_count} نفر).", show_alert=True)
+            return
+            
+        current_time = int(time.time())
         last_daily = user_data[4] if user_data else 0
+        d_count = user_data[5] if user_data else 0
         
         # بررسی گذشتن ۲۴ ساعت (۸۶۴۰۰ ثانیه)
         if current_time - last_daily < 86400:
             remaining = 86400 - (current_time - last_daily)
             hours = remaining // 3600
             minutes = (remaining % 3600) // 60
-            bot.answer_callback_query(call.id, f"⏳ شما قبلاً پاداش خود را دریافت کرده‌اید!\nلطفاً پس از {hours} ساعت و {minutes} دقیقه دیگر تلاش کنید.", show_alert=True)
+            bot.answer_callback_query(call.id, f"⏳ شما قبلاً پاداش امروز خود را دریافت کرده‌اید!\nلطفاً پس از {hours} ساعت و {minutes} دقیقه دیگر تلاش کنید.", show_alert=True)
         else:
             conn = sqlite3.connect('/tmp/referrals.db')
             cursor = conn.cursor()
-            cursor.execute("UPDATE users SET last_daily = ? WHERE user_id = ?", (current_time, user_id))
+            cursor.execute("UPDATE users SET last_daily = ?, daily_count = daily_count + 1 WHERE user_id = ?", (current_time, user_id))
             conn.commit()
             conn.close()
-            bot.answer_callback_query(call.id, f"🎁 تبریک! مبلغ {DAILY_REWARD} توکن PRS به عنوان پاداش روزانه ثبت شد.", show_alert=True)
+            bot.answer_callback_query(call.id, f"🎁 تبریک! مبلغ {DAILY_REWARD} توکن PRS به عنوان پاداش روزانه به حساب شما اضافه شد.", show_alert=True)
     elif call.data == "leaderboard":
         bot.answer_callback_query(call.id)
         conn = sqlite3.connect('/tmp/referrals.db')
@@ -575,8 +594,9 @@ def handle_callbacks(call):
     elif call.data == "my_status":
         user_data = get_user_data(user_id)
         ref_count = user_data[0] if user_data else 0
-        earned = calculate_tokens(ref_count)
-        bot.answer_callback_query(call.id, f"📊 دعوت‌ها: {ref_count}/{REQUIRED_REFERRALS} | توکن: {earned} PRS", show_alert=True)
+        d_count = user_data[5] if user_data and len(user_data) > 5 else 0
+        total_earned = calculate_total_tokens(ref_count, d_count)
+        bot.answer_callback_query(call.id, f"📊 دعوت‌ها: {ref_count}/{REQUIRED_REFERRALS} | توکن کل: {total_earned} PRS", show_alert=True)
     elif call.data == "submit_info":
         is_member = check_channel(user_id)
         user_data = get_user_data(user_id)
