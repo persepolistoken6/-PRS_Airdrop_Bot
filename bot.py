@@ -378,19 +378,19 @@ def show_main_menu(chat_id, user_id):
     )
 
     caption = (
-        f"🔴 *به ربات ایردراپ خوش آمدید*\n\nدعوت‌ها: `{ref_count}`\nتوکن کسب‌شده:"
-        f" `{earned}` PRS"
+        f"🔴 *به ربات ایردراپ خوش آمدید*\n\n"
+        f"👥 دعوت‌ها: `{ref_count}`\n"
+        f"🎁 توکن کسب‌شده: `{earned}` PRS"
     )
-    try:
-        bot.send_photo(
-            chat_id,
-            BANNER_FILE_ID,
-            caption=caption,
-            reply_markup=markup,
-            parse_mode="Markdown",
-        )
-    except Exception:
-        bot.send_message(chat_id, caption, reply_markup=markup, parse_mode="Markdown")
+    
+    # ارسال اجباری عکس به همراه متن به عنوان کپشن (پانل شیشه‌ای یکپارچه)
+    bot.send_photo(
+        chat_id,
+        BANNER_FILE_ID,
+        caption=caption,
+        reply_markup=markup,
+        parse_mode="Markdown",
+    )
 
 
 @bot.message_handler(func=lambda message: True)
@@ -509,12 +509,6 @@ def handle_callbacks(call):
         target_uid = int(call.data.split("_")[1])
         toggle_paid_status(target_uid)
         bot.answer_callback_query(call.id, "وضعیت پرداخت تغییر کرد.")
-
-
-# تعریف یک تابع قابل‌اجرا (Callable) با نام application برای رضایت وب‌سرور لیارا
-def application(environ, start_response):
-    start_response('200 OK', [('Content-Type', 'text/plain')])
-    return [b"Bot is running via Long Polling!"]
 
 
 if __name__ == "__main__":
