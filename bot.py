@@ -447,13 +447,14 @@ def handle_callbacks(call):
             bot.answer_callback_query(call.id, "❌ عضو کانال نشده‌اید!", show_alert=True)
     elif call.data == "get_ref_link":
         bot.answer_callback_query(call.id)
+        # اصلاح فرمت لینک اختصاصی برای باز شدن مستقیم ربات
         ref_link = f"https://t.me/{BOT_USERNAME}?start={user_id}"
         
         link_text = (
             f"🔥 **بزرگترین ایردراپ توکن هواداری پرسپولیس (PRS)** 🔥\n\n"
             f"🏆 فرصت استثنایی برای دریافت توکن رایگان و ورود به اکوسیستم دیجیتال پرسپولیس!\n"
             f"🎁 همین الان با لینک زیر وارد ربات شو و پاداش ورودت رو بگیر:\n\n"
-            f"`{ref_link}`\n\n"
+            f"{ref_link}\n\n"
             f"این پیام رو برای دوستان خود ارسال کنید"
         )
         try:
