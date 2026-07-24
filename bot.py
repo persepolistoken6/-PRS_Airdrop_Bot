@@ -2,6 +2,7 @@ import io
 import os
 import random
 import sqlite3
+import time
 from collections import defaultdict
 from telebot import TeleBot
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -16,6 +17,7 @@ REQUIRED_REFERRALS = 5
 
 BASE_REWARD = 1000
 EXTRA_REWARD = 200
+DAILY_REWARD = 20  # مقدار پاداش روزانه
 
 BANNER_FILE_ID = "AgACAgQAAxkBAAMfamINNXWkFr-wk1ONFWAEHF2z-vGAAsgNaxtnhwABU-cbUHZe_7c6AQADAgADeQADPQQ"
 
@@ -33,7 +35,8 @@ def init_db():
             paid INTEGER DEFAULT 0,
             verified INTEGER DEFAULT 0,
             instagram_id TEXT,
-            wallet TEXT
+            wallet TEXT,
+            last_daily INTEGER DEFAULT 0
         )
     ''')
     cursor.execute('''
@@ -51,7 +54,7 @@ init_db()
 def get_user_data(user_id):
     conn = sqlite3.connect('/tmp/referrals.db')
     cursor = conn.cursor()
-    cursor.execute("SELECT ref_count, submitted, paid, verified FROM users WHERE user_id = ?", (user_id,))
+    cursor.execute("SELECT ref_count, submitted, paid, verified, last_daily FROM users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
     conn.close()
     return row
@@ -365,6 +368,7 @@ def show_main_menu(chat_id, user_id):
     )
     markup.row(InlineKeyboardButton("🐦 توییتر (ایکس)", url=TWITTER_URL))
     markup.row(InlineKeyboardButton("🔗 دریافت لینک دعوت جذاب و اختصاصی", callback_data="get_ref_link"))
+    markup.row(InlineKeyboardButton("🎁 پاداش روزانه (20 PRS)", callback_data="daily_bonus"))
     markup.row(InlineKeyboardButton("🏆 برترین دعوت‌کنندگان", callback_data="leaderboard"))
     markup.row(InlineKeyboardButton("📊 وضعیت من", callback_data="my_status"), InlineKeyboardButton("📝 ارسال اطلاعات و ولت", callback_data="submit_info"))
     
@@ -373,6 +377,7 @@ def show_main_menu(chat_id, user_id):
         f"🪙 *معرفی پروژه:* توکن هواداری پرسپولیس بستری مدرن برای هواداران عزیز است تا در اکوسیستم دیجیتال باشگاه سهم داشته باشند.\n\n"
         f"🎁 *سیستم پاداش‌دهی و ایردراپ:*\n"
         f"▫️ پاداش پایه: `{BASE_REWARD} PRS` (پس از عضویت در کانال و دعوت `{REQUIRED_REFERRALS}` دوست)\n"
+        f"▫️ پاداش روزانه: `{DAILY_REWARD} PRS` (هر ۲۴ ساعت یک‌بار)\n"
         f"▫️ پاداش به ازای هر دعوت مازاد: `{EXTRA_REWARD} PRS`\n\n"
         f"📊 *وضعیت شما در ربات:*\n"
         f"👥 دعوت‌های شما: `{ref_count} / {REQUIRED_REFERRALS}`\n"
@@ -474,7 +479,6 @@ def handle_all_messages(message):
                 )
         else:
             conn.close()
-            # اگر پاسخ اشتباه بود، مجدداً یک کپچای جدید برایش می‌سازیم و می‌فرستیم
             send_captcha(user_id, user_id, referrer_id)
             bot.send_message(user_id, "❌ پاسخ اشتباه است. لطفاً به سوال جدید پاسخ دهید:")
         return
@@ -539,6 +543,24 @@ def handle_callbacks(call):
                 chat_id=user_id,
                 text=link_text
             )
+    elif call.data == "daily_bonus":
+        current_time = int(time.time())
+        user_data = get_user_data(user_id)
+        last_daily = user_data[4] if user_data else 0
+        
+        # بررسی گذشتن ۲۴ ساعت (۸۶۴۰۰ ثانیه)
+        if current_time - last_daily < 86400:
+            remaining = 86400 - (current_time - last_daily)
+            hours = remaining // 3600
+            minutes = (remaining % 3600) // 60
+            bot.answer_callback_query(call.id, f"⏳ شما قبلاً پاداش خود را دریافت کرده‌اید!\nلطفاً پس از {hours} ساعت و {minutes} دقیقه دیگر تلاش کنید.", show_alert=True)
+        else:
+            conn = sqlite3.connect('/tmp/referrals.db')
+            cursor = conn.cursor()
+            cursor.execute("UPDATE users SET last_daily = ? WHERE user_id = ?", (current_time, user_id))
+            conn.commit()
+            conn.close()
+            bot.answer_callback_query(call.id, f"🎁 تبریک! مبلغ {DAILY_REWARD} توکن PRS به عنوان پاداش روزانه ثبت شد.", show_alert=True)
     elif call.data == "leaderboard":
         bot.answer_callback_query(call.id)
         conn = sqlite3.connect('/tmp/referrals.db')
