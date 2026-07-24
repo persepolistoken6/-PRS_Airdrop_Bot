@@ -377,11 +377,10 @@ def handle_callbacks(call):
     user_id = call.from_user.id
     if call.data == "get_ref_link":
         bot.answer_callback_query(call.id)
-        # استفاده از متغیر BOT_USERNAME که دارای خط‌تیره است
         ref_link = f"https://t.me/{BOT_USERNAME}?start={user_id}"
         
         link_text = (
-            f"🔥 **بزرگترین ایردراپ توکن هواداری پرسپولیس (PRS)** 🔥\n\n"
+            f"🔥 بزرگترین ایردراپ توکن هواداری پرسپولیس (PRS) 🔥\n\n"
             f"🏆 فرصت استثنایی برای دریافت توکن رایگان و ورود به اکوسیستم دیجیتال پرسپولیس!\n"
             f"🎁 همین الان با لینک زیر وارد ربات شو و پاداش ورودت رو بگیر:\n\n"
             f"{ref_link}\n\n"
@@ -391,14 +390,12 @@ def handle_callbacks(call):
             bot.send_photo(
                 chat_id=user_id,
                 photo=BANNER_FILE_ID,
-                caption=link_text,
-                parse_mode="Markdown"
+                caption=link_text
             )
         except Exception:
             bot.send_message(
                 chat_id=user_id,
-                text=link_text,
-                parse_mode="Markdown"
+                text=link_text
             )
     elif call.data == "leaderboard":
         bot.answer_callback_query(call.id)
