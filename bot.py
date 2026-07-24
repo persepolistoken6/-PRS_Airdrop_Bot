@@ -286,13 +286,27 @@ def show_main_menu(chat_id, user_id):
     markup.row(InlineKeyboardButton("🏆 برترین دعوت‌کنندگان", callback_data="leaderboard"))
     markup.row(InlineKeyboardButton("📊 وضعیت من", callback_data="my_status"), InlineKeyboardButton("📝 ارسال اطلاعات و ولت", callback_data="submit_info"))
     
-    caption = (
+    caption_text = (
         f"🔴 *به ربات ایردراپ خوش آمدید*\n\n"
         f"👥 دعوت‌ها: `{ref_count}`\n"
         f"🎁 توکن کسب‌شده: `{earned}` PRS"
     )
     
-    bot.send_photo(chat_id, BANNER_FILE_ID, caption=caption, reply_markup=markup, parse_mode="Markdown")
+    try:
+        bot.send_photo(
+            chat_id=chat_id,
+            photo=BANNER_FILE_ID,
+            caption=caption_text,
+            parse_mode="Markdown",
+            reply_markup=markup
+        )
+    except Exception:
+        bot.send_message(
+            chat_id=chat_id,
+            text=caption_text,
+            parse_mode="Markdown",
+            reply_markup=markup
+        )
 
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
