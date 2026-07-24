@@ -377,6 +377,7 @@ def handle_callbacks(call):
     user_id = call.from_user.id
     if call.data == "get_ref_link":
         bot.answer_callback_query(call.id)
+        # استفاده از متغیر BOT_USERNAME که دارای خط‌تیره است
         ref_link = f"https://t.me/{BOT_USERNAME}?start={user_id}"
         
         link_text = (
