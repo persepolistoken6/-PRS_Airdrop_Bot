@@ -112,6 +112,15 @@ def calculate_tokens(ref_count):
     extra = ref_count - REQUIRED_REFERRALS
     return BASE_REWARD + (extra * EXTRA_REWARD)
 
+def get_ref_details(ref_count):
+    if ref_count >= REQUIRED_REFERRALS:
+        base_used = REQUIRED_REFERRALS
+        extra_count = ref_count - REQUIRED_REFERRALS
+    else:
+        base_used = ref_count
+        extra_count = 0
+    return base_used, extra_count
+
 def check_channel(user_id):
     try:
         member = bot.get_chat_member(CHANNEL_ID, user_id)
@@ -125,12 +134,13 @@ def send_welcome(message):
     args = message.text.split()
     referrer_id = int(args[1]) if len(args) > 1 and args[1].isdigit() else None
     
-    # اگر کاربر از قبل ثبت‌نام کرده باشد
+    # بررسی اینکه آیا کاربر روی لینک خودش زده است یا خیر
+    if referrer_id == user_id:
+        bot.send_message(message.chat.id, "⚠️ شما نمی‌توانید از لینک دعوت خودتان استفاده کنید!")
+        return
+
     user_data = get_user_data(user_id)
     if user_data and user_data[3] == 1:
-        if referrer_id == user_id:
-            bot.send_message(message.chat.id, "⚠️ شما نمی‌توانید از لینک دعوت خودتان استفاده کنید!")
-            return
         show_main_menu(message.chat.id, user_id)
         return
 
@@ -159,8 +169,9 @@ def admin_panel(message):
         return
     markup = InlineKeyboardMarkup()
     markup.row(InlineKeyboardButton("👝 مدیریت و لیست ولت‌ها (تایید پرداخت)", callback_data="admin_wallets_list"))
+    markup.row(InlineKeyboardButton("📊 گزارش کامل پرداختی‌ها و دسته‌بندی‌شده", callback_data="admin_detailed_report"))
     markup.row(InlineKeyboardButton("📊 آمار کلی ربات", callback_data="admin_stats"))
-    markup.row(InlineKeyboardButton("📁 دریافت فایل خروجی کامل CSV", callback_data="admin_export"))
+    markup.row(InlineKeyboardButton("📁 دریافت فایل خروجی کامل CSV (با جزئیات رفال)", callback_data="admin_export"))
     
     help_text = (
         "👑 *پنل مدیریت ایردراپ*\n\n"
@@ -179,6 +190,8 @@ def admin_callbacks(call):
     data = call.data
     if data == "admin_wallets_list":
         send_paginated_wallets(call.message, offset=0)
+    elif data == "admin_detailed_report":
+        send_detailed_report_file(call.message)
     elif data == "admin_stats":
         show_stats_direct(call.message)
     elif data == "admin_export":
@@ -226,12 +239,14 @@ def send_paginated_wallets(message, offset=0, edit=False):
 
     for uid, ref_cnt, wlt, insta, paid in page_rows:
         tokens = calculate_tokens(ref_cnt)
+        base_used, extra_count = get_ref_details(ref_cnt)
         status_str = "✅ پرداخت‌شده" if paid == 1 else "⏳ در انتظار پرداخت"
         
         text += f"📌 آیدی: `{uid}`\n" \
                 f"👤 اینستا: `{insta}`\n" \
                 f"👝 ولت: `{wlt}`\n" \
-                f"🎁 مقدار: `{tokens} PRS` | وضعیت: *{status_str}*\n" \
+                f"👥 دعوت ثابت: {base_used} | مازاد: {extra_count} (کل: {ref_cnt})\n" \
+                f"🎁 مقدار توکن: `{tokens} PRS` | وضعیت: *{status_str}*\n" \
                 f"----------------------------------\n"
         
         btn_pay = InlineKeyboardButton(f"✅ تایید ({uid})", callback_data=f"admin_pay_{uid}_yes")
@@ -257,6 +272,51 @@ def send_paginated_wallets(message, offset=0, edit=False):
 def update_wallet_message(message):
     send_paginated_wallets(message, offset=0, edit=True)
 
+def send_detailed_report_file(message):
+    conn = sqlite3.connect('/tmp/referrals.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id, ref_count, wallet, instagram_id, paid FROM users WHERE submitted = 1 ORDER BY paid ASC, ref_count DESC")
+    rows = cursor.fetchall()
+    conn.close()
+
+    if not rows:
+        bot.send_message(ADMIN_CHAT_ID, "⚠️ هیچ کاربری فرم اطلاعات ثبت نکرده است.")
+        return
+
+    paid_text = "🟢 **لیست کاربران پرداخت شده:**\n\n"
+    unpaid_text = "🟡 **لیست کاربران پرداخت نشده (در انتظار):**\n\n"
+
+    paid_count = 0
+    unpaid_count = 0
+
+    for uid, ref_cnt, wlt, insta, paid in rows:
+        tokens = calculate_tokens(ref_cnt)
+        base_used, extra_count = get_ref_details(ref_cnt)
+        user_block = (
+            f"📌 آیدی عددی: `{uid}`\n"
+            f"👤 اینستاگرام: `{insta}`\n"
+            f"👝 آدرس ولت: `{wlt}`\n"
+            f"👥 رفال ثابت: {base_used} | مازاد: {extra_count} (کل: {ref_cnt})\n"
+            f"🎁 توکن کل: {tokens} PRS\n"
+            f"----------------------------------\n"
+        )
+        if paid == 1:
+            paid_text += user_block
+            paid_count += 1
+        else:
+            unpaid_text += user_block
+            unpaid_count += 1
+
+    report_content = f"📊 گزارش جامع تفکیکی وضعیت پرداخت‌ها\n\n" \
+                     f"🟢 تعداد پرداخت شده‌ها: {paid_count}\n" \
+                     f"🟡 تعداد در انتظار پرداخت: {unpaid_count}\n\n" \
+                     f"==================================\n\n" + \
+                     paid_text + "\n\n==================================\n\n" + unpaid_text
+
+    file_bytes = io.BytesIO(report_content.encode('utf-8'))
+    file_bytes.name = 'detailed_airdrop_report.txt'
+    bot.send_document(ADMIN_CHAT_ID, file_bytes, caption="📁 گزارش متنی کامل و دسته‌بندی‌شده پرداخت‌ها با تمام جزئیات.")
+
 def show_stats_direct(message):
     conn = sqlite3.connect('/tmp/referrals.db')
     cursor = conn.cursor()
@@ -275,14 +335,21 @@ def export_csv_direct(message):
     cursor.execute("SELECT user_id, referred_by, ref_count, submitted, paid, verified, instagram_id, wallet FROM users")
     rows = cursor.fetchall()
     conn.close()
+
     output = io.StringIO()
-    output.write("user_id,referred_by,ref_count,submitted,paid,verified,instagram_id,wallet\n")
+    output.write("user_id,instagram_id,wallet,total_referrals,fixed_referrals(5),extra_referrals,tokens_earned,paid_status\n")
     for row in rows:
-        output.write(",".join(str(v) if v is not None else '' for v in row) + '\n')
+        uid, referred_by, ref_count, submitted, paid, verified, instagram_id, wallet = row
+        if submitted == 1:
+            tokens = calculate_tokens(ref_count)
+            base_used, extra_count = get_ref_details(ref_count)
+            status_str = "Paid" if paid == 1 else "Unpaid"
+            output.write(f"{uid},{instagram_id},{wallet},{ref_count},{base_used},{extra_count},{tokens},{status_str}\n")
+            
     output.seek(0)
     file_bytes = io.BytesIO(output.getvalue().encode('utf-8'))
-    file_bytes.name = 'users_backup.csv'
-    bot.send_document(ADMIN_CHAT_ID, file_bytes, caption="📊 فایل پشتیبان کامل اطلاعات دیتابیس (CSV)")
+    file_bytes.name = 'detailed_users_export.csv'
+    bot.send_document(ADMIN_CHAT_ID, file_bytes, caption="📊 فایل خروجی دقیق CSV شامل تفکیک رفال ثابت و مازاد، ولت و وضعیت پرداخت.")
 
 def show_main_menu(chat_id, user_id):
     user_data = get_user_data(user_id)
@@ -345,7 +412,9 @@ def handle_all_messages(message):
                 return
             res = "🔍 *نتیجه جستجوی ادمین:*\n\n"
             for r in rows:
-                res += f"👤 آیدی: `{r[0]}`\n👥 رفال: `{r[2]}`\n📸 اینستا: `{r[6]}`\n👝 ولت: `{r[7]}`\n📌 ثبت فرم: `{r[3]}` | پرداخت: `{r[4]}`\n---\n"
+                ref_cnt = r[2]
+                base_used, extra_count = get_ref_details(ref_cnt)
+                res += f"👤 آیدی: `{r[0]}`\n👥 کل رفال: {ref_cnt} (ثابت: {base_used} | مازاد: {extra_count})\n📸 اینستا: `{r[6]}`\n👝 ولت: `{r[7]}`\n📌 ثبت فرم: `{r[3]}` | پرداخت: `{r[4]}`\n---\n"
             bot.send_message(ADMIN_CHAT_ID, res, parse_mode="Markdown")
             return
         elif text.startswith("/deleteuser "):
@@ -378,7 +447,6 @@ def handle_all_messages(message):
             bot.send_message(ADMIN_CHAT_ID, f"✅ ارسال همگانی با موفقیت به {success_count} کاربر انجام شد.")
             return
 
-    # بررسی کپچا و جلوگیری قطعی از خودزنی
     conn = sqlite3.connect('/tmp/referrals.db')
     cursor = conn.cursor()
     cursor.execute("SELECT answer, pending_referrer FROM captcha WHERE user_id = ?", (user_id,))
@@ -390,11 +458,6 @@ def handle_all_messages(message):
             conn.commit()
             conn.close()
             
-            # بررسی خودزنی پس از حل کپچا
-            if referrer_id == user_id:
-                bot.send_message(user_id, "⚠️ شما نمی‌توانید از لینک دعوت خودتان استفاده کنید!")
-                return
-
             if check_channel(user_id):
                 register_user_after_verify(user_id, referrer_id)
                 show_main_menu(user_id, user_id)
