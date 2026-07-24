@@ -395,9 +395,8 @@ def handle_callbacks(call):
         else:
             bot.answer_callback_query(call.id, "❌ عضو کانال نشده‌اید!", show_alert=True)
     elif call.data == "get_ref_link":
-        bot.answer_callback_query(call.id)
         ref_link = f"https://t.me/{BOT_USERNAME}?start={user_id}"
-        bot.send_message(user_id, f"🔗 لینک دعوت اختصاصی شما:\n\n`{ref_link}`\n\n(برای کپی کردن روی لینک بزنید)", parse_mode="Markdown")
+        bot.answer_callback_query(call.id, f"🔗 لینک شما:\n{ref_link}", show_alert=True)
     elif call.data == "leaderboard":
         bot.answer_callback_query(call.id)
         conn = sqlite3.connect('/tmp/referrals.db')
@@ -413,11 +412,10 @@ def handle_callbacks(call):
         user_data = get_user_data(user_id)
         ref_count = user_data[0] if user_data else 0
         earned = calculate_tokens(ref_count)
-        bot.answer_callback_query(call.id)
-        bot.send_message(user_id, f"دعوت‌ها: {ref_count}\nتوکن: {earned}")
+        bot.answer_callback_query(call.id, f"📊 تعداد دعوت‌ها: {ref_count} | توکن: {earned} PRS", show_alert=True)
     elif call.data == "submit_info":
         bot.answer_callback_query(call.id)
-        bot.send_message(user_id, "لطفاً اطلاعات را در ۳ خط بفرستید:\nخط ۱: نام\nخط ۲: اینستا\nخط ۳: ولت")
+        bot.send_message(user_id, "لطفاً اطلاعات را در ۳ خط بفرستید:\nخط ۱: نام و نام خانوادگی\nخط ۲: آیدی اینستاگرام\nخط ۳: آدرس ولت (ارز دیجیتال)")
     elif call.data.startswith("pay_") and user_id == ADMIN_CHAT_ID:
         target_uid = int(call.data.split("_")[1])
         toggle_paid_status(target_uid)
