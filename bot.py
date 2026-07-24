@@ -195,7 +195,6 @@ def admin_callbacks(call):
         set_paid_status(target_id, new_val)
         
         bot.answer_callback_query(call.id, "✅ وضعیت پرداخت به‌روز شد.")
-        # آپدیت همان پیام لیست
         try:
             update_wallet_message(call.message)
         except Exception:
@@ -223,7 +222,7 @@ def send_paginated_wallets(message, offset=0, edit=False):
             bot.send_message(ADMIN_CHAT_ID, msg)
         return
 
-    limit = 5 # تعداد کاربر در هر صفحه برای خوانایی بهتر تلگرام
+    limit = 5
     page_rows = rows[offset:offset+limit]
 
     text = f"👝 **لیست کاربران ثبت‌نام کرده (مجموع: {len(rows)} نفر):**\n\n"
@@ -239,12 +238,10 @@ def send_paginated_wallets(message, offset=0, edit=False):
                 f"🎁 مقدار: `{tokens} PRS` | وضعیت: *{status_str}*\n" \
                 f"----------------------------------\n"
         
-        # دکمه‌های شیشه‌ای تایید و لغو پرداخت برای هر کاربر
         btn_pay = InlineKeyboardButton(f"✅ تایید ({uid})", callback_data=f"admin_pay_{uid}_yes")
         btn_unpay = InlineKeyboardButton(f"❌ لغو ({uid})", callback_data=f"admin_pay_{uid}_no")
         markup.row(btn_pay, btn_unpay)
 
-    # دکمه‌های صفحه بندی (قبلی / بعدی)
     nav_buttons = []
     if offset > 0:
         nav_buttons.append(InlineKeyboardButton("⬅️ صفحه قبل", callback_data=f"admin_page_{offset - limit}"))
@@ -262,7 +259,6 @@ def send_paginated_wallets(message, offset=0, edit=False):
         bot.send_message(ADMIN_CHAT_ID, text, reply_markup=markup, parse_mode="Markdown")
 
 def update_wallet_message(message):
-    # برای به‌روزرسانی صفحه فعلی پس از کلیک روی دکمه‌ها
     send_paginated_wallets(message, offset=0, edit=True)
 
 def show_stats_direct(message):
@@ -386,6 +382,7 @@ def handle_all_messages(message):
             bot.send_message(ADMIN_CHAT_ID, f"✅ ارسال همگانی با موفقیت به {success_count} کاربر انجام شد.")
             return
 
+    # بررسی کپچا
     conn = sqlite3.connect('/tmp/referrals.db')
     cursor = conn.cursor()
     cursor.execute("SELECT answer, pending_referrer FROM captcha WHERE user_id = ?", (user_id,))
@@ -396,8 +393,22 @@ def handle_all_messages(message):
             cursor.execute("DELETE FROM captcha WHERE user_id = ?", (user_id,))
             conn.commit()
             conn.close()
-            register_user_after_verify(user_id, referrer_id)
-            show_main_menu(user_id, user_id)
+            
+            # بررسی اینکه آیا کاربر عضو کانال هست یا خیر قبل از ثبت نهایی زیرمجموعه
+            if check_channel(user_id):
+                register_user_after_verify(user_id, referrer_id)
+                show_main_menu(user_id, user_id)
+            else:
+                # اگر عضو نبود، کپچای او قبول شده اما به عنوان زیرمجموعه ثبت نمی‌شود تا زمانی که در کانال عضو شود و دکمه بررسی را بزند
+                # ذخیره موقت در پایگاه داده بدون ثبت رفال یا ثبت به عنوان تاییدنشده تا بعدا چک شود
+                markup = InlineKeyboardMarkup()
+                markup.row(InlineKeyboardButton("✅ عضو شدم، بررسی کن", callback_data=f"check_join_{referrer_id if referrer_id else 0}"))
+                bot.send_message(
+                    user_id,
+                    f"❌ شما هنوز در کانال رسمی ما ({CHANNEL_ID}) عضو نشده‌اید!\n\n"
+                    f"لطفاً ابتدا وارد کانال شوید و سپس روی دکمه زیر کلیک کنید:",
+                    reply_markup=markup
+                )
         else:
             conn.close()
             bot.send_message(user_id, "❌ پاسخ اشتباه است. دوباره تلاش کنید.")
@@ -422,6 +433,21 @@ def handle_all_messages(message):
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
     user_id = call.from_user.id
+    if call.data.startswith("check_join_"):
+        referrer_id = int(call.data.split("_")[2])
+        if check_channel(user_id):
+            bot.answer_callback_query(call.id, "✅ عضویت شما تایید شد!")
+            # حالا که عضو کانال شده، به عنوان زیرمجموعه ثبت می شود
+            register_user_after_verify(user_id, referrer_id if referrer_id != 0 else None)
+            try:
+                bot.delete_message(user_id, call.message.message_id)
+            except Exception:
+                pass
+            show_main_menu(user_id, user_id)
+        else:
+            bot.answer_callback_query(call.id, "❌ شما هنوز در کانال عضو نشده‌اید!", show_alert=True)
+        return
+
     if call.data == "get_ref_link":
         bot.answer_callback_query(call.id)
         ref_link = f"https://t.me/{BOT_USERNAME}?start={user_id}"
