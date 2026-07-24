@@ -164,7 +164,7 @@ def admin_panel(message):
     markup.row(InlineKeyboardButton("📁 دریافت فایل خروجی کامل CSV", callback_data="admin_export"))
     
     help_text = (
-        "👑 *پنل مدیریت ایردراپ (نسخه بهینه شده برای حجم بالا)*\n\n"
+        "👑 *پنل مدیریت ایردراپ*\n\n"
         "دستورات متنی ادمین:\n"
         "🔍 جستجو (آیدی، اینستا، ولت):\n`/search متن_یا_آیدی`\n\n"
         "✅ تایید پرداخت کاربر با آیدی عددی:\n`/payuser آیدی_عددی`\n\n"
