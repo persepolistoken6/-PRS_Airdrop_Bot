@@ -64,7 +64,6 @@ def register_user_after_verify(user_id, referrer_id):
         if referrer_id and referrer_id != user_id:
             cursor.execute("UPDATE users SET ref_count = ref_count + 1 WHERE user_id = ?", (referrer_id,))
             conn.commit()
-            # ارسال پیام اطلاع‌رسانی لحظه‌ای به معرف
             try:
                 cursor.execute("SELECT ref_count FROM users WHERE user_id = ?", (referrer_id,))
                 ref_row = cursor.fetchone()
