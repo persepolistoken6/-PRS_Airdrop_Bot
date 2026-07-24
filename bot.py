@@ -9,8 +9,8 @@ from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
 TOKEN = "8629221284:AAFRFeQuMoeBHcnNU8ifQAIRLTu4CTYVU4E"
 BOT_USERNAME = "PRS_Airdrop_Bot"
 CHANNEL_ID = "@persepolisToken6"
-INSTAGRAM_URL = "https://instagram.com/persepolisToken"  # آدرس اینستاگرام خود را اینجا قرار دهید
-TWITTER_URL = "https://twitter.com/persepolisToken"      # آدرس توییتر خود را اینجا قرار دهید
+INSTAGRAM_URL = "Https://www.instagram.com/persepolistoken6?igsh=eHBwbzdtd2ZoaWI5"
+TWITTER_URL = "https://x.com/PersepolisPRS"
 ADMIN_CHAT_ID = 6661478622
 REQUIRED_REFERRALS = 5
 
@@ -289,7 +289,7 @@ def show_main_menu(chat_id, user_id):
         InlineKeyboardButton("📸 اینستاگرام", url=INSTAGRAM_URL)
     )
     markup.row(InlineKeyboardButton("🐦 توییتر (ایکس)", url=TWITTER_URL))
-    markup.row(InlineKeyboardButton("🔗 دریافت لینک دعوت اختصاصی", callback_data="get_ref_link"))
+    markup.row(InlineKeyboardButton("🔗 دریافت لینک دعوت جذاب و اختصاصی", callback_data="get_ref_link"))
     markup.row(InlineKeyboardButton("🏆 برترین دعوت‌کنندگان", callback_data="leaderboard"))
     markup.row(InlineKeyboardButton("📊 وضعیت من", callback_data="my_status"), InlineKeyboardButton("📝 ارسال اطلاعات و ولت", callback_data="submit_info"))
     
@@ -301,8 +301,8 @@ def show_main_menu(chat_id, user_id):
         f"▫️ شرط دریافت پاداش: دعوت از حداقل `{REQUIRED_REFERRALS}` دوست با لینک اختصاصی\n"
         f"▫️ پاداش به ازای هر دعوت مازاد: `{EXTRA_REWARD} PRS`\n\n"
         f"📋 *راهنمای دریافت ایردراپ:*\n"
-        f"۱. در کانال تلگرام، اینستاگرام و توییتر ما حتماً عضو شوید.\n"
-        f"۲. لینک دعوت اختصاصی خود را بگیرید و به دوستانتان بدهید.\n"
+        f"۱. ابتدا در کانال تلگرام، اینستاگرام و توییتر ما حتماً عضو شوید.\n"
+        f"۲. لینک دعوت اختصاصی خود را بگیرید و برای دوستانتان بفرستید.\n"
         f"۳. پس از رسیدن به حد نصاب، اطلاعات و آدرس ولت خود را ثبت کنید.\n\n"
         f"📊 *وضعیت شما در ربات:*\n"
         f"👥 دعوت‌های شما: `{ref_count}`\n"
@@ -414,11 +414,13 @@ def handle_callbacks(call):
     elif call.data == "get_ref_link":
         bot.answer_callback_query(call.id)
         ref_link = f"https://t.me/{BOT_USERNAME}?start={user_id}"
+        
         link_text = (
-            f"🔗 *لینک دعوت اختصاصی شما*\n\n"
-            f"با ارسال این لینک به دوستان خود، به ازای هر دعوت مازاد پاداش بگیرید:\n\n"
+            f"🔥 **بزرگترین ایردراپ توکن هواداری پرسپولیس (PRS)** 🔥\n\n"
+            f"🏆 فرصت استثنایی برای دریافت توکن رایگان و ورود به اکوسیستم دیجیتال پرسپولیس!\n"
+            f"🎁 همین الان با لینک زیر وارد ربات شو و پاداش ورودت رو بگیر:\n\n"
             f"`{ref_link}`\n\n"
-            f"*(برای کپی کردن، کافیست روی لینک بالا لمس کنید)*"
+            f"⚡️ کافیست روی لینک بالا لمس کنید تا کپی شود و آن را برای دوستانتان بفرستید تا پاداش بیشتری کسب کنید!"
         )
         try:
             bot.send_photo(
