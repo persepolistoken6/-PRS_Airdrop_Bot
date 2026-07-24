@@ -125,16 +125,12 @@ def send_welcome(message):
     args = message.text.split()
     referrer_id = int(args[1]) if len(args) > 1 and args[1].isdigit() else None
     
-    if referrer_id == user_id:
-        user_data = get_user_data(user_id)
-        if user_data and user_data[3] == 1:
-            show_main_menu(message.chat.id, user_id)
-        else:
-            bot.send_message(message.chat.id, "⚠️ شما نمی‌توانید از لینک دعوت خودتان استفاده کنید!")
-        return
-
+    # اگر کاربر از قبل ثبت‌نام کرده باشد
     user_data = get_user_data(user_id)
     if user_data and user_data[3] == 1:
+        if referrer_id == user_id:
+            bot.send_message(message.chat.id, "⚠️ شما نمی‌توانید از لینک دعوت خودتان استفاده کنید!")
+            return
         show_main_menu(message.chat.id, user_id)
         return
 
@@ -190,7 +186,7 @@ def admin_callbacks(call):
     elif data.startswith("admin_pay_"):
         parts = data.split("_")
         target_id = int(parts[2])
-        action = parts[3] # "yes" or "no"
+        action = parts[3]
         new_val = 1 if action == "yes" else 0
         set_paid_status(target_id, new_val)
         
@@ -382,7 +378,7 @@ def handle_all_messages(message):
             bot.send_message(ADMIN_CHAT_ID, f"✅ ارسال همگانی با موفقیت به {success_count} کاربر انجام شد.")
             return
 
-    # بررسی کپچا
+    # بررسی کپچا و جلوگیری قطعی از خودزنی
     conn = sqlite3.connect('/tmp/referrals.db')
     cursor = conn.cursor()
     cursor.execute("SELECT answer, pending_referrer FROM captcha WHERE user_id = ?", (user_id,))
@@ -394,13 +390,15 @@ def handle_all_messages(message):
             conn.commit()
             conn.close()
             
-            # بررسی اینکه آیا کاربر عضو کانال هست یا خیر قبل از ثبت نهایی زیرمجموعه
+            # بررسی خودزنی پس از حل کپچا
+            if referrer_id == user_id:
+                bot.send_message(user_id, "⚠️ شما نمی‌توانید از لینک دعوت خودتان استفاده کنید!")
+                return
+
             if check_channel(user_id):
                 register_user_after_verify(user_id, referrer_id)
                 show_main_menu(user_id, user_id)
             else:
-                # اگر عضو نبود، کپچای او قبول شده اما به عنوان زیرمجموعه ثبت نمی‌شود تا زمانی که در کانال عضو شود و دکمه بررسی را بزند
-                # ذخیره موقت در پایگاه داده بدون ثبت رفال یا ثبت به عنوان تاییدنشده تا بعدا چک شود
                 markup = InlineKeyboardMarkup()
                 markup.row(InlineKeyboardButton("✅ عضو شدم، بررسی کن", callback_data=f"check_join_{referrer_id if referrer_id else 0}"))
                 bot.send_message(
@@ -435,9 +433,13 @@ def handle_callbacks(call):
     user_id = call.from_user.id
     if call.data.startswith("check_join_"):
         referrer_id = int(call.data.split("_")[2])
+        
+        if referrer_id == user_id:
+            bot.answer_callback_query(call.id, "⚠️ شما نمی‌توانید از لینک خودتان استفاده کنید!", show_alert=True)
+            return
+
         if check_channel(user_id):
             bot.answer_callback_query(call.id, "✅ عضویت شما تایید شد!")
-            # حالا که عضو کانال شده، به عنوان زیرمجموعه ثبت می شود
             register_user_after_verify(user_id, referrer_id if referrer_id != 0 else None)
             try:
                 bot.delete_message(user_id, call.message.message_id)
