@@ -320,7 +320,7 @@ def show_main_menu(chat_id, user_id):
     markup.row(InlineKeyboardButton("📊 وضعیت من", callback_data="my_status"), InlineKeyboardButton("📝 ارسال اطلاعات و ولت", callback_data="submit_info"))
     
     caption_text = (
-        f"🔴 *به ربات رسمی ایردراپ توکن پرسپولیس (PRS) خوش آمدید* 🏆\n\n"
+        f"🔴 *به ربات رسمی ایردراپ توکن هواداری پرسپولیس (PRS) خوش آمدید* 🏆\n\n"
         f"🪙 *معرفی پروژه:* توکن هواداری پرسپولیس بستری مدرن برای هواداران عزیز است تا در اکوسیستم دیجیتال باشگاه سهم داشته باشند.\n\n"
         f"🎁 *سیستم پاداش‌دهی و ایردراپ:*\n"
         f"▫️ پاداش پایه برای ورود و فعال‌سازی: `{BASE_REWARD} PRS`\n"
@@ -447,7 +447,7 @@ def handle_callbacks(call):
             bot.answer_callback_query(call.id, "❌ عضو کانال نشده‌اید!", show_alert=True)
     elif call.data == "get_ref_link":
         bot.answer_callback_query(call.id)
-        # اصلاح فرمت لینک اختصاصی برای باز شدن مستقیم ربات
+        # استفاده از آیدی صحیح ربات (BOT_USERNAME) در ساخت لینک دعوت
         ref_link = f"https://t.me/{BOT_USERNAME}?start={user_id}"
         
         link_text = (
