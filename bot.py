@@ -32,7 +32,6 @@ def init_db():
             submitted INTEGER DEFAULT 0,
             paid INTEGER DEFAULT 0,
             verified INTEGER DEFAULT 0,
-            user_info TEXT,
             instagram_id TEXT,
             wallet TEXT
         )
@@ -87,14 +86,14 @@ def register_user_after_verify(user_id, referrer_id):
         conn.commit()
     conn.close()
 
-def save_submission(user_id, info_text, instagram_id, wallet):
+def save_submission(user_id, instagram_id, wallet):
     conn = sqlite3.connect('/tmp/referrals.db')
     cursor = conn.cursor()
     cursor.execute("""
         UPDATE users 
-        SET submitted = 1, user_info = ?, instagram_id = ?, wallet = ?
+        SET submitted = 1, instagram_id = ?, wallet = ?
         WHERE user_id = ?
-    """, (info_text, instagram_id, wallet, user_id))
+    """, (instagram_id, wallet, user_id))
     conn.commit()
     conn.close()
 
@@ -162,10 +161,7 @@ def admin_panel(message):
     markup = InlineKeyboardMarkup()
     markup.row(InlineKeyboardButton("📋 لیست کاربران و تایید پرداخت‌ها", callback_data="admin_users"))
     markup.row(InlineKeyboardButton("👝 لیست یکجای ولت‌ها", callback_data="admin_wallets"))
-    markup.row(InlineKeyboardButton("🔄 پرداخت‌شده‌هایی که رفال جدید زدند", callback_data="admin_paid_new_refs"))
-    markup.row(InlineKeyboardButton("📊 دسته‌بندی مقادیر توکن یکسان", callback_data="admin_batch"))
-    markup.row(InlineKeyboardButton("📈 آمار کلی ربات", callback_data="admin_stats"))
-    markup.row(InlineKeyboardButton("📊 آمار تفکیکی (قیف تبدیل)", callback_data="admin_adv_stats"))
+    markup.row(InlineKeyboardButton("📊 آمار کلی ربات", callback_data="admin_stats"))
     markup.row(InlineKeyboardButton("📁 دریافت فایل خروجی CSV", callback_data="admin_export"))
     
     help_text = (
@@ -185,14 +181,8 @@ def admin_callbacks(call):
         show_eligible_users_direct(call.message)
     elif call.data == "admin_wallets":
         get_all_wallets_direct(call.message)
-    elif call.data == "admin_paid_new_refs":
-        show_paid_with_new_refs_direct(call.message)
-    elif call.data == "admin_batch":
-        batch_by_tokens_direct(call.message)
     elif call.data == "admin_stats":
         show_stats_direct(call.message)
-    elif call.data == "admin_adv_stats":
-        show_advanced_stats_direct(call.message)
     elif call.data == "admin_export":
         export_csv_direct(call.message)
     bot.answer_callback_query(call.id)
@@ -200,13 +190,13 @@ def admin_callbacks(call):
 def show_eligible_users_direct(message):
     conn = sqlite3.connect('/tmp/referrals.db')
     cursor = conn.cursor()
-    cursor.execute("SELECT user_id, ref_count, paid, user_info, instagram_id, wallet FROM users WHERE submitted = 1 ORDER BY paid ASC, ref_count DESC")
+    cursor.execute("SELECT user_id, ref_count, paid, instagram_id, wallet FROM users WHERE submitted = 1 ORDER BY paid ASC, ref_count DESC")
     rows = cursor.fetchall()
     conn.close()
     if not rows:
         bot.send_message(ADMIN_CHAT_ID, "⚠️ هنوز هیچ کاربری فرم اطلاعاتش را نفرستاده است.")
         return
-    for uid, ref_cnt, paid_status, info, insta, wlt in rows:
+    for uid, ref_cnt, paid_status, insta, wlt in rows:
         earned_tokens = calculate_tokens(ref_cnt)
         status_text = "✅ پرداخت شده" if paid_status == 1 else "⏳ در انتظار پرداخت"
         text = f"👤 آیدی عددی: `{uid}`\n📸 اینستاگرام: `{insta}`\n👝 ولت: `{wlt}`\n👥 دعوت: `{ref_cnt}`\n🎁 توکن: `{earned_tokens}`\n📌 وضعیت: `{status_text}`"
@@ -214,21 +204,6 @@ def show_eligible_users_direct(message):
         btn_text = "❌ لغو" if paid_status == 1 else "✅ تایید"
         markup.row(InlineKeyboardButton(btn_text, callback_data=f"pay_{uid}"))
         bot.send_message(ADMIN_CHAT_ID, text, reply_markup=markup, parse_mode="Markdown")
-
-def show_paid_with_new_refs_direct(message):
-    conn = sqlite3.connect('/tmp/referrals.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT user_id, ref_count, wallet, instagram_id FROM users WHERE paid = 1 AND ref_count > ? ORDER BY ref_count DESC", (REQUIRED_REFERRALS,))
-    rows = cursor.fetchall()
-    conn.close()
-    if not rows:
-        bot.send_message(ADMIN_CHAT_ID, "⚠️ کاربری که پاداشش پرداخت شده باشد و رفال مازاد داشته باشد یافت نشد.")
-        return
-    text = "🔄 *کاربران پرداخت‌شده‌ای که رفال مازاد دارند:*\n\n"
-    for uid, ref_cnt, wlt, insta in rows:
-        total_tokens = calculate_tokens(ref_cnt)
-        text += f"📌 آیدی: `{uid}`\nاینستا: `{insta}`\nولت: `{wlt}`\n👥 کل دعوت‌ها: `{ref_cnt}`\n🎁 کل توکن حق‌السهم: `{total_tokens}`\n---\n"
-    bot.send_message(ADMIN_CHAT_ID, text, parse_mode="Markdown")
 
 def get_all_wallets_direct(message):
     conn = sqlite3.connect('/tmp/referrals.db')
@@ -242,25 +217,7 @@ def get_all_wallets_direct(message):
     text = "👝 لیست ولت‌ها:\n\n"
     for uid, ref_cnt, wlt, insta in rows:
         tokens = calculate_tokens(ref_cnt)
-        text += f"📌 آیدی: `{uid}`\nولت: `{wlt}`\nمقدار: `{tokens}`\n---\n"
-    bot.send_message(ADMIN_CHAT_ID, text, parse_mode="Markdown")
-
-def batch_by_tokens_direct(message):
-    conn = sqlite3.connect('/tmp/referrals.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT user_id, ref_count, wallet FROM users WHERE submitted = 1 AND paid = 0")
-    rows = cursor.fetchall()
-    conn.close()
-    if not rows:
-        return
-    grouped = defaultdict(list)
-    for uid, ref_cnt, wlt in rows:
-        tokens = calculate_tokens(ref_cnt)
-        if tokens > 0 and wlt:
-            grouped[tokens].append(wlt)
-    text = "📊 دسته‌بندی توکن‌ها:\n\n"
-    for tokens, wallets in grouped.items():
-        text += f"🎁 مقدار: `{tokens}`\nلیست:\n" + "\n".join(wallets) + "\n---\n"
+        text += f"📌 آیدی: `{uid}`\nاینستا: `{insta}`\nولت: `{wlt}`\nمقدار: `{tokens}`\n---\n"
     bot.send_message(ADMIN_CHAT_ID, text, parse_mode="Markdown")
 
 def show_stats_direct(message):
@@ -274,20 +231,6 @@ def show_stats_direct(message):
     t_p = cursor.fetchone()[0]
     conn.close()
     bot.send_message(ADMIN_CHAT_ID, f"📊 آمار:\nکل: {t_u}\nثبت فرم: {t_s}\nپرداختی: {t_p}", parse_mode="Markdown")
-
-def show_advanced_stats_direct(message):
-    conn = sqlite3.connect('/tmp/referrals.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM users")
-    s0 = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(*) FROM users WHERE verified = 1")
-    s1 = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(*) FROM users WHERE submitted = 1")
-    s2 = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(*) FROM users WHERE paid = 1")
-    s3 = cursor.fetchone()[0]
-    conn.close()
-    bot.send_message(ADMIN_CHAT_ID, f"قیف تبدیل:\nاستارت: {s0}\nتایید: {s1}\nفرم: {s2}\nپرداخت: {s3}", parse_mode="Markdown")
 
 def export_csv_direct(message):
     conn = sqlite3.connect('/tmp/referrals.db')
@@ -315,6 +258,7 @@ def show_main_menu(chat_id, user_id):
         InlineKeyboardButton("📸 اینستاگرام", url=INSTAGRAM_URL)
     )
     markup.row(InlineKeyboardButton("🐦 توییتر (ایکس)", url=TWITTER_URL))
+    markup.row(InlineKeyboardButton("🔄 بررسی عضویت در کانال", callback_data="check_join"))
     markup.row(InlineKeyboardButton("🔗 دریافت لینک دعوت جذاب و اختصاصی", callback_data="get_ref_link"))
     markup.row(InlineKeyboardButton("🏆 برترین دعوت‌کنندگان", callback_data="leaderboard"))
     markup.row(InlineKeyboardButton("📊 وضعیت من", callback_data="my_status"), InlineKeyboardButton("📝 ارسال اطلاعات و ولت", callback_data="submit_info"))
@@ -323,15 +267,13 @@ def show_main_menu(chat_id, user_id):
         f"🔴 *به ربات رسمی ایردراپ توکن هواداری پرسپولیس (PRS) خوش آمدید* 🏆\n\n"
         f"🪙 *معرفی پروژه:* توکن هواداری پرسپولیس بستری مدرن برای هواداران عزیز است تا در اکوسیستم دیجیتال باشگاه سهم داشته باشند.\n\n"
         f"🎁 *سیستم پاداش‌دهی و ایردراپ:*\n"
-        f"▫️ پاداش پایه برای ورود و فعال‌سازی: `{BASE_REWARD} PRS`\n"
-        f"▫️ شرط دریافت پاداش: دعوت از حداقل `{REQUIRED_REFERRALS}` دوست با لینک اختصاصی\n"
+        f"▫️ پاداش پایه: `{BASE_REWARD} PRS` (پس از دعوت حداقل `{REQUIRED_REFERRALS}` دوست)\n"
         f"▫️ پاداش به ازای هر دعوت مازاد: `{EXTRA_REWARD} PRS`\n\n"
-        f"📋 *راهنمای دریافت ایردراپ:*\n"
-        f"۱. ابتدا در کانال تلگرام، اینستاگرام و توییتر ما حتماً عضو شوید.\n"
-        f"۲. لینک دعوت اختصاصی خود را بگیرید و برای دوستانتان بفرستید.\n"
-        f"۳. پس از رسیدن به حد نصاب، اطلاعات و آدرس ولت خود را ثبت کنید.\n\n"
+        f"⚠️ *شرایط مهم:*\n"
+        f"۱. عضویت در کانال تلگرام و پیوستن به اینستاگرام/توییتر الزامی است.\n"
+        f"۲. برای ارسال اطلاعات و ولت، باید حداقل `{REQUIRED_REFERRALS}` نفر را دعوت کرده باشید.\n\n"
         f"📊 *وضعیت شما در ربات:*\n"
-        f"👥 دعوت‌های شما: `{ref_count}`\n"
+        f"👥 دعوت‌های شما: `{ref_count} / {REQUIRED_REFERRALS}`\n"
         f"🎁 توکن کسب‌شده: `{earned} PRS`"
     )
     
@@ -414,7 +356,11 @@ def handle_all_messages(message):
             conn.commit()
             conn.close()
             register_user_after_verify(user_id, referrer_id)
-            show_main_menu(user_id, user_id)
+            
+            if not check_channel(user_id):
+                bot.send_message(user_id, f"❌ شما هنوز در کانال {CHANNEL_ID} عضو نیستید. لطفاً ابتدا عضو کانال شوید و سپس روی دکمه بررسی عضویت بزنید.", parse_mode="Markdown")
+            else:
+                show_main_menu(user_id, user_id)
         else:
             conn.close()
             bot.send_message(user_id, "❌ پاسخ اشتباه است. دوباره تلاش کنید.")
@@ -428,26 +374,31 @@ def handle_all_messages(message):
     conn.close()
 
     if is_submitting:
+        user_data = get_user_data(user_id)
+        ref_count = user_data[0] if user_data else 0
+        if ref_count < REQUIRED_REFERRALS:
+            bot.send_message(user_id, f"❌ شما هنوز به حد نصاب دعوت نرسیده‌اید. تعداد دعوت‌های فعلی شما: {ref_count} از {REQUIRED_REFERRALS}")
+            return
+        
         parts = text.split('\n')
-        if len(parts) >= 3:
-            save_submission(user_id, parts[0], parts[1], parts[2])
+        if len(parts) >= 2:
+            save_submission(user_id, parts[0], parts[1])
             bot.send_message(user_id, "✅ اطلاعات با موفقیت ثبت شد.")
             show_main_menu(user_id, user_id)
         else:
-            bot.send_message(user_id, "⚠️ فرمت اطلاعات ارسالی ناقص است.")
+            bot.send_message(user_id, "⚠️ فرمت اطلاعات ارسالی باید در ۲ خط باشد:\nخط اول: آیدی اینستاگرام\nخط دوم: آدرس ولت")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
     user_id = call.from_user.id
     if call.data == "check_join":
         if check_channel(user_id):
-            bot.answer_callback_query(call.id, "✅ تایید شد!")
+            bot.answer_callback_query(call.id, "✅ عضویت شما تایید شد!")
             show_main_menu(call.message.chat.id, user_id)
         else:
-            bot.answer_callback_query(call.id, "❌ عضو کانال نشده‌اید!", show_alert=True)
+            bot.answer_callback_query(call.id, f"❌ شما هنوز در کانال {CHANNEL_ID} عضو نیستید!", show_alert=True)
     elif call.data == "get_ref_link":
         bot.answer_callback_query(call.id)
-        # استفاده از آیدی صحیح ربات (BOT_USERNAME) در ساخت لینک دعوت
         ref_link = f"https://t.me/{BOT_USERNAME}?start={user_id}"
         
         link_text = (
@@ -485,10 +436,15 @@ def handle_callbacks(call):
         user_data = get_user_data(user_id)
         ref_count = user_data[0] if user_data else 0
         earned = calculate_tokens(ref_count)
-        bot.answer_callback_query(call.id, f"📊 تعداد دعوت‌ها: {ref_count} | توکن: {earned} PRS", show_alert=True)
+        bot.answer_callback_query(call.id, f"📊 دعوت‌ها: {ref_count}/{REQUIRED_REFERRALS} | توکن: {earned} PRS", show_alert=True)
     elif call.data == "submit_info":
+        user_data = get_user_data(user_id)
+        ref_count = user_data[0] if user_data else 0
+        if ref_count < REQUIRED_REFERRALS:
+            bot.answer_callback_query(call.id, f"❌ برای ارسال اطلاعات باید حداقل {REQUIRED_REFERRALS} نفر دعوت کرده باشید! (تعداد فعلی: {ref_count})", show_alert=True)
+            return
         bot.answer_callback_query(call.id)
-        bot.send_message(user_id, "لطفاً اطلاعات را در ۳ خط بفرستید:\nخط ۱: نام و نام خانوادگی\nخط ۲: آیدی اینستاگرام\nخط ۳: آدرس ولت (ارز دیجیتال)")
+        bot.send_message(user_id, "لطفاً اطلاعات خود را دقیقاً در ۲ خط بفرستید:\nخط ۱: آیدی اینستاگرام\nخط ۲: آدرس ولت (ارز دیجیتال)")
     elif call.data.startswith("pay_") and user_id == ADMIN_CHAT_ID:
         target_uid = int(call.data.split("_")[1])
         toggle_paid_status(target_uid)
