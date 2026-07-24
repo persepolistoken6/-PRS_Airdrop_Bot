@@ -162,11 +162,20 @@ def admin_panel(message):
     markup = InlineKeyboardMarkup()
     markup.row(InlineKeyboardButton("📋 لیست کاربران و تایید پرداخت‌ها", callback_data="admin_users"))
     markup.row(InlineKeyboardButton("👝 لیست یکجای ولت‌ها", callback_data="admin_wallets"))
+    markup.row(InlineKeyboardButton("🔄 پرداخت‌شده‌هایی که رفال جدید زدند", callback_data="admin_paid_new_refs"))
     markup.row(InlineKeyboardButton("📊 دسته‌بندی مقادیر توکن یکسان", callback_data="admin_batch"))
     markup.row(InlineKeyboardButton("📈 آمار کلی ربات", callback_data="admin_stats"))
     markup.row(InlineKeyboardButton("📊 آمار تفکیکی (قیف تبدیل)", callback_data="admin_adv_stats"))
     markup.row(InlineKeyboardButton("📁 دریافت فایل خروجی CSV", callback_data="admin_export"))
-    bot.send_message(message.chat.id, "پنل مدیریت ایردراپ:", reply_markup=markup, parse_mode="Markdown")
+    
+    help_text = (
+        "👑 *پنل مدیریت ایردراپ*\n\n"
+        "دستورات متنی ادمین:\n"
+        "🔍 جستجو (آیدی، اینستا، ولت):\n`/search متن_یا_آیدی`\n\n"
+        "❌ حذف کاربر:\n`/deleteuser آیدی_عددی`\n\n"
+        "📢 ارسال همگانی به همه:\n`/sendall متن پیام`"
+    )
+    bot.send_message(message.chat.id, help_text, reply_markup=markup, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('admin_'))
 def admin_callbacks(call):
@@ -176,6 +185,8 @@ def admin_callbacks(call):
         show_eligible_users_direct(call.message)
     elif call.data == "admin_wallets":
         get_all_wallets_direct(call.message)
+    elif call.data == "admin_paid_new_refs":
+        show_paid_with_new_refs_direct(call.message)
     elif call.data == "admin_batch":
         batch_by_tokens_direct(call.message)
     elif call.data == "admin_stats":
@@ -203,6 +214,21 @@ def show_eligible_users_direct(message):
         btn_text = "❌ لغو" if paid_status == 1 else "✅ تایید"
         markup.row(InlineKeyboardButton(btn_text, callback_data=f"pay_{uid}"))
         bot.send_message(ADMIN_CHAT_ID, text, reply_markup=markup, parse_mode="Markdown")
+
+def show_paid_with_new_refs_direct(message):
+    conn = sqlite3.connect('/tmp/referrals.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id, ref_count, wallet, instagram_id FROM users WHERE paid = 1 AND ref_count > ? ORDER BY ref_count DESC", (REQUIRED_REFERRALS,))
+    rows = cursor.fetchall()
+    conn.close()
+    if not rows:
+        bot.send_message(ADMIN_CHAT_ID, "⚠️ کاربری که پاداشش پرداخت شده باشد و رفال مازاد داشته باشد یافت نشد.")
+        return
+    text = "🔄 *کاربران پرداخت‌شده‌ای که رفال مازاد دارند:*\n\n"
+    for uid, ref_cnt, wlt, insta in rows:
+        total_tokens = calculate_tokens(ref_cnt)
+        text += f"📌 آیدی: `{uid}`\nاینستا: `{insta}`\nولت: `{wlt}`\n👥 کل دعوت‌ها: `{ref_cnt}`\n🎁 کل توکن حق‌السهم: `{total_tokens}`\n---\n"
+    bot.send_message(ADMIN_CHAT_ID, text, parse_mode="Markdown")
 
 def get_all_wallets_direct(message):
     conn = sqlite3.connect('/tmp/referrals.db')
@@ -339,9 +365,12 @@ def handle_all_messages(message):
                            (int(query) if query.isdigit() else 0, f"%{query}%", f"%{query}%"))
             rows = cursor.fetchall()
             conn.close()
-            res = "🔍 نتیجه جستجو:\n\n"
+            if not rows:
+                bot.send_message(ADMIN_CHAT_ID, "❌ هیچ کاربری با این مشخصات پیدا نشد.")
+                return
+            res = "🔍 *نتیجه جستجوی ادمین:*\n\n"
             for r in rows:
-                res += f"آیدی: `{r[0]}` | اینستا: `{r[6]}` | ولت: `{r[7]}`\n---\n"
+                res += f"👤 آیدی: `{r[0]}`\n👥 رفال: `{r[2]}`\n📸 اینستا: `{r[6]}`\n👝 ولت: `{r[7]}`\n📌 ثبت فرم: `{r[3]}` | پرداخت: `{r[4]}`\n---\n"
             bot.send_message(ADMIN_CHAT_ID, res, parse_mode="Markdown")
             return
         elif text.startswith("/deleteuser "):
@@ -350,9 +379,12 @@ def handle_all_messages(message):
                 conn = sqlite3.connect('/tmp/referrals.db')
                 cursor = conn.cursor()
                 cursor.execute("DELETE FROM users WHERE user_id = ?", (int(target_id),))
+                cursor.execute("DELETE FROM captcha WHERE user_id = ?", (int(target_id),))
                 conn.commit()
                 conn.close()
-                bot.send_message(ADMIN_CHAT_ID, f"✅ کاربر {target_id} حذف شد.")
+                bot.send_message(ADMIN_CHAT_ID, f"✅ کاربر با آیدی عددی `{target_id}` به طور کامل از دیتابیس حذف شد.", parse_mode="Markdown")
+            else:
+                bot.send_message(ADMIN_CHAT_ID, "⚠️ آیدی عددی وارد شده معتبر نیست.")
             return
         elif text.startswith("/sendall "):
             broadcast_msg = text.replace("/sendall", "").strip()
@@ -361,12 +393,14 @@ def handle_all_messages(message):
             cursor.execute("SELECT user_id FROM users")
             all_users = cursor.fetchall()
             conn.close()
+            success_count = 0
             for u in all_users:
                 try:
                     bot.send_message(u[0], f"📢 {broadcast_msg}")
+                    success_count += 1
                 except Exception:
                     pass
-            bot.send_message(ADMIN_CHAT_ID, f"✅ ارسال همگانی انجام شد.")
+            bot.send_message(ADMIN_CHAT_ID, f"✅ ارسال همگانی با موفقیت به {success_count} کاربر انجام شد.")
             return
 
     conn = sqlite3.connect('/tmp/referrals.db')
@@ -420,7 +454,7 @@ def handle_callbacks(call):
             f"🏆 فرصت استثنایی برای دریافت توکن رایگان و ورود به اکوسیستم دیجیتال پرسپولیس!\n"
             f"🎁 همین الان با لینک زیر وارد ربات شو و پاداش ورودت رو بگیر:\n\n"
             f"`{ref_link}`\n\n"
-            f"⚡️ کافیست روی لینک بالا لمس کنید تا کپی شود و آن را برای دوستانتان بفرستید تا پاداش بیشتری کسب کنید!"
+            f"این پیام رو برای دوستان خود ارسال کنید"
         )
         try:
             bot.send_photo(
