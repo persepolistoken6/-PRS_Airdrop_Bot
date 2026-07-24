@@ -128,22 +128,7 @@ def check_channel(user_id):
     except Exception:
         return False
 
-@bot.message_handler(commands=['start'])
-def send_welcome(message):
-    user_id = message.from_user.id
-    args = message.text.split()
-    referrer_id = int(args[1]) if len(args) > 1 and args[1].isdigit() else None
-    
-    # بررسی اینکه آیا کاربر روی لینک خودش زده است یا خیر
-    if referrer_id == user_id:
-        bot.send_message(message.chat.id, "⚠️ شما نمی‌توانید از لینک دعوت خودتان استفاده کنید!")
-        return
-
-    user_data = get_user_data(user_id)
-    if user_data and user_data[3] == 1:
-        show_main_menu(message.chat.id, user_id)
-        return
-
+def send_captcha(chat_id, user_id, referrer_id):
     num1 = random.randint(1, 10)
     num2 = random.randint(1, 10)
     correct_ans = num1 + num2
@@ -155,13 +140,30 @@ def send_welcome(message):
     conn.close()
 
     bot.send_message(
-        message.chat.id,
+        chat_id,
         f"🛡 *تایید هویت امنیتی (ضد ربات و فیک)* \n\n"
         f"لطفاً حاصل جمع زیر را به عنوان پاسخ ارسال کنید:\n"
         f"❓ {num1} + {num2} = ؟\n\n"
         f"*(عدد پاسخ را در چت ارسال کنید)*",
         parse_mode="Markdown"
     )
+
+@bot.message_handler(commands=['start'])
+def send_welcome(message):
+    user_id = message.from_user.id
+    args = message.text.split()
+    referrer_id = int(args[1]) if len(args) > 1 and args[1].isdigit() else None
+    
+    if referrer_id == user_id:
+        bot.send_message(message.chat.id, "⚠️ شما نمی‌توانید از لینک دعوت خودتان استفاده کنید!")
+        return
+
+    user_data = get_user_data(user_id)
+    if user_data and user_data[3] == 1:
+        show_main_menu(message.chat.id, user_id)
+        return
+
+    send_captcha(message.chat.id, user_id, referrer_id)
 
 @bot.message_handler(commands=['admin'])
 def admin_panel(message):
@@ -472,7 +474,9 @@ def handle_all_messages(message):
                 )
         else:
             conn.close()
-            bot.send_message(user_id, "❌ پاسخ اشتباه است. دوباره تلاش کنید.")
+            # اگر پاسخ اشتباه بود، مجدداً یک کپچای جدید برایش می‌سازیم و می‌فرستیم
+            send_captcha(user_id, user_id, referrer_id)
+            bot.send_message(user_id, "❌ پاسخ اشتباه است. لطفاً به سوال جدید پاسخ دهید:")
         return
     conn.close()
 
