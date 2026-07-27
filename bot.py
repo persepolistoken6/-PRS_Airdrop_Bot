@@ -87,7 +87,6 @@ def is_airdrop_finished():
     return get_global_total_distributed_tokens() >= MAX_TOTAL_TOKENS_LIMIT
 
 def get_main_reply_markup():
-    """کیبورد ثابت پایین صفحه (Reply Keyboard) برای کاربران عادی"""
     markup = ReplyKeyboardMarkup(resize_keyboard=True, persistent=True)
     markup.row("📊 وضعیت من و رتبه", "🔗 دریافت لینک دعوت")
     markup.row("🎁 پاداش روزانه", "📝 ارسال/ویرایش اطلاعات و ولت")
@@ -95,7 +94,6 @@ def get_main_reply_markup():
     return markup
 
 def get_admin_reply_markup():
-    """کیبورد ثابت پایین صفحه (Reply Keyboard) اختصاصی ادمین برای دسترسی دائمی بدون دستور"""
     markup = ReplyKeyboardMarkup(resize_keyboard=True, persistent=True)
     markup.row("👝 مدیریت و تایید ولت‌ها", "📊 گزارش کلی توکن‌ها")
     markup.row("📊 گزارش تفکیکی (فایل)", "📈 آمار کلی ربات")
@@ -465,6 +463,10 @@ def show_main_menu(chat_id, user_id, message_id=None, edit=False):
                 parse_mode="Markdown",
                 reply_markup=markup
             )
+            try:
+                bot.send_message(chat_id, "👇 منوی دسترسی سریع همیشه در پایین صفحه شما قرار دارد:", reply_markup=reply_markup_kb)
+            except Exception:
+                pass
             return
         except Exception:
             pass
@@ -499,7 +501,6 @@ def handle_all_messages(message):
     user_id = message.from_user.id
     text = message.text.strip() if message.text else ""
     
-    # مدیریت پنل ثابت ادمین بدون نیاز به دستور
     if user_id == ADMIN_CHAT_ID:
         if text == "👝 مدیریت و تایید ولت‌ها":
             send_paginated_wallets(message, offset=0)
