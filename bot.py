@@ -7,7 +7,7 @@ from collections import defaultdict
 from telebot import TeleBot
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 
-TOKEN = "8629221284:AAFRFeQuMoeBHcnNU8ifQAIRLTu4CTYVU4E"
+TOKEN = "8629221284:AAHIsQtut-iq25Izs-zo0AlHwYd-Tjyfqnc"
 BOT_USERNAME = "PRS_Airdrop_Bot"
 CHANNEL_ID = "@persepolisToken6"
 INSTAGRAM_URL = "Https://www.instagram.com/persepolistoken6?igsh=eHBwbzdtd2ZoaWI5"
@@ -137,7 +137,6 @@ def register_user_after_verify(user_id, referrer_id):
         else:
             conn.commit()
     else:
-        # اگر کاربر قبلاً ثبت شده بود ولی تایید نشده بود، اگر معرف نداشت و الان معرف دارد ثبتش کنیم
         current_referred_by = row[1]
         if not current_referred_by and referrer_id and referrer_id != user_id:
             cursor.execute("UPDATE users SET verified = 1, referred_by = ? WHERE user_id = ?", (referrer_id, user_id))
@@ -228,11 +227,10 @@ def send_welcome(message):
     referrer_id = int(args[1]) if len(args) > 1 and args[1].isdigit() else None
     
     if referrer_id == user_id:
-        bot.send_message(message.chat.id, "⚠️ شما نمی‌توانید از لینک دعوت خودتان استفاده کنید!")
         referrer_id = None
 
     user_data = get_user_data(user_id)
-    if user_data and user_data[3] == 1: # verified == 1
+    if user_data and user_data[3] == 1:
         show_main_menu(message.chat.id, user_id)
         return
 
@@ -454,47 +452,26 @@ def show_main_menu(chat_id, user_id, message_id=None, edit=False):
                 parse_mode="Markdown",
                 reply_markup=markup
             )
-            try:
-                bot.send_message(chat_id, "👇 منوی دسترسی سریع همیشه در پایین صفحه شما قرار دارد:", reply_markup=reply_markup_kb)
-            except Exception:
-                pass
+            bot.send_message(chat_id, "👇 منوی دسترسی سریع همیشه در پایین صفحه شما قرار دارد:", reply_markup=reply_markup_kb)
             return
         except Exception:
             pass
 
-    banner_sent = False
     try:
         if BANNER_FILE_ID:
-            bot.send_photo(
-                chat_id=chat_id,
-                photo=BANNER_FILE_ID,
-                caption=caption_text,
-                parse_mode="Markdown",
-                reply_markup=markup
-            )
-            banner_sent = True
+            bot.send_photo(chat_id=chat_id, photo=BANNER_FILE_ID, caption=caption_text, parse_mode="Markdown", reply_markup=markup)
+        else:
+            raise Exception("No banner")
     except Exception:
-        pass
-
-    if not banner_sent:
         try:
-            bot.send_message(
-                chat_id=chat_id,
-                text=caption_text,
-                parse_mode="Markdown",
-                reply_markup=markup
-            )
-        except Exception:
-            pass
-    
+            bot.send_message(chat_id=chat_id, text=caption_text, parse_mode="Markdown", reply_markup=markup)
+        except Exception as e:
+            print(f"Error sending main menu text: {e}")
+
     try:
-        bot.send_message(
-            chat_id=chat_id,
-            text="👇 منوی دسترسی سریع همیشه در پایین صفحه شما قرار دارد:",
-            reply_markup=reply_markup_kb
-        )
-    except Exception:
-        pass
+        bot.send_message(chat_id=chat_id, text="👇 منوی دسترسی سریع همیشه در پایین صفحه شما قرار دارد:", reply_markup=reply_markup_kb)
+    except Exception as e:
+        print(f"Error sending reply markup: {e}")
 
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
@@ -502,7 +479,6 @@ def handle_all_messages(message):
     chat_id = message.chat.id
     text = message.text.strip() if message.text else ""
     
-    # 1. بررسی وضعیت کپچا (اولین اولویت)
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT num1, num2, answer, pending_referrer FROM captcha WHERE user_id = ?", (user_id,))
@@ -521,7 +497,6 @@ def handle_all_messages(message):
             register_user_after_verify(user_id, referrer_id)
             show_main_menu(chat_id, user_id)
         else:
-            # تولید کپچای جدید در صورت پاسخ اشتباه
             new_n1 = random.randint(1, 10)
             new_n2 = random.randint(1, 10)
             new_correct_ans = new_n1 + new_n2
@@ -540,7 +515,6 @@ def handle_all_messages(message):
             )
         return
 
-    # 2. بررسی دستورات پنل ادمین
     if user_id == ADMIN_CHAT_ID:
         if text == "👝 مدیریت و تایید ولت‌ها":
             send_paginated_wallets(message, offset=0)
@@ -611,7 +585,6 @@ def handle_all_messages(message):
         bot.send_message(user_id, "🛑 کل توکن های ایردارپ ( ۵۰۰ میلیون PRS) توسط شرکت کننده های این ایردراپ استخراج شد و این ربات غیر فعال شد به زودی تمام توکن ها بین کاربران توزیع خواهد شد.")
         return
 
-    # 3. دکمه‌های منوی اصلی کاربران
     if text == "📊 وضعیت من و رتبه":
         user_data = get_user_data(user_id)
         ref_count = user_data[0] if user_data else 0
@@ -687,7 +660,6 @@ def handle_all_messages(message):
         bot.send_message(chat_id, f"🐦 صفحه توییتر: {TWITTER_URL}")
         return
 
-    # 4. ثبت اطلاعات و ولت (ارسال در ۲ خط)
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT user_id FROM users WHERE user_id = ? AND submitted = 0", (user_id,))
@@ -747,16 +719,9 @@ def handle_callbacks(call):
             f"این پیام رو برای دوستان خود ارسال کنید"
         )
         try:
-            bot.send_photo(
-                chat_id=chat_id,
-                photo=BANNER_FILE_ID,
-                caption=link_text
-            )
+            bot.send_photo(chat_id=chat_id, photo=BANNER_FILE_ID, caption=link_text)
         except Exception:
-            bot.send_message(
-                chat_id=chat_id,
-                text=link_text
-            )
+            bot.send_message(chat_id=chat_id, text=link_text)
     elif call.data == "daily_bonus":
         user_data = get_user_data(user_id)
         ref_count = user_data[0] if user_data else 0
