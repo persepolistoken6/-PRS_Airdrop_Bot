@@ -7,7 +7,7 @@ from collections import defaultdict
 from telebot import TeleBot
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 
-TOKEN = "8629221284:AAGjui2MEiuOSPOKLAnlzdlL5o8kIl6SxQo"
+TOKEN = "YOUR_NEW_BOT_TOKEN"
 BOT_USERNAME = "PRS_Airdrop_Bot"
 CHANNEL_ID = "@persepolisToken6"
 INSTAGRAM_URL = "Https://www.instagram.com/persepolistoken6?igsh=eHBwbzdtd2ZoaWI5"
@@ -811,9 +811,18 @@ def handle_callbacks(call):
         bot.send_message(chat_id, "لطفاً اطلاعات خود را دقیقاً در ۲ خط بفرستید (در صورت ارسال مجدد، آدرس ولت قبلی شما ویرایش/آپدیت می‌شود):\nخط ۱: آیدی اینستاگرام\nخط ۲: آدرس ولت (ارز دیجیتال)")
 
 if __name__ == "__main__":
-    print("Bot is starting with Long Polling...")
-    try:
-        bot.remove_webhook()
-    except Exception:
-        pass
-    bot.infinity_polling(skip_pending=True)
+    print("Bot is starting...")
+
+    bot.delete_webhook(drop_pending_updates=True)
+    time.sleep(2)
+
+    while True:
+        try:
+            bot.infinity_polling(
+                timeout=30,
+                long_polling_timeout=30,
+                skip_pending=True
+            )
+        except Exception as e:
+            print(f"Polling error: {e}")
+            time.sleep(10)
