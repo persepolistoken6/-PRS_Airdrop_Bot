@@ -95,14 +95,14 @@ def is_airdrop_finished():
     return get_global_total_distributed_tokens() >= MAX_TOTAL_TOKENS_LIMIT
 
 def get_main_reply_markup():
-    markup = ReplyKeyboardMarkup(resize_keyboard=True, )
+    markup = ReplyKeyboardMarkup(resize_keyboard=True, is_persistent=True)
     markup.row("📊 وضعیت من و رتبه", "🔗 دریافت لینک دعوت")
     markup.row("🎁 پاداش روزانه", "📝 ارسال/ویرایش اطلاعات و ولت")
     markup.row("📢 کانال تلگرام", "📸 اینستاگرام", "🐦 توییتر (ایکس)")
     return markup
 
 def get_admin_reply_markup():
-    markup = ReplyKeyboardMarkup(resize_keyboard=True, )
+    markup = ReplyKeyboardMarkup(resize_keyboard=True, is_persistent=True)
     markup.row("👝 مدیریت و تایید ولت‌ها", "📊 گزارش کلی توکن‌ها")
     markup.row("📊 گزارش تفکیکی (فایل)", "📈 آمار کلی ربات")
     markup.row("🔙 خروج از حالت ادمین / منوی اصلی")
@@ -481,7 +481,6 @@ def handle_all_messages(message):
     chat_id = message.chat.id
     text = message.text.strip() if message.text else ""
     
-    # تبدیل اعداد فارسی به انگلیسی جهت سازگاری با کیبورد گوشی کاربران
     persian_to_english = str.maketrans('۰۱۲۳۴۵۶۷۸۹', '0123456789')
     text = text.translate(persian_to_english)
     
