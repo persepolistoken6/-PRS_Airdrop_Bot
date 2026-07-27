@@ -109,8 +109,10 @@ def get_admin_reply_markup():
 def register_user_after_verify(user_id, referrer_id):
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
-    if not cursor.fetchone():
+    cursor.execute("SELECT user_id, referred_by FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    
+    if not row:
         actual_referrer = referrer_id if (referrer_id and referrer_id != user_id) else None
         cursor.execute("INSERT INTO users (user_id, referred_by, verified) VALUES (?, ?, 1)", (user_id, actual_referrer))
         
@@ -135,8 +137,30 @@ def register_user_after_verify(user_id, referrer_id):
         else:
             conn.commit()
     else:
-        cursor.execute("UPDATE users SET verified = 1 WHERE user_id = ?", (user_id,))
-        conn.commit()
+        # اگر کاربر قبلاً ثبت شده بود ولی تایید نشده بود، اگر معرف نداشت و الان معرف دارد ثبتش کنیم
+        current_referred_by = row[1]
+        if not current_referred_by and referrer_id and referrer_id != user_id:
+            cursor.execute("UPDATE users SET verified = 1, referred_by = ? WHERE user_id = ?", (referrer_id, user_id))
+            cursor.execute("UPDATE users SET ref_count = ref_count + 1 WHERE user_id = ?", (referrer_id,))
+            conn.commit()
+            try:
+                cursor.execute("SELECT ref_count, daily_count FROM users WHERE user_id = ?", (referrer_id,))
+                ref_row = cursor.fetchone()
+                current_refs = ref_row[0] if ref_row else 1
+                d_count = ref_row[1] if ref_row else 0
+                earned_now = calculate_total_tokens(current_refs, d_count)
+                bot.send_message(
+                    referrer_id,
+                    f"🎉 *یک زیرمجموعه جدید با لینک شما وارد شد!*\n\n"
+                    f"👥 تعداد کل دعوت‌های شما: `{current_refs}`\n"
+                    f"🎁 مجموع توکن کسب‌شده: `{earned_now}` PRS",
+                    parse_mode="Markdown"
+                )
+            except Exception:
+                pass
+        else:
+            cursor.execute("UPDATE users SET verified = 1 WHERE user_id = ?", (user_id,))
+            conn.commit()
     conn.close()
 
 def save_submission(user_id, instagram_id, wallet):
@@ -158,13 +182,6 @@ def get_ref_details(ref_count):
         base_used = ref_count
         extra_count = 0
     return base_used, extra_count
-
-def check_channel(user_id):
-    try:
-        member = bot.get_chat_member(CHANNEL_ID, user_id)
-        return member.status in ['member', 'administrator', 'creator', 'restricted']
-    except Exception as e:
-        return True
 
 def send_captcha(chat_id, user_id, referrer_id):
     num1 = random.randint(1, 10)
@@ -212,10 +229,10 @@ def send_welcome(message):
     
     if referrer_id == user_id:
         bot.send_message(message.chat.id, "⚠️ شما نمی‌توانید از لینک دعوت خودتان استفاده کنید!")
-        return
+        referrer_id = None
 
     user_data = get_user_data(user_id)
-    if user_data and user_data[3] == 1:
+    if user_data and user_data[3] == 1: # verified == 1
         show_main_menu(message.chat.id, user_id)
         return
 
