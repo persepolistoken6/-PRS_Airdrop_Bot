@@ -48,6 +48,8 @@ def init_db():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS captcha (
             user_id INTEGER PRIMARY KEY,
+            num1 INTEGER,
+            num2 INTEGER,
             answer INTEGER,
             pending_referrer INTEGER
         )
@@ -178,7 +180,7 @@ def send_captcha(chat_id, user_id, referrer_id):
 
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("REPLACE INTO captcha (user_id, answer, pending_referrer) VALUES (?, ?, ?)", (user_id, correct_ans, referrer_id))
+    cursor.execute("REPLACE INTO captcha (user_id, num1, num2, answer, pending_referrer) VALUES (?, ?, ?, ?, ?)", (user_id, num1, num2, correct_ans, referrer_id))
     conn.commit()
     conn.close()
 
@@ -446,21 +448,31 @@ def show_main_menu(chat_id, user_id, message_id=None, edit=False):
         except Exception:
             pass
 
+    # تلاش برای ارسال عکس بنر، اگر خطا داد حتماً متن و منو ارسال شود تا ربات قفل نکند
+    banner_sent = False
     try:
-        bot.send_photo(
-            chat_id=chat_id,
-            photo=BANNER_FILE_ID,
-            caption=caption_text,
-            parse_mode="Markdown",
-            reply_markup=markup
-        )
+        if BANNER_FILE_ID:
+            bot.send_photo(
+                chat_id=chat_id,
+                photo=BANNER_FILE_ID,
+                caption=caption_text,
+                parse_mode="Markdown",
+                reply_markup=markup
+            )
+            banner_sent = True
     except Exception:
-        bot.send_message(
-            chat_id=chat_id,
-            text=caption_text,
-            parse_mode="Markdown",
-            reply_markup=markup
-        )
+        pass
+
+    if not banner_sent:
+        try:
+            bot.send_message(
+                chat_id=chat_id,
+                text=caption_text,
+                parse_mode="Markdown",
+                reply_markup=markup
+            )
+        except Exception:
+            pass
     
     try:
         bot.send_message(
@@ -547,15 +559,15 @@ def handle_all_messages(message):
         bot.send_message(user_id, "🛑 کل توکن های ایردارپ ( ۵۰۰ میلیون PRS) توسط شرکت کننده های این ایردراپ استخراج شد و این ربات غیر فعال شد به زودی تمام توکن ها بین کاربران توزیع خواهد شد.")
         return
 
-    # بررسی وضعیت کپچا
+    # بررسی وضعیت کپچا (کاملاً ایزوله شده بر اساس ذخیره صحیح سوال هر کاربر)
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT answer, pending_referrer FROM captcha WHERE user_id = ?", (user_id,))
+    cursor.execute("SELECT num1, num2, answer, pending_referrer FROM captcha WHERE user_id = ?", (user_id,))
     captcha_data = cursor.fetchone()
     conn.close()
 
     if captcha_data:
-        correct_ans, referrer_id = captcha_data
+        n1, n2, correct_ans, referrer_id = captcha_data
         if text.isdigit() and int(text) == correct_ans:
             conn = get_db_connection()
             cursor = conn.cursor()
@@ -576,8 +588,10 @@ def handle_all_messages(message):
                     reply_markup=markup
                 )
         else:
-            send_captcha(chat_id, user_id, referrer_id)
-            bot.send_message(chat_id, "❌ پاسخ اشتباه است. لطفاً به حاصل جمع سوال جدید پاسخ دهید:")
+            bot.send_message(
+                chat_id, 
+                f"❌ پاسخ اشتباه است. لطفاً حاصل جمع دقیق همین سوال را بفرستید:\n❓ {n1} + {n2} = ؟"
+            )
         return
 
     if text == "📊 وضعیت من و رتبه":
