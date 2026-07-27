@@ -499,6 +499,7 @@ def show_main_menu(chat_id, user_id, message_id=None, edit=False):
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
     user_id = message.from_user.id
+    chat_id = message.chat.id
     text = message.text.strip() if message.text else ""
     
     if user_id == ADMIN_CHAT_ID:
@@ -589,19 +590,19 @@ def handle_all_messages(message):
             
             if check_channel(user_id):
                 register_user_after_verify(user_id, referrer_id)
-                show_main_menu(message.chat.id, user_id)
+                show_main_menu(chat_id, user_id)
             else:
                 markup = InlineKeyboardMarkup()
                 markup.row(InlineKeyboardButton("✅ عضو شدم، بررسی کن", callback_data=f"check_join_{referrer_id if referrer_id else 0}"))
                 bot.send_message(
-                    user_id,
+                    chat_id,
                     f"❌ شما هنوز در کانال رسمی ما ({CHANNEL_ID}) عضو نشده‌اید!\n\n"
                     f"لطفاً ابتدا وارد کانال شوید و سپس روی دکمه زیر کلیک کنید:",
                     reply_markup=markup
                 )
         else:
-            send_captcha(user_id, user_id, referrer_id)
-            bot.send_message(user_id, "❌ پاسخ اشتباه است. لطفاً به حاصل جمع سوال جدید پاسخ دهید:")
+            send_captcha(chat_id, user_id, referrer_id)
+            bot.send_message(chat_id, "❌ پاسخ اشتباه است. لطفاً به حاصل جمع سوال جدید پاسخ دهید:")
         return
 
     if text == "📊 وضعیت من و رتبه":
@@ -621,7 +622,7 @@ def handle_all_messages(message):
             f"📸 اینستاگرام ثبت‌شده: `{insta}`\n"
             f"👝 آدرس ولت فعلی: `{wallet}`"
         )
-        bot.send_message(user_id, status_msg, parse_mode="Markdown")
+        bot.send_message(chat_id, status_msg, parse_mode="Markdown")
         return
     elif text == "🔗 دریافت لینک دعوت":
         ref_link = f"https://t.me/{BOT_USERNAME}?start={user_id}"
@@ -633,15 +634,15 @@ def handle_all_messages(message):
             f"این پیام رو برای دوستان خود ارسال کنید"
         )
         try:
-            bot.send_photo(chat_id=user_id, photo=BANNER_FILE_ID, caption=link_text)
+            bot.send_photo(chat_id=chat_id, photo=BANNER_FILE_ID, caption=link_text)
         except Exception:
-            bot.send_message(chat_id=user_id, text=link_text)
+            bot.send_message(chat_id=chat_id, text=link_text)
         return
     elif text == "🎁 پاداش روزانه":
         user_data = get_user_data(user_id)
         ref_count = user_data[0] if user_data else 0
         if ref_count < REQUIRED_REFERRALS:
-            bot.send_message(user_id, f"⚠️ پاداش روزانه قفل است!\nبرای باز شدن آن باید حداقل {REQUIRED_REFERRALS} دوست دعوت کنید.")
+            bot.send_message(chat_id, f"⚠️ پاداش روزانه قفل است!\nبرای باز شدن آن باید حداقل {REQUIRED_REFERRALS} دوست دعوت کنید.")
             return
         current_time = int(time.time())
         last_daily = user_data[4] if user_data else 0
@@ -649,14 +650,14 @@ def handle_all_messages(message):
             remaining = 86400 - (current_time - last_daily)
             hours = remaining // 3600
             minutes = (remaining % 3600) // 60
-            bot.send_message(user_id, f"⏳ شما قبلاً پاداش امروز خود را دریافت کرده‌اید!\nلطفاً پس از {hours} ساعت و {minutes} دقیقه دیگر تلاش کنید.")
+            bot.send_message(chat_id, f"⏳ شما قبلاً پاداش امروز خود را دریافت کرده‌اید!\nلطفاً پس از {hours} ساعت و {minutes} دقیقه دیگر تلاش کنید.")
         else:
             conn = sqlite3.connect('/tmp/referrals.db')
             cursor = conn.cursor()
             cursor.execute("UPDATE users SET last_daily = ?, daily_count = daily_count + 1 WHERE user_id = ?", (current_time, user_id))
             conn.commit()
             conn.close()
-            bot.send_message(user_id, f"🎁 تبریک! مبلغ {DAILY_REWARD} توکن PRS به عنوان پاداش روزانه به حساب شما اضافه شد.")
+            bot.send_message(chat_id, f"🎁 تبریک! مبلغ {DAILY_REWARD} توکن PRS به عنوان پاداش روزانه به حساب شما اضافه شد.")
         return
     elif text == "📝 ارسال/ویرایش اطلاعات و ولت":
         is_member = check_channel(user_id)
@@ -668,18 +669,18 @@ def handle_all_messages(message):
         if ref_count < REQUIRED_REFERRALS:
             errors.append(f"❌ تعداد دعوت‌های شما ({ref_count} نفر) به حد نصاب نرسیده است. (حداقل مورد نیاز: {REQUIRED_REFERRALS} نفر)")
         if errors:
-            bot.send_message(user_id, "⚠️ **امکان ثبت اطلاعات وجود ندارد:**\n\n" + "\n".join(errors) + "\n\nلطفاً پس از رفع موانع دوباره تلاش کنید.", parse_mode="Markdown")
+            bot.send_message(chat_id, "⚠️ **امکان ثبت اطلاعات وجود ندارد:**\n\n" + "\n".join(errors) + "\n\nلطفاً پس از رفع موانع دوباره تلاش کنید.", parse_mode="Markdown")
             return
-        bot.send_message(user_id, "لطفاً اطلاعات خود را دقیقاً در ۲ خط بفرستید:\nخط ۱: آیدی اینستاگرام\nخط ۲: آدرس ولت (ارز دیجیتال)")
+        bot.send_message(chat_id, "لطفاً اطلاعات خود را دقیقاً در ۲ خط بفرستید:\nخط ۱: آیدی اینستاگرام\nخط ۲: آدرس ولت (ارز دیجیتال)")
         return
     elif text == "📢 کانال تلگرام":
-        bot.send_message(user_id, f"📢 کانال رسمی: {CHANNEL_ID}")
+        bot.send_message(chat_id, f"📢 کانال رسمی: {CHANNEL_ID}")
         return
     elif text == "📸 اینستاگرام":
-        bot.send_message(user_id, f"📸 صفحه اینستاگرام: {INSTAGRAM_URL}")
+        bot.send_message(chat_id, f"📸 صفحه اینستاگرام: {INSTAGRAM_URL}")
         return
     elif text == "🐦 توییتر (ایکس)":
-        bot.send_message(user_id, f"🐦 صفحه توییتر: {TWITTER_URL}")
+        bot.send_message(chat_id, f"🐦 صفحه توییتر: {TWITTER_URL}")
         return
 
     conn = sqlite3.connect('/tmp/referrals.db')
@@ -692,14 +693,15 @@ def handle_all_messages(message):
         parts = text.split('\n')
         if len(parts) >= 2:
             save_submission(user_id, parts[0], parts[1])
-            bot.send_message(user_id, "✅ اطلاعات و آدرس ولت شما با موفقیت ثبت/ویرایش شد.")
-            show_main_menu(message.chat.id, user_id)
+            bot.send_message(chat_id, "✅ اطلاعات و آدرس ولت شما با موفقیت ثبت/ویرایش شد.")
+            show_main_menu(chat_id, user_id)
         else:
-            bot.send_message(user_id, "⚠️ فرمت اطلاعات ارسالی باید در ۲ خط باشد:\nخط اول: آیدی اینستاگرام\nخط دوم: آدرس ولت جدید")
+            bot.send_message(chat_id, "⚠️ فرمت اطلاعات ارسالی باید در ۲ خط باشد:\nخط اول: آیدی اینستاگرام\nخط دوم: آدرس ولت جدید")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
     user_id = call.from_user.id
+    chat_id = call.message.chat.id
     
     if is_airdrop_finished() and user_id != ADMIN_CHAT_ID:
         bot.answer_callback_query(call.id, "🛑 ایردراپ به اتمام رسید.", show_alert=True)
@@ -716,17 +718,17 @@ def handle_callbacks(call):
             bot.answer_callback_query(call.id, "✅ عضویت شما تایید شد!")
             register_user_after_verify(user_id, referrer_id if referrer_id != 0 else None)
             try:
-                bot.delete_message(user_id, call.message.message_id)
+                bot.delete_message(chat_id, call.message.message_id)
             except Exception:
                 pass
-            show_main_menu(call.message.chat.id, user_id)
+            show_main_menu(chat_id, user_id)
         else:
             bot.answer_callback_query(call.id, "❌ شما هنوز در کانال عضو نشده‌اید!", show_alert=True)
         return
 
     if call.data == "refresh_menu":
         bot.answer_callback_query(call.id, "🔄 پنل به‌روز شد.")
-        show_main_menu(call.message.chat.id, user_id, message_id=call.message.message_id, edit=True)
+        show_main_menu(chat_id, user_id, message_id=call.message.message_id, edit=True)
         return
 
     if call.data == "get_ref_link":
@@ -742,13 +744,13 @@ def handle_callbacks(call):
         )
         try:
             bot.send_photo(
-                chat_id=user_id,
+                chat_id=chat_id,
                 photo=BANNER_FILE_ID,
                 caption=link_text
             )
         except Exception:
             bot.send_message(
-                chat_id=user_id,
+                chat_id=chat_id,
                 text=link_text
             )
     elif call.data == "daily_bonus":
@@ -774,7 +776,7 @@ def handle_callbacks(call):
             conn.commit()
             conn.close()
             bot.answer_callback_query(call.id, f"🎁 تبریک! مبلغ {DAILY_REWARD} توکن PRS به عنوان پاداش روزانه به حساب شما اضافه شد.", show_alert=True)
-            show_main_menu(call.message.chat.id, user_id, message_id=call.message.message_id, edit=True)
+            show_main_menu(chat_id, user_id, message_id=call.message.message_id, edit=True)
     elif call.data == "leaderboard":
         bot.answer_callback_query(call.id)
         conn = sqlite3.connect('/tmp/referrals.db')
@@ -794,7 +796,7 @@ def handle_callbacks(call):
         text = "🏆 *۱۰ کاربر برتر ایردراپ (بیشترین توکن و دعوت)*:\n\n"
         for idx, (uid, r_cnt, total_t) in enumerate(top_10, 1):
             text += f"{idx}. آیدی: `{uid}` — 👥 دعوت: *{r_cnt}* — 🎁 توکن کل: *{total_t:,} PRS*\n"
-        bot.send_message(user_id, text, parse_mode="Markdown")
+        bot.send_message(chat_id, text, parse_mode="Markdown")
     elif call.data == "my_status":
         user_data = get_user_data(user_id)
         ref_count = user_data[0] if user_data else 0
@@ -814,7 +816,7 @@ def handle_callbacks(call):
             f"💡 برای ویرایش آدرس ولت یا اینستاگرام خود، روی دکمه «ارسال/ویرایش اطلاعات و ولت» در منوی اصلی کلیک کنید."
         )
         bot.answer_callback_query(call.id)
-        bot.send_message(user_id, status_msg, parse_mode="Markdown")
+        bot.send_message(chat_id, status_msg, parse_mode="Markdown")
     elif call.data == "submit_info":
         is_member = check_channel(user_id)
         user_data = get_user_data(user_id)
@@ -829,14 +831,14 @@ def handle_callbacks(call):
         if errors:
             bot.answer_callback_query(call.id, "⚠️ شرایط لازم برای ثبت اطلاعات را ندارید!", show_alert=True)
             bot.send_message(
-                user_id,
+                chat_id,
                 "⚠️ **امکان ثبت اطلاعات وجود ندارد:**\n\n" + "\n".join(errors) + "\n\nلطفاً پس از رفع موانع دوباره تلاش کنید.",
                 parse_mode="Markdown"
             )
             return
 
         bot.answer_callback_query(call.id)
-        bot.send_message(user_id, "لطفاً اطلاعات خود را دقیقاً در ۲ خط بفرستید (در صورت ارسال مجدد، آدرس ولت قبلی شما ویرایش/آپدیت می‌شود):\nخط ۱: آیدی اینستاگرام\nخط ۲: آدرس ولت (ارز دیجیتال)")
+        bot.send_message(chat_id, "لطفاً اطلاعات خود را دقیقاً در ۲ خط بفرستید (در صورت ارسال مجدد، آدرس ولت قبلی شما ویرایش/آپدیت می‌شود):\nخط ۱: آیدی اینستاگرام\nخط ۲: آدرس ولت (ارز دیجیتال)")
 
 if __name__ == "__main__":
     print("Bot is starting with Long Polling...")
