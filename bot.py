@@ -700,13 +700,11 @@ def handle_callbacks(call):
             bot.answer_callback_query(call.id, "✅ عضویت شما تایید شد!")
             register_user_after_verify(user_id, referrer_id if referrer_id != 0 else None)
             
-            # حذف امن پیام قبلی دکمه شیشه‌ای بدون ایجاد اخلال در باز شدن پنل
             try:
                 bot.delete_message(chat_id, call.message.message_id)
             except Exception:
                 pass
             
-            # فراخوانی قطعی منوی اصلی
             show_main_menu(chat_id, user_id)
         else:
             bot.answer_callback_query(call.id, "❌ شما هنوز در کانال عضو نشده‌اید! لطفاً اول عضو شوید.", show_alert=True)
