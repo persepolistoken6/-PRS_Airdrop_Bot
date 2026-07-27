@@ -16,8 +16,9 @@ ADMIN_CHAT_ID = 6661478622
 REQUIRED_REFERRALS = 5
 
 BASE_REWARD = 1000
-EXTRA_REWARD = 200
-DAILY_REWARD = 10  # پاداش روزانه به 10 توکن تغییر یافت
+EXTRA_REWARD = 1000
+DAILY_REWARD = 100
+MAX_TOTAL_TOKENS_LIMIT = 500_000_000
 
 BANNER_FILE_ID = "AgACAgQAAxkBAAMfamINNXWkFr-wk1ONFWAEHF2z-vGAAsgNaxtnhwABU-cbUHZe_7c6AQADAgADeQADPQQ"
 
@@ -55,10 +56,35 @@ init_db()
 def get_user_data(user_id):
     conn = sqlite3.connect('/tmp/referrals.db')
     cursor = conn.cursor()
-    cursor.execute("SELECT ref_count, submitted, paid, verified, last_daily, daily_count FROM users WHERE user_id = ?", (user_id,))
+    cursor.execute("SELECT ref_count, submitted, paid, verified, last_daily, daily_count, wallet, instagram_id FROM users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
     conn.close()
     return row
+
+def calculate_tokens(ref_count):
+    if ref_count < REQUIRED_REFERRALS:
+        return 0
+    extra = ref_count - REQUIRED_REFERRALS
+    return BASE_REWARD + (extra * EXTRA_REWARD)
+
+def calculate_total_tokens(ref_count, daily_count):
+    base_ref_tokens = calculate_tokens(ref_count)
+    daily_tokens = daily_count * DAILY_REWARD
+    return base_ref_tokens + daily_tokens
+
+def get_global_total_distributed_tokens():
+    conn = sqlite3.connect('/tmp/referrals.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT ref_count, daily_count FROM users")
+    rows = cursor.fetchall()
+    conn.close()
+    total = 0
+    for r_cnt, d_cnt in rows:
+        total += calculate_total_tokens(r_cnt, d_cnt)
+    return total
+
+def is_airdrop_finished():
+    return get_global_total_distributed_tokens() >= MAX_TOTAL_TOKENS_LIMIT
 
 def register_user_after_verify(user_id, referrer_id):
     conn = sqlite3.connect('/tmp/referrals.db')
@@ -111,17 +137,6 @@ def set_paid_status(user_id, status):
     conn.commit()
     conn.close()
 
-def calculate_tokens(ref_count):
-    if ref_count < REQUIRED_REFERRALS:
-        return 0
-    extra = ref_count - REQUIRED_REFERRALS
-    return BASE_REWARD + (extra * EXTRA_REWARD)
-
-def calculate_total_tokens(ref_count, daily_count):
-    base_ref_tokens = calculate_tokens(ref_count)
-    daily_tokens = daily_count * DAILY_REWARD
-    return base_ref_tokens + daily_tokens
-
 def get_ref_details(ref_count):
     if ref_count >= REQUIRED_REFERRALS:
         base_used = REQUIRED_REFERRALS
@@ -161,6 +176,11 @@ def send_captcha(chat_id, user_id, referrer_id):
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     user_id = message.from_user.id
+    
+    if is_airdrop_finished():
+        bot.send_message(user_id, "🛑 کل توکن های ایردارپ ( ۵۰۰ میلیون PRS) توسط شرکت کننده های این ایردراپ استخراج شد و این ربات غیر فعال شد به زودی تمام توکن ها بین کاربران توزیع خواهد شد.")
+        return
+
     args = message.text.split()
     referrer_id = int(args[1]) if len(args) > 1 and args[1].isdigit() else None
     
@@ -175,15 +195,37 @@ def send_welcome(message):
 
     send_captcha(message.chat.id, user_id, referrer_id)
 
+def get_user_rank(user_id):
+    conn = sqlite3.connect('/tmp/referrals.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id, ref_count, daily_count FROM users")
+    rows = cursor.fetchall()
+    conn.close()
+    
+    scored_users = []
+    for uid, r_cnt, d_cnt in rows:
+        total = calculate_total_tokens(r_cnt, d_cnt)
+        scored_users.append((uid, total))
+    
+    scored_users.sort(key=lambda x: x[1], reverse=True)
+    for idx, (uid, _) in enumerate(scored_users, 1):
+        if uid == user_id:
+            return idx
+    return "محاسبه‌نشده"
+
 @bot.message_handler(commands=['admin'])
 def admin_panel(message):
     if message.from_user.id != ADMIN_CHAT_ID:
         return
+    show_admin_menu_direct(message.chat.id)
+
+def show_admin_menu_direct(chat_id):
     markup = InlineKeyboardMarkup()
     markup.row(InlineKeyboardButton("👝 مدیریت و لیست ولت‌ها (تایید پرداخت)", callback_data="admin_wallets_list"))
+    markup.row(InlineKeyboardButton("📊 گزارش کلی توکن‌ها و پرداختی‌ها", callback_data="admin_token_summary"))
     markup.row(InlineKeyboardButton("📊 گزارش کامل پرداختی‌ها و دسته‌بندی‌شده", callback_data="admin_detailed_report"))
     markup.row(InlineKeyboardButton("📊 آمار کلی ربات", callback_data="admin_stats"))
-    markup.row(InlineKeyboardButton("📁 دریافت فایل خروجی کامل CSV (با جزئیات رفال)", callback_data="admin_export"))
+    markup.row(InlineKeyboardButton("📁 دریافت فایل خروجی کامل CSV", callback_data="admin_export"))
     
     help_text = (
         "👑 *پنل مدیریت ایردراپ*\n\n"
@@ -192,7 +234,7 @@ def admin_panel(message):
         "❌ حذف کاربر:\n`/deleteuser آیدی_عددی`\n\n"
         "📢 ارسال همگانی به همه:\n`/sendall متن پیام`"
     )
-    bot.send_message(message.chat.id, help_text, reply_markup=markup, parse_mode="Markdown")
+    bot.send_message(chat_id, help_text, reply_markup=markup, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('admin_'))
 def admin_callbacks(call):
@@ -202,6 +244,8 @@ def admin_callbacks(call):
     data = call.data
     if data == "admin_wallets_list":
         send_paginated_wallets(call.message, offset=0)
+    elif data == "admin_token_summary":
+        show_token_summary_direct(call.message)
     elif data == "admin_detailed_report":
         send_detailed_report_file(call.message)
     elif data == "admin_stats":
@@ -227,6 +271,33 @@ def admin_callbacks(call):
         return
 
     bot.answer_callback_query(call.id)
+
+def show_token_summary_direct(message):
+    conn = sqlite3.connect('/tmp/referrals.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT ref_count, daily_count, paid FROM users WHERE submitted = 1")
+    rows = cursor.fetchall()
+    conn.close()
+
+    total_all_tokens = get_global_total_distributed_tokens()
+    paid_tokens = 0
+    unpaid_tokens = 0
+
+    for r_cnt, d_cnt, paid in rows:
+        t_tokens = calculate_total_tokens(r_cnt, d_cnt)
+        if paid == 1:
+            paid_tokens += t_tokens
+        else:
+            unpaid_tokens += t_tokens
+
+    text = (
+        f"📊 *گزارش جامع توکن‌های ایردراپ:*\n\n"
+        f"🪙 کل توکن‌های کسب‌شده توسط تمام کاربران: `{total_all_tokens:,} PRS`\n"
+        f"🟢 کل توکن‌های پرداخت‌شده به کاربران تایید شده: `{paid_tokens:,} PRS`\n"
+        f"🟡 کل توکن‌های در انتظار پرداخت (پرداخت‌نشده): `{unpaid_tokens:,} PRS`\n\n"
+        f"📌 سقف کل ایردراپ: `{MAX_TOTAL_TOKENS_LIMIT:,} PRS`"
+    )
+    bot.send_message(ADMIN_CHAT_ID, text, parse_mode="Markdown")
 
 def send_paginated_wallets(message, offset=0, edit=False):
     conn = sqlite3.connect('/tmp/referrals.db')
@@ -258,7 +329,7 @@ def send_paginated_wallets(message, offset=0, edit=False):
                 f"👤 اینستا: `{insta}`\n" \
                 f"👝 ولت: `{wlt}`\n" \
                 f"👥 دعوت ثابت: {base_used} | مازاد: {extra_count} (کل: {ref_cnt})\n" \
-                f"🎁 توکن کل: `{total_tokens} PRS` (پاداش روزانه: {d_count} بار)\n" \
+                f"🎁 توکن کل: `{total_tokens:,} PRS` (پاداش روزانه: {d_count} بار)\n" \
                 f"وضعیت: *{status_str}*\n" \
                 f"----------------------------------\n"
         
@@ -310,7 +381,7 @@ def send_detailed_report_file(message):
             f"👤 اینستاگرام: `{insta}`\n"
             f"👝 آدرس ولت: `{wlt}`\n"
             f"👥 رفال ثابت: {base_used} | مازاد: {extra_count} (کل: {ref_cnt})\n"
-            f"🎁 توکن کل: {total_tokens} PRS (پاداش روزانه اخذ شده: {d_count} بار)\n"
+            f"🎁 توکن کل: {total_tokens:,} PRS (پاداش روزانه: {d_count} بار)\n"
             f"----------------------------------\n"
         )
         if paid == 1:
@@ -340,7 +411,8 @@ def show_stats_direct(message):
     cursor.execute("SELECT COUNT(*) FROM users WHERE paid = 1")
     t_p = cursor.fetchone()[0]
     conn.close()
-    bot.send_message(ADMIN_CHAT_ID, f"📊 آمار کلی ربات:\n\n👤 کل کاربران استارت کرده: {t_u}\n📝 تعداد ثبت‌فرم‌ها: {t_s}\n💰 پرداخت‌شده‌ها: {t_p}", parse_mode="Markdown")
+    total_tokens_all = get_global_total_distributed_tokens()
+    bot.send_message(ADMIN_CHAT_ID, f"📊 آمار کلی ربات:\n\n👤 کل کاربران استارت کرده: {t_u}\n📝 تعداد ثبت‌فرم‌ها: {t_s}\n💰 پرداخت‌شده‌ها: {t_p}\n🪙 کل توکن توزیع‌شده: {total_tokens_all:,} PRS", parse_mode="Markdown")
 
 def export_csv_direct(message):
     conn = sqlite3.connect('/tmp/referrals.db')
@@ -364,23 +436,35 @@ def export_csv_direct(message):
     file_bytes.name = 'detailed_users_export.csv'
     bot.send_document(ADMIN_CHAT_ID, file_bytes, caption="📊 فایل خروجی دقیق CSV شامل تفکیک رفال، پاداش روزانه، توکن کل و وضعیت پرداخت.")
 
-def show_main_menu(chat_id, user_id):
+def show_main_menu(chat_id, user_id, message_id=None, edit=False):
+    if is_airdrop_finished():
+        bot.send_message(chat_id, "🛑 کل توکن های ایردارپ ( ۵۰۰ میلیون PRS) توسط شرکت کننده های این ایردراپ استخراج شد و این ربات غیر فعال شد به زودی تمام توکن ها بین کاربران توزیع خواهد شد.")
+        return
+
     user_data = get_user_data(user_id)
     ref_count = user_data[0] if user_data else 0
     d_count = user_data[5] if user_data and len(user_data) > 5 else 0
     total_earned = calculate_total_tokens(ref_count, d_count)
+    user_rank = get_user_rank(user_id)
     
     markup = InlineKeyboardMarkup()
+    # لینک‌های همیشه ثابت شبکه‌های اجتماعی
     markup.row(
         InlineKeyboardButton("📢 کانال تلگرام", url=f"https://t.me/{CHANNEL_ID.lstrip('@')}"),
         InlineKeyboardButton("📸 اینستاگرام", url=INSTAGRAM_URL)
     )
     markup.row(InlineKeyboardButton("🐦 توییتر (ایکس)", url=TWITTER_URL))
-    markup.row(InlineKeyboardButton("🔗 دریافت لینک دعوت جذاب و اختصاصی", callback_data="get_ref_link"))
-    markup.row(InlineKeyboardButton("🎁 پاداش روزانه (10 PRS)", callback_data="daily_bonus"))
-    markup.row(InlineKeyboardButton("🏆 برترین دعوت‌کنندگان", callback_data="leaderboard"))
-    markup.row(InlineKeyboardButton("📊 وضعیت من", callback_data="my_status"), InlineKeyboardButton("📝 ارسال اطلاعات و ولت", callback_data="submit_info"))
     
+    # سایر دکمه‌های پنل کاربری
+    markup.row(InlineKeyboardButton("🔗 دریافت لینک دعوت جذاب و اختصاصی", callback_data="get_ref_link"))
+    markup.row(InlineKeyboardButton("🎁 پاداش روزانه (100 PRS)", callback_data="daily_bonus"))
+    markup.row(InlineKeyboardButton("🏆 برترین دعوت‌کنندگان (تاپ ۱۰)", callback_data="leaderboard"))
+    markup.row(InlineKeyboardButton("📊 وضعیت من و رتبه", callback_data="my_status"), InlineKeyboardButton("📝 ارسال/ویرایش اطلاعات و ولت", callback_data="submit_info"))
+    markup.row(InlineKeyboardButton("🔄 به‌روزرسانی پنل کاربری", callback_data="refresh_menu"))
+    
+    if user_id == ADMIN_CHAT_ID:
+        markup.row(InlineKeyboardButton("👑 ورود به پنل مدیریت ادمین", callback_data="open_admin_panel"))
+
     caption_text = (
         f"🔴 *به ربات رسمی ایردراپ توکن هواداری پرسپولیس (PRS) خوش آمدید* 🏆\n\n"
         f"🪙 *معرفی پروژه:* توکن هواداری پرسپولیس بستری مدرن برای هواداران عزیز است تا در اکوسیستم دیجیتال باشگاه سهم داشته باشند.\n\n"
@@ -388,11 +472,25 @@ def show_main_menu(chat_id, user_id):
         f"▫️ پاداش پایه: `{BASE_REWARD} PRS` (پس از عضویت در کانال و دعوت `{REQUIRED_REFERRALS}` دوست)\n"
         f"▫️ پاداش روزانه: `{DAILY_REWARD} PRS` (فعال‌سازی پس از تکمیل ۵ دعوت و هر ۲۴ ساعت یک‌بار)\n"
         f"▫️ پاداش به ازای هر دعوت مازاد: `{EXTRA_REWARD} PRS`\n\n"
-        f"📊 *وضعیت شما در ربات:*\n"
+        f"📊 *وضعیت حساب شما:*\n"
         f"👥 دعوت‌های شما: `{ref_count} / {REQUIRED_REFERRALS}`\n"
-        f"🎁 مجموع توکن کسب‌شده: `{total_earned} PRS`"
+        f"🏅 رتبه شما در بین کاربران: `{user_rank}`\n"
+        f"🎁 مجموع توکن کسب‌شده: `{total_earned:,} PRS`"
     )
     
+    if edit and message_id:
+        try:
+            bot.edit_message_caption(
+                chat_id=chat_id,
+                message_id=message_id,
+                caption=caption_text,
+                parse_mode="Markdown",
+                reply_markup=markup
+            )
+            return
+        except Exception:
+            pass
+
     try:
         bot.send_photo(
             chat_id=chat_id,
@@ -414,6 +512,10 @@ def handle_all_messages(message):
     user_id = message.from_user.id
     text = message.text.strip()
     
+    if is_airdrop_finished() and user_id != ADMIN_CHAT_ID:
+        bot.send_message(user_id, "🛑 کل توکن های ایردارپ ( ۵۰۰ میلیون PRS) توسط شرکت کننده های این ایردراپ استخراج شد و این ربات غیر فعال شد به زودی تمام توکن ها بین کاربران توزیع خواهد شد.")
+        return
+
     if user_id == ADMIN_CHAT_ID:
         if text.startswith("/search "):
             query = text.replace("/search", "").strip()
@@ -432,7 +534,7 @@ def handle_all_messages(message):
                 d_cnt = r[8] if len(r) > 8 else 0
                 total_tokens = calculate_total_tokens(ref_cnt, d_cnt)
                 base_used, extra_count = get_ref_details(ref_cnt)
-                res += f"👤 آیدی: `{r[0]}`\n👥 کل رفال: {ref_cnt} (ثابت: {base_used} | مازاد: {extra_count})\n🎁 توکن کل: {total_tokens} PRS\n📸 اینستا: `{r[6]}`\n👝 ولت: `{r[7]}`\n📌 ثبت فرم: `{r[3]}` | پرداخت: `{r[4]}`\n---\n"
+                res += f"👤 آیدی: `{r[0]}`\n👥 کل رفال: {ref_cnt} (ثابت: {base_used} | مازاد: {extra_count})\n🎁 توکن کل: {total_tokens:,} PRS\n📸 اینستا: `{r[6]}`\n👝 ولت: `{r[7]}`\n📌 ثبت فرم: `{r[3]}` | پرداخت: `{r[4]}`\n---\n"
             bot.send_message(ADMIN_CHAT_ID, res, parse_mode="Markdown")
             return
         elif text.startswith("/deleteuser "):
@@ -478,7 +580,7 @@ def handle_all_messages(message):
             
             if check_channel(user_id):
                 register_user_after_verify(user_id, referrer_id)
-                show_main_menu(user_id, user_id)
+                show_main_menu(message.chat.id, user_id)
             else:
                 markup = InlineKeyboardMarkup()
                 markup.row(InlineKeyboardButton("✅ عضو شدم، بررسی کن", callback_data=f"check_join_{referrer_id if referrer_id else 0}"))
@@ -501,18 +603,23 @@ def handle_all_messages(message):
     is_submitting = cursor.fetchone()
     conn.close()
 
-    if is_submitting:
+    if is_submitting or text.startswith("و") or len(text.split('\n')) >= 2:
         parts = text.split('\n')
         if len(parts) >= 2:
             save_submission(user_id, parts[0], parts[1])
-            bot.send_message(user_id, "✅ اطلاعات با موفقیت ثبت شد.")
-            show_main_menu(user_id, user_id)
+            bot.send_message(user_id, "✅ اطلاعات و آدرس ولت شما با موفقیت ثبت/ویرایش شد.")
+            show_main_menu(message.chat.id, user_id)
         else:
-            bot.send_message(user_id, "⚠️ فرمت اطلاعات ارسالی باید در ۲ خط باشد:\nخط اول: آیدی اینستاگرام\nخط دوم: آدرس ولت")
+            bot.send_message(user_id, "⚠️ فرمت اطلاعات ارسالی باید در ۲ خط باشد:\nخط اول: آیدی اینستاگرام\nخط دوم: آدرس ولت جدید")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
     user_id = call.from_user.id
+    
+    if is_airdrop_finished() and user_id != ADMIN_CHAT_ID:
+        bot.answer_callback_query(call.id, "🛑 ایردراپ به اتمام رسید.", show_alert=True)
+        return
+
     if call.data.startswith("check_join_"):
         referrer_id = int(call.data.split("_")[2])
         
@@ -527,9 +634,22 @@ def handle_callbacks(call):
                 bot.delete_message(user_id, call.message.message_id)
             except Exception:
                 pass
-            show_main_menu(user_id, user_id)
+            show_main_menu(call.message.chat.id, user_id)
         else:
             bot.answer_callback_query(call.id, "❌ شما هنوز در کانال عضو نشده‌اید!", show_alert=True)
+        return
+
+    if call.data == "refresh_menu":
+        bot.answer_callback_query(call.id, "🔄 پنل به‌روز شد.")
+        show_main_menu(call.message.chat.id, user_id, message_id=call.message.message_id, edit=True)
+        return
+
+    if call.data == "open_admin_panel":
+        if user_id == ADMIN_CHAT_ID:
+            bot.answer_callback_query(call.id)
+            show_admin_menu_direct(call.message.chat.id)
+        else:
+            bot.answer_callback_query(call.id, "⛔ شما دسترسی ادمین ندارید.", show_alert=True)
         return
 
     if call.data == "get_ref_link":
@@ -558,16 +678,13 @@ def handle_callbacks(call):
         user_data = get_user_data(user_id)
         ref_count = user_data[0] if user_data else 0
         
-        # شرط فعال‌سازی پاداش روزانه: حداقل ۵ رفال
         if ref_count < REQUIRED_REFERRALS:
-            bot.answer_callback_query(call.id, f"⚠️ پاداش روزانه قفل است!\nبرای باز شدن آن باید حداقل {REQUIRED_REFERRALS} دوست دعوت کنید (현재: {ref_count} نفر).", show_alert=True)
+            bot.answer_callback_query(call.id, f"⚠️ پاداش روزانه قفل است!\nبرای باز شدن آن باید حداقل {REQUIRED_REFERRALS} دوست دعوت کنید.", show_alert=True)
             return
             
         current_time = int(time.time())
         last_daily = user_data[4] if user_data else 0
-        d_count = user_data[5] if user_data else 0
         
-        # بررسی گذشتن ۲۴ ساعت (۸۶۴۰۰ ثانیه)
         if current_time - last_daily < 86400:
             remaining = 86400 - (current_time - last_daily)
             hours = remaining // 3600
@@ -580,23 +697,47 @@ def handle_callbacks(call):
             conn.commit()
             conn.close()
             bot.answer_callback_query(call.id, f"🎁 تبریک! مبلغ {DAILY_REWARD} توکن PRS به عنوان پاداش روزانه به حساب شما اضافه شد.", show_alert=True)
+            show_main_menu(call.message.chat.id, user_id, message_id=call.message.message_id, edit=True)
     elif call.data == "leaderboard":
         bot.answer_callback_query(call.id)
         conn = sqlite3.connect('/tmp/referrals.db')
         cursor = conn.cursor()
-        cursor.execute("SELECT user_id, ref_count FROM users ORDER BY ref_count DESC LIMIT 10")
+        cursor.execute("SELECT user_id, ref_count, daily_count FROM users")
         rows = cursor.fetchall()
         conn.close()
-        text = "🏆 *۱۰ کاربر برتر ایردراپ (بیشترین دعوت)*:\n\n"
-        for idx, (uid, r_cnt) in enumerate(rows, 1):
-            text += f"{idx}. آیدی: `{uid}` — 👥 تعداد دعوت: *{r_cnt}*\n"
+        
+        ranked_list = []
+        for uid, r_cnt, d_cnt in rows:
+            total_t = calculate_total_tokens(r_cnt, d_cnt)
+            ranked_list.append((uid, r_cnt, total_t))
+        
+        ranked_list.sort(key=lambda x: x[2], reverse=True)
+        top_10 = ranked_list[:10]
+        
+        text = "🏆 *۱۰ کاربر برتر ایردراپ (بیشترین توکن و دعوت)*:\n\n"
+        for idx, (uid, r_cnt, total_t) in enumerate(top_10, 1):
+            text += f"{idx}. آیدی: `{uid}` — 👥 دعوت: *{r_cnt}* — 🎁 توکن کل: *{total_t:,} PRS*\n"
         bot.send_message(user_id, text, parse_mode="Markdown")
     elif call.data == "my_status":
         user_data = get_user_data(user_id)
         ref_count = user_data[0] if user_data else 0
         d_count = user_data[5] if user_data and len(user_data) > 5 else 0
         total_earned = calculate_total_tokens(ref_count, d_count)
-        bot.answer_callback_query(call.id, f"📊 دعوت‌ها: {ref_count}/{REQUIRED_REFERRALS} | توکن کل: {total_earned} PRS", show_alert=True)
+        wallet = user_data[6] if user_data and len(user_data) > 6 else "ثبت نشده"
+        insta = user_data[7] if user_data and len(user_data) > 7 else "ثبت نشده"
+        user_rank = get_user_rank(user_id)
+        
+        status_msg = (
+            f"📊 *اطلاعات حساب و وضعیت شما:*\n\n"
+            f"👥 تعداد دعوت‌ها: `{ref_count} / {REQUIRED_REFERRALS}`\n"
+            f"🎁 مجموع توکن کسب‌شده: `{total_earned:,} PRS`\n"
+            f"🏅 رتبه شما در ایردراپ: `{user_rank}`\n"
+            f"📸 اینستاگرام ثبت‌شده: `{insta}`\n"
+            f"👝 آدرس ولت فعلی: `{wallet}`\n\n"
+            f"💡 برای ویرایش آدرس ولت یا اینستاگرام خود، روی دکمه «ارسال/ویرایش اطلاعات و ولت» در منوی اصلی کلیک کنید."
+        )
+        bot.answer_callback_query(call.id)
+        bot.send_message(user_id, status_msg, parse_mode="Markdown")
     elif call.data == "submit_info":
         is_member = check_channel(user_id)
         user_data = get_user_data(user_id)
@@ -618,7 +759,7 @@ def handle_callbacks(call):
             return
 
         bot.answer_callback_query(call.id)
-        bot.send_message(user_id, "لطفاً اطلاعات خود را دقیقاً در ۲ خط بفرستید:\nخط ۱: آیدی اینستاگرام\nخط ۲: آدرس ولت (ارز دیجیتال)")
+        bot.send_message(user_id, "لطفاً اطلاعات خود را دقیقاً در ۲ خط بفرستید (در صورت ارسال مجدد، آدرس ولت قبلی شما ویرایش/آپدیت می‌شود):\nخط ۱: آیدی اینستاگرام\nخط ۲: آدرس ولت (ارز دیجیتال)")
 
 if __name__ == "__main__":
     print("Bot is starting with Long Polling...")
