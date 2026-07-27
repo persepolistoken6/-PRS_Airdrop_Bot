@@ -106,8 +106,9 @@ def get_main_reply_markup():
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row("📊 وضعیت من و رتبه", "🔗 دریافت لینک دعوت")
     markup.row("🎁 پاداش روزانه", "📝 ارسال / ویرایش آدرس ولت")
-    markup.row("📢 کانال تلگرام", "🐦 توییتر (ایکس)")
-    markup.row("📸 اینستاگرام")
+    markup.row("📖 راهنمای ولت و توکن", "🏆 برترین شرکت‌کنندگان")
+    markup.row("🔄 به‌روزرسانی پنل کاربری", "📢 کانال تلگرام")
+    markup.row("🐦 توییتر (ایکس)", "📸 اینستاگرام")
     return markup
 
 def get_admin_reply_markup():
@@ -454,7 +455,8 @@ def show_main_menu(chat_id, user_id, message_id=None, edit=False):
     
     markup.row(InlineKeyboardButton("🔗 دریافت لینک دعوت جذاب و اختصاصی", callback_data="get_ref_link"))
     markup.row(InlineKeyboardButton("🎁 پاداش روزانه (100 PRS)", callback_data="daily_bonus"))
-    markup.row(InlineKeyboardButton("🏆 برترین دعوت‌کنندگان (تاپ ۱۰)", callback_data="leaderboard"))
+    markup.row(InlineKeyboardButton("📖 راهنمای ولت و توکن PRS", callback_data="wallet_guide"))
+    markup.row(InlineKeyboardButton("🏆 برترین شرکت‌کنندگان (تاپ ۱۰)", callback_data="leaderboard"))
     markup.row(InlineKeyboardButton("📊 وضعیت من و رتبه", callback_data="my_status"), InlineKeyboardButton("📝 ارسال / ویرایش ولت", callback_data="submit_info"))
     markup.row(InlineKeyboardButton("🔄 به‌روزرسانی پنل کاربری", callback_data="refresh_menu"))
 
@@ -527,7 +529,6 @@ def handle_all_messages(message):
             conn.commit()
             conn.close()
             
-            # پس از حل کپچا، بررسی عضویت کانال انجام می‌شود
             if not check_membership(user_id):
                 ask_to_join(chat_id, referrer_id if referrer_id else 0)
                 return
@@ -623,7 +624,6 @@ def handle_all_messages(message):
         bot.send_message(user_id, "🛑 کل توکن های ایردارپ ( ۵۰۰ میلیون PRS) توسط شرکت کننده های این ایردراپ استخراج شد و این ربات غیر فعال شد به زودی تمام توکن ها بین کاربران توزیع خواهد شد.")
         return
 
-    # بررسی اجباری عضویت کانال قبل از اجرای هر دستوری از منو
     if not check_membership(user_id):
         ask_to_join(chat_id, 0)
         return
@@ -679,6 +679,42 @@ def handle_all_messages(message):
             conn.commit()
             conn.close()
             bot.send_message(chat_id, f"🎁 تبریک! مبلغ {DAILY_REWARD} توکن PRS به عنوان پاداش روزانه به حساب شما اضافه شد.")
+        return
+    elif text == "📖 راهنمای ولت و توکن":
+        guide_text = (
+            f"📖 *راهنمای گام‌به‌گام نصب کیف پول و دریافت آدرس (Wallet):*\n\n"
+            f"🔹 **مقدمه:** برای دریافت توکن‌های PRS، به یک کیف پول معتبر ارز دیجیتال نیاز دارید که از شبکه پروژه پشتیبانی کند (مانند Trust Wallet یا MetaMask).\n\n"
+            f"📱 **مرحله اول: نصب کیف پول**\n"
+            f"• اپلیکیشن **Trust Wallet** را از گوگل‌پلی (اندروید) یا اپ‌استور (آیفون) دانلود و نصب کنید.\n• یک کیف پول جدید بسازید و کلمات بازیابی (Seed Phrase) را یادداشت و در جای امن نگه دارید.\n\n"
+            f"🪙 **مرحله دوم: افزودن سفارشی توکن (Custom Token)**\n"
+            f"• در صفحه اصلی تراست ولت، روی آیکون تنظیمات یا علامت `+` در بالا سمت راست بزنید.\n• شبکه (Network) را روی شبکه اصلی توکن قرار دهید.\n• آدرس قرارداد (Contract Address) توکن پرسپولیس را وارد کنید تا توکن به لیست شما اضافه شود.\n\n"
+            f"📋 **مرحله سوم: کپی کردن آدرس ولت**\n"
+            f"• در لیست ارزهای تراست ولت، روی توکن **PRS** (یا ارز بستر پروژه) بزنید.\n• گزینه **Receive** یا **Copy** را انتخاب کنید تا آدرس ولت شما کپی شود.\n• در نهایت از طریق دکمه «📝 ارسال / ویرایش آدرس ولت» در این ربات، آدرس کپی‌شده را ارسال کنید."
+        )
+        bot.send_message(chat_id, guide_text, parse_mode="Markdown")
+        return
+    elif text == "🏆 برترین شرکت‌کنندگان":
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT user_id, ref_count, daily_count FROM users")
+        rows = cursor.fetchall()
+        conn.close()
+        
+        ranked_list = []
+        for uid, r_cnt, d_cnt in rows:
+            total_t = calculate_total_tokens(r_cnt, d_cnt)
+            ranked_list.append((uid, r_cnt, total_t))
+        
+        ranked_list.sort(key=lambda x: x[2], reverse=True)
+        top_10 = ranked_list[:10]
+        
+        text = "🏆 *۱۰ شرکت‌کننده برتر ایردراپ (براساس مجموع توکن‌ها)*:\n\n"
+        for idx, (uid, r_cnt, total_t) in enumerate(top_10, 1):
+            text += f"{idx}. آیدی: `{uid}` — 🎁 توکن کل: *{total_t:,} PRS* (دعوت: {r_cnt})\n"
+        bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=get_main_reply_markup())
+        return
+    elif text == "🔄 به‌روزرسانی پنل کاربری":
+        show_main_menu(chat_id, user_id)
         return
     elif text == "📝 ارسال / ویرایش آدرس ولت":
         user_data = get_user_data(user_id)
@@ -814,6 +850,22 @@ def handle_callbacks(call):
             conn.close()
             bot.answer_callback_query(call.id, f"🎁 تبریک! مبلغ {DAILY_REWARD} توکن PRS به عنوان پاداش روزانه به حساب شما اضافه شد.", show_alert=True)
             show_main_menu(chat_id, user_id, message_id=call.message.message_id, edit=True)
+    elif call.data == "wallet_guide":
+        if not check_membership(user_id):
+            bot.answer_callback_query(call.id, "❌ ابتدا در کانال عضو شوید!", show_alert=True)
+            return
+        bot.answer_callback_query(call.id)
+        guide_text = (
+            f"📖 *راهنمای گام‌به‌گام نصب کیف پول و دریافت آدرس (Wallet):*\n\n"
+            f"🔹 **مقدمه:** برای دریافت توکن‌های PRS، به یک کیف پول معتبر ارز دیجیتال نیاز دارید که از شبکه پروژه پشتیبانی کند (مانند Trust Wallet یا MetaMask).\n\n"
+            f"📱 **مرحله اول: نصب کیف پول**\n"
+            f"• اپلیکیشن **Trust Wallet** را از گوگل‌پلی (اندروید) یا اپ‌استور (آیفون) دانلود و نصب کنید.\n• یک کیف پول جدید بسازید و کلمات بازیابی (Seed Phrase) را یادداشت و در جای امن نگه دارید.\n\n"
+            f"🪙 **مرحله دوم: افزودن سفارشی توکن (Custom Token)**\n"
+            f"• در صفحه اصلی تراست ولت، روی آیکون تنظیمات یا علامت `+` در بالا سمت راست بزنید.\n• شبکه (Network) را روی شبکه اصلی توکن قرار دهید.\n• آدرس قرارداد (Contract Address) توکن پرسپولیس را وارد کنید تا توکن به لیست شما اضافه شود.\n\n"
+            f"📋 **مرحله سوم: کپی کردن آدرس ولت**\n"
+            f"• در لیست ارزهای تراست ولت، روی توکن **PRS** (یا ارز بستر پروژه) بزنید.\n• گزینه **Receive** یا **Copy** را انتخاب کنید تا آدرس ولت شما کپی شود.\n• در نهایت از طریق دکمه «📝 ارسال / ویرایش آدرس ولت» در این ربات، آدرس کپی‌شده را ارسال کنید."
+        )
+        bot.send_message(chat_id, guide_text, parse_mode="Markdown")
     elif call.data == "leaderboard":
         if not check_membership(user_id):
             bot.answer_callback_query(call.id, "❌ ابتدا در کانال عضو شوید!", show_alert=True)
@@ -833,9 +885,9 @@ def handle_callbacks(call):
         ranked_list.sort(key=lambda x: x[2], reverse=True)
         top_10 = ranked_list[:10]
         
-        text = "🏆 *۱۰ کاربر برتر ایردراپ (براساس مجموع توکن‌ها و دعوت)*:\n\n"
+        text = "🏆 *۱۰ شرکت‌کننده برتر ایردراپ (براساس مجموع توکن‌ها)*:\n\n"
         for idx, (uid, r_cnt, total_t) in enumerate(top_10, 1):
-            text += f"{idx}. آیدی: `{uid}` — 👥 دعوت: *{r_cnt}* — 🎁 توکن کل: *{total_t:,} PRS*\n"
+            text += f"{idx}. آیدی: `{uid}` — 🎁 توکن کل: *{total_t:,} PRS* (دعوت: {r_cnt})\n"
         bot.send_message(chat_id, text, parse_mode="Markdown")
     elif call.data == "my_status":
         if not check_membership(user_id):
