@@ -571,7 +571,7 @@ def handle_all_messages(message):
         bot.send_message(user_id, "🛑 کل توکن های ایردارپ ( ۵۰۰ میلیون PRS) توسط شرکت کننده های این ایردراپ استخراج شد و این ربات غیر فعال شد به زودی تمام توکن ها بین کاربران توزیع خواهد شد.")
         return
 
-    # بررسی وضعیت کپچا ابتدا انجام می‌شود تا پاسخ‌های درست یا غلط رهگیری شوند
+    # بررسی وضعیت کپچا
     conn = sqlite3.connect('/tmp/referrals.db')
     cursor = conn.cursor()
     cursor.execute("SELECT answer, pending_referrer FROM captcha WHERE user_id = ?", (user_id,))
@@ -584,7 +584,7 @@ def handle_all_messages(message):
             conn = sqlite3.connect('/tmp/referrals.db')
             cursor = conn.cursor()
             cursor.execute("DELETE FROM captcha WHERE user_id = ?", (user_id,))
-            cursor.commit()
+            conn.commit()
             conn.close()
             
             if check_channel(user_id):
