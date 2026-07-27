@@ -479,6 +479,10 @@ def handle_all_messages(message):
     chat_id = message.chat.id
     text = message.text.strip() if message.text else ""
     
+    # تبدیل اعداد فارسی به انگلیسی جهت سازگاری با کیبورد گوشی کاربران
+    persian_to_english = str.maketrans('۰۱۲۳۴۵۶۷۸۹', '0123456789')
+    text = text.translate(persian_to_english)
+    
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT num1, num2, answer, pending_referrer FROM captcha WHERE user_id = ?", (user_id,))
