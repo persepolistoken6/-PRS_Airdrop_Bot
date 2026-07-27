@@ -571,6 +571,39 @@ def handle_all_messages(message):
         bot.send_message(user_id, "🛑 کل توکن های ایردارپ ( ۵۰۰ میلیون PRS) توسط شرکت کننده های این ایردراپ استخراج شد و این ربات غیر فعال شد به زودی تمام توکن ها بین کاربران توزیع خواهد شد.")
         return
 
+    # بررسی وضعیت کپچا ابتدا انجام می‌شود تا پاسخ‌های درست یا غلط رهگیری شوند
+    conn = sqlite3.connect('/tmp/referrals.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT answer, pending_referrer FROM captcha WHERE user_id = ?", (user_id,))
+    captcha_data = cursor.fetchone()
+    conn.close()
+
+    if captcha_data:
+        correct_ans, referrer_id = captcha_data
+        if text.isdigit() and int(text) == correct_ans:
+            conn = sqlite3.connect('/tmp/referrals.db')
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM captcha WHERE user_id = ?", (user_id,))
+            cursor.commit()
+            conn.close()
+            
+            if check_channel(user_id):
+                register_user_after_verify(user_id, referrer_id)
+                show_main_menu(message.chat.id, user_id)
+            else:
+                markup = InlineKeyboardMarkup()
+                markup.row(InlineKeyboardButton("✅ عضو شدم، بررسی کن", callback_data=f"check_join_{referrer_id if referrer_id else 0}"))
+                bot.send_message(
+                    user_id,
+                    f"❌ شما هنوز در کانال رسمی ما ({CHANNEL_ID}) عضو نشده‌اید!\n\n"
+                    f"لطفاً ابتدا وارد کانال شوید و سپس روی دکمه زیر کلیک کنید:",
+                    reply_markup=markup
+                )
+        else:
+            send_captcha(user_id, user_id, referrer_id)
+            bot.send_message(user_id, "❌ پاسخ اشتباه است. لطفاً به حاصل جمع سوال جدید پاسخ دهید:")
+        return
+
     if text == "📊 وضعیت من و رتبه":
         user_data = get_user_data(user_id)
         ref_count = user_data[0] if user_data else 0
@@ -648,36 +681,6 @@ def handle_all_messages(message):
     elif text == "🐦 توییتر (ایکس)":
         bot.send_message(user_id, f"🐦 صفحه توییتر: {TWITTER_URL}")
         return
-
-    conn = sqlite3.connect('/tmp/referrals.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT answer, pending_referrer FROM captcha WHERE user_id = ?", (user_id,))
-    captcha_data = cursor.fetchone()
-    if captcha_data:
-        correct_ans, referrer_id = captcha_data
-        if text.isdigit() and int(text) == correct_ans:
-            cursor.execute("DELETE FROM captcha WHERE user_id = ?", (user_id,))
-            conn.commit()
-            conn.close()
-            
-            if check_channel(user_id):
-                register_user_after_verify(user_id, referrer_id)
-                show_main_menu(message.chat.id, user_id)
-            else:
-                markup = InlineKeyboardMarkup()
-                markup.row(InlineKeyboardButton("✅ عضو شدم، بررسی کن", callback_data=f"check_join_{referrer_id if referrer_id else 0}"))
-                bot.send_message(
-                    user_id,
-                    f"❌ شما هنوز در کانال رسمی ما ({CHANNEL_ID}) عضو نشده‌اید!\n\n"
-                    f"لطفاً ابتدا وارد کانال شوید و سپس روی دکمه زیر کلیک کنید:",
-                    reply_markup=markup
-                )
-        else:
-            conn.close()
-            send_captcha(user_id, user_id, referrer_id)
-            bot.send_message(user_id, "❌ پاسخ اشتباه است. لطفاً به سوال جدید پاسخ دهید:")
-        return
-    conn.close()
 
     conn = sqlite3.connect('/tmp/referrals.db')
     cursor = conn.cursor()
