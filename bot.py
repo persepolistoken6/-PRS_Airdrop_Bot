@@ -7,7 +7,7 @@ from collections import defaultdict
 from telebot import TeleBot
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 
-TOKEN = "YOUR_NEW_BOT_TOKEN"
+TOKEN = os.getenv("BOT_TOKEN")
 BOT_USERNAME = "PRS_Airdrop_Bot"
 CHANNEL_ID = "@persepolisToken6"
 INSTAGRAM_URL = "Https://www.instagram.com/persepolistoken6?igsh=eHBwbzdtd2ZoaWI5"
