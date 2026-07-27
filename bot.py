@@ -150,13 +150,6 @@ def save_submission(user_id, instagram_id, wallet):
     conn.commit()
     conn.close()
 
-def set_paid_status(user_id, status):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("UPDATE users SET paid = ? WHERE user_id = ?", (status, user_id))
-    conn.commit()
-    conn.close()
-
 def get_ref_details(ref_count):
     if ref_count >= REQUIRED_REFERRALS:
         base_used = REQUIRED_REFERRALS
@@ -448,7 +441,7 @@ def show_main_menu(chat_id, user_id, message_id=None, edit=False):
         except Exception:
             pass
 
-    # تلاش برای ارسال عکس بنر، اگر خطا داد حتماً متن و منو ارسال شود تا ربات قفل نکند
+    # ارسال بنر با مکانیزم ایمن (در صورت خطا مستقیماً متن و منو ارسال میشود)
     banner_sent = False
     try:
         if BANNER_FILE_ID:
@@ -559,7 +552,7 @@ def handle_all_messages(message):
         bot.send_message(user_id, "🛑 کل توکن های ایردارپ ( ۵۰۰ میلیون PRS) توسط شرکت کننده های این ایردراپ استخراج شد و این ربات غیر فعال شد به زودی تمام توکن ها بین کاربران توزیع خواهد شد.")
         return
 
-    # بررسی وضعیت کپچا (کاملاً ایزوله شده بر اساس ذخیره صحیح سوال هر کاربر)
+    # بررسی وضعیت کپچا
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT num1, num2, answer, pending_referrer FROM captcha WHERE user_id = ?", (user_id,))
@@ -706,13 +699,17 @@ def handle_callbacks(call):
         if check_channel(user_id):
             bot.answer_callback_query(call.id, "✅ عضویت شما تایید شد!")
             register_user_after_verify(user_id, referrer_id if referrer_id != 0 else None)
+            
+            # حذف امن پیام قبلی دکمه شیشه‌ای بدون ایجاد اخلال در باز شدن پنل
             try:
                 bot.delete_message(chat_id, call.message.message_id)
             except Exception:
                 pass
+            
+            # فراخوانی قطعی منوی اصلی
             show_main_menu(chat_id, user_id)
         else:
-            bot.answer_callback_query(call.id, "❌ شما هنوز در کانال عضو نشده‌اید!", show_alert=True)
+            bot.answer_callback_query(call.id, "❌ شما هنوز در کانال عضو نشده‌اید! لطفاً اول عضو شوید.", show_alert=True)
         return
 
     if call.data == "refresh_menu":
