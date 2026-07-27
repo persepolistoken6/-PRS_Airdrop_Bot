@@ -93,7 +93,7 @@ def is_airdrop_finished():
     return get_global_total_distributed_tokens() >= MAX_TOTAL_TOKENS_LIMIT
 
 def get_main_reply_markup():
-    markup = ReplyKeyboardMarkup(resize_keyboard=True, persistent=True)
+    markup = ReplyKeyboardMarkup(resize_keyboard=True
     markup.row("📊 وضعیت من و رتبه", "🔗 دریافت لینک دعوت")
     markup.row("🎁 پاداش روزانه", "📝 ارسال/ویرایش اطلاعات و ولت")
     markup.row("📢 کانال تلگرام", "📸 اینستاگرام", "🐦 توییتر (ایکس)")
