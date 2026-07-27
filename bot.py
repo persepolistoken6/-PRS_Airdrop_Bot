@@ -13,6 +13,7 @@ if not TOKEN:
 BOT_USERNAME = "PRS_Airdrop_Bot"
 CHANNEL_ID = "@persepolisToken6"
 TWITTER_URL = "https://x.com/PersepolisPRS"
+INSTAGRAM_URL = "https://instagram.com/your_instagram_page"
 ADMIN_CHAT_ID = 6661478622
 REQUIRED_REFERRALS = 5
 
@@ -92,11 +93,21 @@ def get_global_total_distributed_tokens():
 def is_airdrop_finished():
     return get_global_total_distributed_tokens() >= MAX_TOTAL_TOKENS_LIMIT
 
+def check_membership(user_id):
+    try:
+        member = bot.get_chat_member(CHANNEL_ID, user_id)
+        if member.status in ['member', 'administrator', 'creator']:
+            return True
+    except Exception as e:
+        print(f"Error checking membership: {e}")
+    return False
+
 def get_main_reply_markup():
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row("📊 وضعیت من و رتبه", "🔗 دریافت لینک دعوت")
     markup.row("🎁 پاداش روزانه", "📝 ارسال / ویرایش آدرس ولت")
     markup.row("📢 کانال تلگرام", "🐦 توییتر (ایکس)")
+    markup.row("📸 اینستاگرام")
     return markup
 
 def get_admin_reply_markup():
@@ -210,7 +221,7 @@ def send_welcome(message):
     if user_id == ADMIN_CHAT_ID:
         bot.send_message(
             user_id, 
-            "👑 *به پنل مدیریت دائمی خوش آمدید.*\nاز دکمه‌های ثابت زیر برای مدیریت ربات استفاده کنید:", 
+            "👑 *به پنل مدیریت دائمی خوش آمدید.*\nاز دستور `/search [آیدی عددی یا ولت]` برای جستجو استفاده کنید.", 
             reply_markup=get_admin_reply_markup(), 
             parse_mode="Markdown"
         )
@@ -221,6 +232,9 @@ def send_welcome(message):
         return
 
     if message.text and message.text.startswith('/menu'):
+        if not check_membership(user_id):
+            ask_to_join(message.chat.id, 0)
+            return
         show_main_menu(message.chat.id, user_id)
         return
 
@@ -232,10 +246,27 @@ def send_welcome(message):
 
     user_data = get_user_data(user_id)
     if user_data and user_data[3] >= 2:
+        if not check_membership(user_id):
+            ask_to_join(message.chat.id, referrer_id if referrer_id else 0)
+            return
         show_main_menu(message.chat.id, user_id)
         return
 
     send_captcha(message.chat.id, user_id, referrer_id)
+
+def ask_to_join(chat_id, referrer_id):
+    markup = InlineKeyboardMarkup()
+    markup.row(InlineKeyboardButton("📢 عضویت در کانال رسمی", url=f"https://t.me/{CHANNEL_ID.lstrip('@')}"))
+    markup.row(InlineKeyboardButton("✅ عضو شدم، تایید کن", callback_data=f"check_join_{referrer_id}"))
+    
+    bot.send_message(
+        chat_id,
+        f"⚠️ **لطفاً برای ادامه کار ابتدا در کانال ما عضو شوید:**\n\n"
+        f"▫️ {CHANNEL_ID}\n\n"
+        f"پس از عضویت، روی دکمه‌ی «عضو شدم، تایید کن» بزنید.",
+        reply_markup=markup,
+        parse_mode="Markdown"
+    )
 
 def get_user_rank(user_id):
     conn = get_db_connection()
@@ -261,7 +292,7 @@ def admin_panel(message):
         return
     bot.send_message(
         ADMIN_CHAT_ID,
-        "👑 *پنل مدیریت ثابت فعال است.*\nاز دکمه‌های پایین صفحه استفاده کنید.",
+        "👑 *پنل مدیریت ثابت فعال است.*\nبرای جستجو از دستور `/search آیدی_عددی_یا_ولت` استفاده کنید.",
         reply_markup=get_admin_reply_markup(),
         parse_mode="Markdown"
     )
@@ -319,7 +350,7 @@ def send_paginated_wallets(message, offset=0, edit=False):
         base_used, extra_count = get_ref_details(ref_cnt)
         status_str = "✅ پرداخت‌شده" if paid == 1 else "⏳ در انتظار پرداخت"
         
-        text += f"📌 آیدی: `{uid}`\n" \
+        text += f"📌 آیدی عددی: `{uid}`\n" \
                 f"👝 ولت: `{wlt}`\n" \
                 f"👥 دعوت ثابت: {base_used} | مازاد: {extra_count} (کل: {ref_cnt})\n" \
                 f"🎁 توکن کل: `{total_tokens:,} PRS` (پاداش روزانه: {d_count} بار)\n" \
@@ -419,6 +450,7 @@ def show_main_menu(chat_id, user_id, message_id=None, edit=False):
         InlineKeyboardButton("📢 کانال تلگرام", url=f"https://t.me/{CHANNEL_ID.lstrip('@')}"),
         InlineKeyboardButton("🐦 توییتر (ایکس)", url=TWITTER_URL)
     )
+    markup.row(InlineKeyboardButton("📸 اینستاگرام پرسپولیس", url=INSTAGRAM_URL))
     
     markup.row(InlineKeyboardButton("🔗 دریافت لینک دعوت جذاب و اختصاصی", callback_data="get_ref_link"))
     markup.row(InlineKeyboardButton("🎁 پاداش روزانه (100 PRS)", callback_data="daily_bonus"))
@@ -495,6 +527,11 @@ def handle_all_messages(message):
             conn.commit()
             conn.close()
             
+            # پس از حل کپچا، بررسی عضویت کانال انجام می‌شود
+            if not check_membership(user_id):
+                ask_to_join(chat_id, referrer_id if referrer_id else 0)
+                return
+
             register_user_after_verify(user_id, referrer_id)
             show_main_menu(chat_id, user_id)
         else:
@@ -543,13 +580,13 @@ def handle_all_messages(message):
             if not rows:
                 bot.send_message(ADMIN_CHAT_ID, "❌ هیچ کاربری با این مشخصات پیدا نشد.", reply_markup=get_admin_reply_markup())
                 return
-            res = "🔍 *نتیجه جستجوی ادمین:*\n\n"
+            res = "🔍 *نتیجه جستجوی ادمین (بر اساس آیدی عددی یا ولت):*\n\n"
             for r in rows:
                 ref_cnt = r[2]
                 d_cnt = r[7] if len(r) > 7 else 0
                 total_tokens = calculate_total_tokens(ref_cnt, d_cnt)
                 base_used, extra_count = get_ref_details(ref_cnt)
-                res += f"👤 آیدی: `{r[0]}`\n👥 کل رفال: {ref_cnt} (ثابت: {base_used} | مازاد: {extra_count})\n🎁 توکن کل: {total_tokens:,} PRS\n👝 ولت: `{r[6]}`\n📌 ثبت فرم: `{r[3]}` | پرداخت: `{r[4]}`\n---\n"
+                res += f"👤 آیدی عددی: `{r[0]}`\n👥 کل رفال: {ref_cnt} (ثابت: {base_used} | مازاد: {extra_count})\n🎁 توکن کل: {total_tokens:,} PRS\n👝 ولت: `{r[6]}`\n📌 ثبت فرم: `{r[3]}` | پرداخت: `{r[4]}`\n---\n"
             bot.send_message(ADMIN_CHAT_ID, res, reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
             return
         elif text.startswith("/deleteuser "):
@@ -584,6 +621,11 @@ def handle_all_messages(message):
 
     if is_airdrop_finished() and user_id != ADMIN_CHAT_ID:
         bot.send_message(user_id, "🛑 کل توکن های ایردارپ ( ۵۰۰ میلیون PRS) توسط شرکت کننده های این ایردراپ استخراج شد و این ربات غیر فعال شد به زودی تمام توکن ها بین کاربران توزیع خواهد شد.")
+        return
+
+    # بررسی اجباری عضویت کانال قبل از اجرای هر دستوری از منو
+    if not check_membership(user_id):
+        ask_to_join(chat_id, 0)
         return
 
     if text == "📊 وضعیت من و رتبه":
@@ -664,6 +706,9 @@ def handle_all_messages(message):
     elif text == "🐦 توییتر (ایکس)":
         bot.send_message(chat_id, f"🐦 صفحه توییتر: {TWITTER_URL}")
         return
+    elif text == "📸 اینستاگرام":
+        bot.send_message(chat_id, f"📸 صفحه اینستاگرام: {INSTAGRAM_URL}")
+        return
 
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -673,7 +718,7 @@ def handle_all_messages(message):
 
     is_submitting_or_editing = row and row[1] < 2
 
-    if is_submitting_or_editing or len(text) > 10: # Assuming wallet string is reasonably long and user intended to submit
+    if is_submitting_or_editing or len(text) > 10:
         if row and row[1] >= 2:
             bot.send_message(chat_id, "⚠️ شما سهمیه ویرایش خود را به اتمام رسانده‌اید و ولت شما قابل تغییر نیست.")
             return
@@ -700,11 +745,11 @@ def handle_callbacks(call):
     if call.data.startswith("check_join_"):
         referrer_id = int(call.data.split("_")[2])
         
-        if referrer_id == user_id:
-            bot.answer_callback_query(call.id, "⚠️ شما نمی‌توانید از لینک خودتان استفاده کنید!", show_alert=True)
+        if not check_membership(user_id):
+            bot.answer_callback_query(call.id, "❌ شما هنوز در کانال عضو نشده‌اید!", show_alert=True)
             return
 
-        bot.answer_callback_query(call.id, "✅ تایید شد!")
+        bot.answer_callback_query(call.id, "✅ عضویت شما تایید شد!")
         register_user_after_verify(user_id, referrer_id if referrer_id != 0 else None)
         
         try:
@@ -716,11 +761,18 @@ def handle_callbacks(call):
         return
 
     if call.data == "refresh_menu":
+        if not check_membership(user_id):
+            bot.answer_callback_query(call.id, "❌ لطفاً ابتدا در کانال عضو شوید!", show_alert=True)
+            ask_to_join(chat_id, 0)
+            return
         bot.answer_callback_query(call.id, "🔄 پنل به‌روز شد.")
         show_main_menu(chat_id, user_id, message_id=call.message.message_id, edit=True)
         return
 
     if call.data == "get_ref_link":
+        if not check_membership(user_id):
+            bot.answer_callback_query(call.id, "❌ ابتدا در کانال عضو شوید!", show_alert=True)
+            return
         bot.answer_callback_query(call.id)
         ref_link = f"https://t.me/{BOT_USERNAME}?start={user_id}"
         
@@ -736,6 +788,9 @@ def handle_callbacks(call):
         except Exception:
             bot.send_message(chat_id=chat_id, text=link_text)
     elif call.data == "daily_bonus":
+        if not check_membership(user_id):
+            bot.answer_callback_query(call.id, "❌ ابتدا در کانال عضو شوید!", show_alert=True)
+            return
         user_data = get_user_data(user_id)
         ref_count = user_data[0] if user_data else 0
         
@@ -760,6 +815,9 @@ def handle_callbacks(call):
             bot.answer_callback_query(call.id, f"🎁 تبریک! مبلغ {DAILY_REWARD} توکن PRS به عنوان پاداش روزانه به حساب شما اضافه شد.", show_alert=True)
             show_main_menu(chat_id, user_id, message_id=call.message.message_id, edit=True)
     elif call.data == "leaderboard":
+        if not check_membership(user_id):
+            bot.answer_callback_query(call.id, "❌ ابتدا در کانال عضو شوید!", show_alert=True)
+            return
         bot.answer_callback_query(call.id)
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -780,6 +838,9 @@ def handle_callbacks(call):
             text += f"{idx}. آیدی: `{uid}` — 👥 دعوت: *{r_cnt}* — 🎁 توکن کل: *{total_t:,} PRS*\n"
         bot.send_message(chat_id, text, parse_mode="Markdown")
     elif call.data == "my_status":
+        if not check_membership(user_id):
+            bot.answer_callback_query(call.id, "❌ ابتدا در کانال عضو شوید!", show_alert=True)
+            return
         user_data = get_user_data(user_id)
         ref_count = user_data[0] if user_data else 0
         d_count = user_data[5] if user_data and len(user_data) > 5 else 0
@@ -797,6 +858,9 @@ def handle_callbacks(call):
         bot.answer_callback_query(call.id)
         bot.send_message(chat_id, status_msg, parse_mode="Markdown")
     elif call.data == "submit_info":
+        if not check_membership(user_id):
+            bot.answer_callback_query(call.id, "❌ ابتدا در کانال عضو شوید!", show_alert=True)
+            return
         user_data = get_user_data(user_id)
         ref_count = user_data[0] if user_data else 0
         submitted = user_data[1] if user_data else 0
