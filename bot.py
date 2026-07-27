@@ -24,8 +24,12 @@ BANNER_FILE_ID = "AgACAgQAAxkBAAMfamINNXWkFr-wk1ONFWAEHF2z-vGAAsgNaxtnhwABU-cbUH
 
 bot = TeleBot(TOKEN, threaded=True)
 
+def get_db_connection():
+    conn = sqlite3.connect('/tmp/referrals.db', timeout=30.0)
+    return conn
+
 def init_db():
-    conn = sqlite3.connect('/tmp/referrals.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
@@ -54,7 +58,7 @@ def init_db():
 init_db()
 
 def get_user_data(user_id):
-    conn = sqlite3.connect('/tmp/referrals.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT ref_count, submitted, paid, verified, last_daily, daily_count, wallet, instagram_id FROM users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
@@ -73,7 +77,7 @@ def calculate_total_tokens(ref_count, daily_count):
     return base_ref_tokens + daily_tokens
 
 def get_global_total_distributed_tokens():
-    conn = sqlite3.connect('/tmp/referrals.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT ref_count, daily_count FROM users")
     rows = cursor.fetchall()
@@ -101,7 +105,7 @@ def get_admin_reply_markup():
     return markup
 
 def register_user_after_verify(user_id, referrer_id):
-    conn = sqlite3.connect('/tmp/referrals.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
     if not cursor.fetchone():
@@ -134,7 +138,7 @@ def register_user_after_verify(user_id, referrer_id):
     conn.close()
 
 def save_submission(user_id, instagram_id, wallet):
-    conn = sqlite3.connect('/tmp/referrals.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
         UPDATE users 
@@ -145,7 +149,7 @@ def save_submission(user_id, instagram_id, wallet):
     conn.close()
 
 def set_paid_status(user_id, status):
-    conn = sqlite3.connect('/tmp/referrals.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("UPDATE users SET paid = ? WHERE user_id = ?", (status, user_id))
     conn.commit()
@@ -172,7 +176,7 @@ def send_captcha(chat_id, user_id, referrer_id):
     num2 = random.randint(1, 10)
     correct_ans = num1 + num2
 
-    conn = sqlite3.connect('/tmp/referrals.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("REPLACE INTO captcha (user_id, answer, pending_referrer) VALUES (?, ?, ?)", (user_id, correct_ans, referrer_id))
     conn.commit()
@@ -219,7 +223,7 @@ def send_welcome(message):
     send_captcha(message.chat.id, user_id, referrer_id)
 
 def get_user_rank(user_id):
-    conn = sqlite3.connect('/tmp/referrals.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT user_id, ref_count, daily_count FROM users")
     rows = cursor.fetchall()
@@ -247,34 +251,8 @@ def admin_panel(message):
         parse_mode="Markdown"
     )
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('admin_'))
-def admin_callbacks(call):
-    if call.from_user.id != ADMIN_CHAT_ID:
-        return
-    
-    data = call.data
-    if data.startswith("admin_pay_"):
-        parts = data.split("_")
-        target_id = int(parts[2])
-        action = parts[3]
-        new_val = 1 if action == "yes" else 0
-        set_paid_status(target_id, new_val)
-        
-        bot.answer_callback_query(call.id, "✅ وضعیت پرداخت به‌روز شد.")
-        try:
-            update_wallet_message(call.message)
-        except Exception:
-            pass
-    elif data.startswith("admin_page_"):
-        offset = int(data.split("_")[2])
-        send_paginated_wallets(call.message, offset=offset, edit=True)
-        bot.answer_callback_query(call.id)
-        return
-
-    bot.answer_callback_query(call.id)
-
 def show_token_summary_direct(chat_id):
-    conn = sqlite3.connect('/tmp/referrals.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT ref_count, daily_count, paid FROM users WHERE submitted = 1")
     rows = cursor.fetchall()
@@ -301,7 +279,7 @@ def show_token_summary_direct(chat_id):
     bot.send_message(chat_id, text, reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
 
 def send_paginated_wallets(message, offset=0, edit=False):
-    conn = sqlite3.connect('/tmp/referrals.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT user_id, ref_count, wallet, instagram_id, paid, daily_count FROM users WHERE submitted = 1 ORDER BY ref_count DESC")
     rows = cursor.fetchall()
@@ -354,11 +332,8 @@ def send_paginated_wallets(message, offset=0, edit=False):
     else:
         bot.send_message(ADMIN_CHAT_ID, text, reply_markup=markup, parse_mode="Markdown")
 
-def update_wallet_message(message):
-    send_paginated_wallets(message, offset=0, edit=True)
-
 def send_detailed_report_file(chat_id):
-    conn = sqlite3.connect('/tmp/referrals.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT user_id, ref_count, wallet, instagram_id, paid, daily_count FROM users WHERE submitted = 1 ORDER BY paid ASC, ref_count DESC")
     rows = cursor.fetchall()
@@ -403,7 +378,7 @@ def send_detailed_report_file(chat_id):
     bot.send_document(chat_id, file_bytes, caption="📁 گزارش متنی کامل و دسته‌بندی‌شده پرداخت‌ها با تمام جزئیات.", reply_markup=get_admin_reply_markup())
 
 def show_stats_direct(chat_id):
-    conn = sqlite3.connect('/tmp/referrals.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM users")
     t_u = cursor.fetchone()[0]
@@ -520,7 +495,7 @@ def handle_all_messages(message):
             return
         elif text.startswith("/search "):
             query = text.replace("/search", "").strip()
-            conn = sqlite3.connect('/tmp/referrals.db')
+            conn = get_db_connection()
             cursor = conn.cursor()
             cursor.execute("SELECT user_id, referred_by, ref_count, submitted, paid, verified, instagram_id, wallet, daily_count FROM users WHERE user_id = ? OR instagram_id LIKE ? OR wallet LIKE ?", 
                            (int(query) if query.isdigit() else 0, f"%{query}%", f"%{query}%"))
@@ -541,7 +516,7 @@ def handle_all_messages(message):
         elif text.startswith("/deleteuser "):
             target_id = text.replace("/deleteuser", "").strip()
             if target_id.isdigit():
-                conn = sqlite3.connect('/tmp/referrals.db')
+                conn = get_db_connection()
                 cursor = conn.cursor()
                 cursor.execute("DELETE FROM users WHERE user_id = ?", (int(target_id),))
                 cursor.execute("DELETE FROM captcha WHERE user_id = ?", (int(target_id),))
@@ -553,7 +528,7 @@ def handle_all_messages(message):
             return
         elif text.startswith("/sendall "):
             broadcast_msg = text.replace("/sendall", "").strip()
-            conn = sqlite3.connect('/tmp/referrals.db')
+            conn = get_db_connection()
             cursor = conn.cursor()
             cursor.execute("SELECT user_id FROM users")
             all_users = cursor.fetchall()
@@ -573,7 +548,7 @@ def handle_all_messages(message):
         return
 
     # بررسی وضعیت کپچا
-    conn = sqlite3.connect('/tmp/referrals.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT answer, pending_referrer FROM captcha WHERE user_id = ?", (user_id,))
     captcha_data = cursor.fetchone()
@@ -582,7 +557,7 @@ def handle_all_messages(message):
     if captcha_data:
         correct_ans, referrer_id = captcha_data
         if text.isdigit() and int(text) == correct_ans:
-            conn = sqlite3.connect('/tmp/referrals.db')
+            conn = get_db_connection()
             cursor = conn.cursor()
             cursor.execute("DELETE FROM captcha WHERE user_id = ?", (user_id,))
             conn.commit()
@@ -652,7 +627,7 @@ def handle_all_messages(message):
             minutes = (remaining % 3600) // 60
             bot.send_message(chat_id, f"⏳ شما قبلاً پاداش امروز خود را دریافت کرده‌اید!\nلطفاً پس از {hours} ساعت و {minutes} دقیقه دیگر تلاش کنید.")
         else:
-            conn = sqlite3.connect('/tmp/referrals.db')
+            conn = get_db_connection()
             cursor = conn.cursor()
             cursor.execute("UPDATE users SET last_daily = ?, daily_count = daily_count + 1 WHERE user_id = ?", (current_time, user_id))
             conn.commit()
@@ -683,7 +658,7 @@ def handle_all_messages(message):
         bot.send_message(chat_id, f"🐦 صفحه توییتر: {TWITTER_URL}")
         return
 
-    conn = sqlite3.connect('/tmp/referrals.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT user_id FROM users WHERE user_id = ? AND submitted = 0", (user_id,))
     is_submitting = cursor.fetchone()
@@ -770,7 +745,7 @@ def handle_callbacks(call):
             minutes = (remaining % 3600) // 60
             bot.answer_callback_query(call.id, f"⏳ شما قبلاً پاداش امروز خود را دریافت کرده‌اید!\nلطفاً پس از {hours} ساعت و {minutes} دقیقه دیگر تلاش کنید.", show_alert=True)
         else:
-            conn = sqlite3.connect('/tmp/referrals.db')
+            conn = get_db_connection()
             cursor = conn.cursor()
             cursor.execute("UPDATE users SET last_daily = ?, daily_count = daily_count + 1 WHERE user_id = ?", (current_time, user_id))
             conn.commit()
@@ -779,7 +754,7 @@ def handle_callbacks(call):
             show_main_menu(chat_id, user_id, message_id=call.message.message_id, edit=True)
     elif call.data == "leaderboard":
         bot.answer_callback_query(call.id)
-        conn = sqlite3.connect('/tmp/referrals.db')
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT user_id, ref_count, daily_count FROM users")
         rows = cursor.fetchall()
