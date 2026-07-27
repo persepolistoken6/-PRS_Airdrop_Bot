@@ -485,7 +485,7 @@ def handle_all_messages(message):
     chat_id = message.chat.id
     text = message.text.strip() if message.text else ""
     
-    # 1. اول از همه، بررسی کنیم که آیا کاربر منتظر پاسخ دادن به کپچا است یا خیر
+    # 1. بررسی وضعیت کپچا (اولین اولویت)
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT num1, num2, answer, pending_referrer FROM captcha WHERE user_id = ?", (user_id,))
@@ -504,9 +504,22 @@ def handle_all_messages(message):
             register_user_after_verify(user_id, referrer_id)
             show_main_menu(chat_id, user_id)
         else:
+            # تولید کپچای جدید در صورت پاسخ اشتباه
+            new_n1 = random.randint(1, 10)
+            new_n2 = random.randint(1, 10)
+            new_correct_ans = new_n1 + new_n2
+
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("UPDATE captcha SET num1 = ?, num2 = ?, answer = ? WHERE user_id = ?", (new_n1, new_n2, new_correct_ans, user_id))
+            conn.commit()
+            conn.close()
+
             bot.send_message(
                 chat_id, 
-                f"❌ پاسخ اشتباه است. لطفاً حاصل جمع دقیق همین سوال را بفرستید:\n❓ {n1} + {n2} = ؟"
+                f"❌ پاسخ اشتباه است!\n\n"
+                f"🛡 یک سوال امنیتی جدید برای شما ارسال شد:\n"
+                f"❓ لطفاً حاصل جمع {new_n1} + {new_n2} را بفرستید:"
             )
         return
 
