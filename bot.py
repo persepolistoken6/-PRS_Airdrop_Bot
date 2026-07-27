@@ -162,11 +162,8 @@ def get_ref_details(ref_count):
 def check_channel(user_id):
     try:
         member = bot.get_chat_member(CHANNEL_ID, user_id)
-        # اگر ربات ادمین کامل کانال نباشد ممکن است status را creator/administrator ندهد اما member بدهد
         return member.status in ['member', 'administrator', 'creator', 'restricted']
     except Exception as e:
-        # اگر به هر دلیلی تلگرام ارور داد (مثل عدم دسترسی ربات در کانال)، برای اینکه کاربر معطل نشود True برمی‌گردانیم تا کارش راه بیفتد
-        print(f"Channel check warning: {e}")
         return True
 
 def send_captcha(chat_id, user_id, referrer_id):
@@ -448,7 +445,6 @@ def show_main_menu(chat_id, user_id, message_id=None, edit=False):
         except Exception:
             pass
 
-    # ارسال بنر با مکانیزم کاملاً ایمن
     banner_sent = False
     try:
         if BANNER_FILE_ID:
@@ -489,6 +485,32 @@ def handle_all_messages(message):
     chat_id = message.chat.id
     text = message.text.strip() if message.text else ""
     
+    # 1. اول از همه، بررسی کنیم که آیا کاربر منتظر پاسخ دادن به کپچا است یا خیر
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT num1, num2, answer, pending_referrer FROM captcha WHERE user_id = ?", (user_id,))
+    captcha_data = cursor.fetchone()
+    conn.close()
+
+    if captcha_data:
+        n1, n2, correct_ans, referrer_id = captcha_data
+        if text.isdigit() and int(text) == correct_ans:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM captcha WHERE user_id = ?", (user_id,))
+            conn.commit()
+            conn.close()
+            
+            register_user_after_verify(user_id, referrer_id)
+            show_main_menu(chat_id, user_id)
+        else:
+            bot.send_message(
+                chat_id, 
+                f"❌ پاسخ اشتباه است. لطفاً حاصل جمع دقیق همین سوال را بفرستید:\n❓ {n1} + {n2} = ؟"
+            )
+        return
+
+    # 2. بررسی دستورات پنل ادمین
     if user_id == ADMIN_CHAT_ID:
         if text == "👝 مدیریت و تایید ولت‌ها":
             send_paginated_wallets(message, offset=0)
@@ -559,31 +581,7 @@ def handle_all_messages(message):
         bot.send_message(user_id, "🛑 کل توکن های ایردارپ ( ۵۰۰ میلیون PRS) توسط شرکت کننده های این ایردراپ استخراج شد و این ربات غیر فعال شد به زودی تمام توکن ها بین کاربران توزیع خواهد شد.")
         return
 
-    # بررسی وضعیت کپچا
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT num1, num2, answer, pending_referrer FROM captcha WHERE user_id = ?", (user_id,))
-    captcha_data = cursor.fetchone()
-    conn.close()
-
-    if captcha_data:
-        n1, n2, correct_ans, referrer_id = captcha_data
-        if text.isdigit() and int(text) == correct_ans:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM captcha WHERE user_id = ?", (user_id,))
-            conn.commit()
-            conn.close()
-            
-            register_user_after_verify(user_id, referrer_id)
-            show_main_menu(chat_id, user_id)
-        else:
-            bot.send_message(
-                chat_id, 
-                f"❌ پاسخ اشتباه است. لطفاً حاصل جمع دقیق همین سوال را بفرستید:\n❓ {n1} + {n2} = ؟"
-            )
-        return
-
+    # 3. دکمه‌های منوی اصلی کاربران
     if text == "📊 وضعیت من و رتبه":
         user_data = get_user_data(user_id)
         ref_count = user_data[0] if user_data else 0
@@ -659,6 +657,7 @@ def handle_all_messages(message):
         bot.send_message(chat_id, f"🐦 صفحه توییتر: {TWITTER_URL}")
         return
 
+    # 4. ثبت اطلاعات و ولت (ارسال در ۲ خط)
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT user_id FROM users WHERE user_id = ? AND submitted = 0", (user_id,))
