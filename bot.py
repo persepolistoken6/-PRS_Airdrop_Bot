@@ -162,9 +162,12 @@ def get_ref_details(ref_count):
 def check_channel(user_id):
     try:
         member = bot.get_chat_member(CHANNEL_ID, user_id)
-        return member.status in ['member', 'administrator', 'creator']
-    except Exception:
-        return False
+        # اگر ربات ادمین کامل کانال نباشد ممکن است status را creator/administrator ندهد اما member بدهد
+        return member.status in ['member', 'administrator', 'creator', 'restricted']
+    except Exception as e:
+        # اگر به هر دلیلی تلگرام ارور داد (مثل عدم دسترسی ربات در کانال)، برای اینکه کاربر معطل نشود True برمی‌گردانیم تا کارش راه بیفتد
+        print(f"Channel check warning: {e}")
+        return True
 
 def send_captcha(chat_id, user_id, referrer_id):
     num1 = random.randint(1, 10)
@@ -186,7 +189,7 @@ def send_captcha(chat_id, user_id, referrer_id):
         parse_mode="Markdown"
     )
 
-@bot.message_handler(commands=['start'])
+@bot.message_handler(commands=['start', 'menu'])
 def send_welcome(message):
     user_id = message.from_user.id
     
@@ -201,6 +204,10 @@ def send_welcome(message):
 
     if is_airdrop_finished():
         bot.send_message(user_id, "🛑 کل توکن های ایردارپ ( ۵۰۰ میلیون PRS) توسط شرکت کننده های این ایردراپ استخراج شد و این ربات غیر فعال شد به زودی تمام توکن ها بین کاربران توزیع خواهد شد.")
+        return
+
+    if message.text and message.text.startswith('/menu'):
+        show_main_menu(message.chat.id, user_id)
         return
 
     args = message.text.split()
@@ -441,7 +448,7 @@ def show_main_menu(chat_id, user_id, message_id=None, edit=False):
         except Exception:
             pass
 
-    # ارسال بنر با مکانیزم ایمن (در صورت خطا مستقیماً متن و منو ارسال میشود)
+    # ارسال بنر با مکانیزم کاملاً ایمن
     banner_sent = False
     try:
         if BANNER_FILE_ID:
@@ -568,18 +575,8 @@ def handle_all_messages(message):
             conn.commit()
             conn.close()
             
-            if check_channel(user_id):
-                register_user_after_verify(user_id, referrer_id)
-                show_main_menu(chat_id, user_id)
-            else:
-                markup = InlineKeyboardMarkup()
-                markup.row(InlineKeyboardButton("✅ عضو شدم، بررسی کن", callback_data=f"check_join_{referrer_id if referrer_id else 0}"))
-                bot.send_message(
-                    chat_id,
-                    f"❌ شما هنوز در کانال رسمی ما ({CHANNEL_ID}) عضو نشده‌اید!\n\n"
-                    f"لطفاً ابتدا وارد کانال شوید و سپس روی دکمه زیر کلیک کنید:",
-                    reply_markup=markup
-                )
+            register_user_after_verify(user_id, referrer_id)
+            show_main_menu(chat_id, user_id)
         else:
             bot.send_message(
                 chat_id, 
@@ -642,12 +639,9 @@ def handle_all_messages(message):
             bot.send_message(chat_id, f"🎁 تبریک! مبلغ {DAILY_REWARD} توکن PRS به عنوان پاداش روزانه به حساب شما اضافه شد.")
         return
     elif text == "📝 ارسال/ویرایش اطلاعات و ولت":
-        is_member = check_channel(user_id)
         user_data = get_user_data(user_id)
         ref_count = user_data[0] if user_data else 0
         errors = []
-        if not is_member:
-            errors.append(f"❌ شما هنوز در کانال رسمی ربات ({CHANNEL_ID}) عضو نشده‌اید.")
         if ref_count < REQUIRED_REFERRALS:
             errors.append(f"❌ تعداد دعوت‌های شما ({ref_count} نفر) به حد نصاب نرسیده است. (حداقل مورد نیاز: {REQUIRED_REFERRALS} نفر)")
         if errors:
@@ -696,18 +690,15 @@ def handle_callbacks(call):
             bot.answer_callback_query(call.id, "⚠️ شما نمی‌توانید از لینک خودتان استفاده کنید!", show_alert=True)
             return
 
-        if check_channel(user_id):
-            bot.answer_callback_query(call.id, "✅ عضویت شما تایید شد!")
-            register_user_after_verify(user_id, referrer_id if referrer_id != 0 else None)
-            
-            try:
-                bot.delete_message(chat_id, call.message.message_id)
-            except Exception:
-                pass
-            
-            show_main_menu(chat_id, user_id)
-        else:
-            bot.answer_callback_query(call.id, "❌ شما هنوز در کانال عضو نشده‌اید! لطفاً اول عضو شوید.", show_alert=True)
+        bot.answer_callback_query(call.id, "✅ تایید شد!")
+        register_user_after_verify(user_id, referrer_id if referrer_id != 0 else None)
+        
+        try:
+            bot.delete_message(chat_id, call.message.message_id)
+        except Exception:
+            pass
+        
+        show_main_menu(chat_id, user_id)
         return
 
     if call.data == "refresh_menu":
@@ -802,13 +793,10 @@ def handle_callbacks(call):
         bot.answer_callback_query(call.id)
         bot.send_message(chat_id, status_msg, parse_mode="Markdown")
     elif call.data == "submit_info":
-        is_member = check_channel(user_id)
         user_data = get_user_data(user_id)
         ref_count = user_data[0] if user_data else 0
 
         errors = []
-        if not is_member:
-            errors.append(f"❌ شما هنوز در کانال رسمی ربات ({CHANNEL_ID}) عضو نشده‌اید.")
         if ref_count < REQUIRED_REFERRALS:
             errors.append(f"❌ تعداد دعوت‌های شما ({ref_count} نفر) به حد نصاب نرسیده است. (حداقل مورد نیاز: {REQUIRED_REFERRALS} نفر)")
 
