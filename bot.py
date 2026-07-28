@@ -246,7 +246,6 @@ def send_welcome(message):
     args = message.text.split()
     referrer_id = int(args[1]) if len(args) > 1 and args[1].isdigit() else None
     
-    # اصلاح شده: اگر کاربر روی لینک خود کلیک کرد، فقط اخطار داده شود و متوقف گردد
     if referrer_id == user_id:
         bot.send_message(
             message.chat.id, 
@@ -289,10 +288,10 @@ def get_user_rank(user_id):
     scored_users = []
     for uid, r_cnt, d_cnt in rows:
         total = calculate_total_tokens(r_cnt, d_cnt)
-        scored_users.append((uid, total))
+        scored_users.append((uid, total, r_cnt))
     
-    scored_users.sort(key=lambda x: x[1], reverse=True)
-    for idx, (uid, _) in enumerate(scored_users, 1):
+    scored_users.sort(key=lambda x: (x[1], x[2]), reverse=True)
+    for idx, (uid, _, _) in enumerate(scored_users, 1):
         if uid == user_id:
             return idx
     return "محاسبه‌نشده"
@@ -800,7 +799,8 @@ def handle_all_messages(message):
             total_t = calculate_total_tokens(r_cnt, d_cnt)
             ranked_list.append((uid, r_cnt, total_t))
         
-        ranked_list.sort(key=lambda x: x[2], reverse=True)
+        # اصلاح شده: اولویت بر اساس توکن کل (بیشترین) و سپس تعداد دعوت (بیشترین)
+        ranked_list.sort(key=lambda x: (x[2], x[1]), reverse=True)
         top_10 = ranked_list[:10]
         
         text = "🏆 *۱۰ شرکت‌کننده برتر ایردراپ (براساس مجموع توکن‌ها)*:\n\n"
@@ -977,7 +977,8 @@ def handle_callbacks(call):
             total_t = calculate_total_tokens(r_cnt, d_cnt)
             ranked_list.append((uid, r_cnt, total_t))
         
-        ranked_list.sort(key=lambda x: x[2], reverse=True)
+        # اصلاح شده: اولویت بر اساس توکن کل (بیشترین) و سپس تعداد دعوت (بیشترین)
+        ranked_list.sort(key=lambda x: (x[2], x[1]), reverse=True)
         top_10 = ranked_list[:10]
         
         text = "🏆 *۱۰ شرکت‌کننده برتر ایردراپ (براساس مجموع توکن‌ها)*:\n\n"
