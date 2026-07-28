@@ -1,15 +1,26 @@
 import io
 import os
 import random
-import sqlite3
 import time
-from collections import defaultdict
+from datetime import datetime
 from telebot import TeleBot
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
+from pymongo import MongoClient
 
 TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
     raise RuntimeError("BOT_TOKEN environment variable is not set")
+
+MONGO_URL = os.getenv("MONGO_URL")
+if not MONGO_URL:
+    raise RuntimeError("MONGO_URL environment variable is not set")
+
+# اتصال به MongoDB
+mongo_client = MongoClient(MONGO_URL)
+db = mongo_client.get_database() # به صورت خودکار دیتابیس پیش‌فرض رو انتخاب می‌کنه
+users_col = db.users
+captcha_col = db.captcha
+
 BOT_USERNAME = "PRS_Airdrop_Bot"
 CHANNEL_ID = "@persepolisToken6"
 TWITTER_URL = "https://x.com/PersepolisPRS"
@@ -26,49 +37,19 @@ BANNER_FILE_ID = "AgACAgQAAxkBAAMfamINNXWkFr-wk1ONFWAEHF2z-vGAAsgNaxtnhwABU-cbUH
 
 bot = TeleBot(TOKEN, threaded=True)
 
-def get_db_connection():
-    db_dir = '/data' if os.path.exists('/data') else os.path.dirname(os.path.abspath(__file__))
-    db_path = os.path.join(db_dir, 'referrals.db')
-    conn = sqlite3.connect(db_path, timeout=30.0)
-    return conn
-
-def init_db():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            referred_by INTEGER,
-            ref_count INTEGER DEFAULT 0,
-            submitted INTEGER DEFAULT 0,
-            paid INTEGER DEFAULT 0,
-            verified INTEGER DEFAULT 0,
-            wallet TEXT,
-            last_daily INTEGER DEFAULT 0,
-            daily_count INTEGER DEFAULT 0
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS captcha (
-            user_id INTEGER PRIMARY KEY,
-            num1 INTEGER,
-            num2 INTEGER,
-            answer INTEGER,
-            pending_referrer INTEGER
-        )
-    ''')
-    conn.commit()
-    conn.close()
-
-init_db()
-
 def get_user_data(user_id):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT ref_count, submitted, paid, verified, last_daily, daily_count, wallet FROM users WHERE user_id = ?", (user_id,))
-    row = cursor.fetchone()
-    conn.close()
-    return row
+    user = users_col.find_one({"user_id": user_id})
+    if not user:
+        return None
+    return (
+        user.get("ref_count", 0),
+        user.get("submitted", 0),
+        user.get("paid", 0),
+        user.get("verified", 0),
+        user.get("last_daily", 0),
+        user.get("daily_count", 0),
+        user.get("wallet", None)
+    )
 
 def calculate_tokens(ref_count):
     if ref_count < REQUIRED_REFERRALS:
@@ -82,13 +63,11 @@ def calculate_total_tokens(ref_count, daily_count):
     return base_ref_tokens + daily_tokens
 
 def get_global_total_distributed_tokens():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT ref_count, daily_count FROM users")
-    rows = cursor.fetchall()
-    conn.close()
+    all_users = users_col.find({}, {"ref_count": 1, "daily_count": 1})
     total = 0
-    for r_cnt, d_cnt in rows:
+    for u in all_users:
+        r_cnt = u.get("ref_count", 0)
+        d_cnt = u.get("daily_count", 0)
         total += calculate_total_tokens(r_cnt, d_cnt)
     return total
 
@@ -123,23 +102,28 @@ def get_admin_reply_markup():
     return markup
 
 def register_user_after_verify(user_id, referrer_id):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT user_id, referred_by FROM users WHERE user_id = ?", (user_id,))
-    row = cursor.fetchone()
+    user = users_col.find_one({"user_id": user_id})
     
-    if not row:
+    if not user:
         actual_referrer = referrer_id if (referrer_id and referrer_id != user_id) else None
-        cursor.execute("INSERT INTO users (user_id, referred_by, verified) VALUES (?, ?, 1)", (user_id, actual_referrer))
+        users_col.insert_one({
+            "user_id": user_id,
+            "referred_by": actual_referrer,
+            "ref_count": 0,
+            "submitted": 0,
+            "paid": 0,
+            "verified": 1,
+            "wallet": None,
+            "last_daily": 0,
+            "daily_count": 0
+        })
         
         if actual_referrer:
-            cursor.execute("UPDATE users SET ref_count = ref_count + 1 WHERE user_id = ?", (actual_referrer,))
-            conn.commit()
+            users_col.update_one({"user_id": actual_referrer}, {"$inc": {"ref_count": 1}})
             try:
-                cursor.execute("SELECT ref_count, daily_count FROM users WHERE user_id = ?", (actual_referrer,))
-                ref_row = cursor.fetchone()
-                current_refs = ref_row[0] if ref_row else 1
-                d_count = ref_row[1] if ref_row else 0
+                ref_user = users_col.find_one({"user_id": actual_referrer})
+                current_refs = ref_user.get("ref_count", 1) if ref_user else 1
+                d_count = ref_user.get("daily_count", 0) if ref_user else 0
                 earned_now = calculate_total_tokens(current_refs, d_count)
                 bot.send_message(
                     actual_referrer,
@@ -150,19 +134,15 @@ def register_user_after_verify(user_id, referrer_id):
                 )
             except Exception:
                 pass
-        else:
-            conn.commit()
     else:
-        current_referred_by = row[1]
+        current_referred_by = user.get("referred_by")
         if not current_referred_by and referrer_id and referrer_id != user_id:
-            cursor.execute("UPDATE users SET verified = 1, referred_by = ? WHERE user_id = ?", (referrer_id, user_id))
-            cursor.execute("UPDATE users SET ref_count = ref_count + 1 WHERE user_id = ?", (referrer_id,))
-            conn.commit()
+            users_col.update_one({"user_id": user_id}, {"$set": {"verified": 1, "referred_by": referrer_id}})
+            users_col.update_one({"user_id": referrer_id}, {"$inc": {"ref_count": 1}})
             try:
-                cursor.execute("SELECT ref_count, daily_count FROM users WHERE user_id = ?", (referrer_id,))
-                ref_row = cursor.fetchone()
-                current_refs = ref_row[0] if ref_row else 1
-                d_count = ref_row[1] if ref_row else 0
+                ref_user = users_col.find_one({"user_id": referrer_id})
+                current_refs = ref_user.get("ref_count", 1) if ref_user else 1
+                d_count = ref_user.get("daily_count", 0) if ref_user else 0
                 earned_now = calculate_total_tokens(current_refs, d_count)
                 bot.send_message(
                     referrer_id,
@@ -174,21 +154,14 @@ def register_user_after_verify(user_id, referrer_id):
             except Exception:
                 pass
         else:
-            cursor.execute("UPDATE users SET verified = 1 WHERE user_id = ?", (user_id,))
-            conn.commit()
-    conn.close()
+            users_col.update_one({"user_id": user_id}, {"$set": {"verified": 1}})
 
 def save_submission(user_id, wallet, current_submitted_status):
     new_status = 1 if current_submitted_status == 0 else 2
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        UPDATE users 
-        SET submitted = ?, wallet = ?
-        WHERE user_id = ?
-    """, (new_status, wallet, user_id))
-    conn.commit()
-    conn.close()
+    users_col.update_one(
+        {"user_id": user_id},
+        {"$set": {"submitted": new_status, "wallet": wallet}}
+    )
 
 def get_ref_details(ref_count):
     if ref_count >= REQUIRED_REFERRALS:
@@ -204,11 +177,11 @@ def send_captcha(chat_id, user_id, referrer_id):
     num2 = random.randint(1, 10)
     correct_ans = num1 + num2
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("REPLACE INTO captcha (user_id, num1, num2, answer, pending_referrer) VALUES (?, ?, ?, ?, ?)", (user_id, num1, num2, correct_ans, referrer_id))
-    conn.commit()
-    conn.close()
+    captcha_col.replace_one(
+        {"user_id": user_id},
+        {"user_id": user_id, "num1": num1, "num2": num2, "answer": correct_ans, "pending_referrer": referrer_id},
+        upsert=True
+    )
 
     bot.send_message(
         chat_id,
@@ -279,14 +252,12 @@ def ask_to_join(chat_id, referrer_id):
     )
 
 def get_user_rank(user_id):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT user_id, ref_count, daily_count FROM users")
-    rows = cursor.fetchall()
-    conn.close()
-    
+    all_users = list(users_col.find({}))
     scored_users = []
-    for uid, r_cnt, d_cnt in rows:
+    for u in all_users:
+        uid = u.get("user_id")
+        r_cnt = u.get("ref_count", 0)
+        d_cnt = u.get("daily_count", 0)
         total = calculate_total_tokens(r_cnt, d_cnt)
         scored_users.append((uid, total, r_cnt))
     
@@ -308,17 +279,16 @@ def admin_panel(message):
     )
 
 def show_token_summary_direct(chat_id):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT ref_count, daily_count, paid FROM users WHERE submitted > 0")
-    rows = cursor.fetchall()
-    conn.close()
+    rows = list(users_col.find({"submitted": {"$gt": 0}}, {"ref_count": 1, "daily_count": 1, "paid": 1}))
 
     total_all_tokens = get_global_total_distributed_tokens()
     paid_tokens = 0
     unpaid_tokens = 0
 
-    for r_cnt, d_cnt, paid in rows:
+    for u in rows:
+        r_cnt = u.get("ref_count", 0)
+        d_cnt = u.get("daily_count", 0)
+        paid = u.get("paid", 0)
         t_tokens = calculate_total_tokens(r_cnt, d_cnt)
         if paid == 1:
             paid_tokens += t_tokens
@@ -335,11 +305,7 @@ def show_token_summary_direct(chat_id):
     bot.send_message(chat_id, text, reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
 
 def send_paginated_wallets(message, offset=0, edit=False):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT user_id, ref_count, wallet, paid, daily_count FROM users WHERE submitted > 0 ORDER BY ref_count DESC")
-    rows = cursor.fetchall()
-    conn.close()
+    rows = list(users_col.find({"submitted": {"$gt": 0}}).sort("ref_count", -1))
 
     if not rows:
         msg = "⚠️ هیچ کاربری هنوز فرم اطلاعاتش را ارسال نکرده است."
@@ -355,7 +321,13 @@ def send_paginated_wallets(message, offset=0, edit=False):
     text = f"👝 **لیست کاربران ثبت‌نام کرده (مجموع: {len(rows)} نفر):**\n\n"
     markup = InlineKeyboardMarkup()
 
-    for uid, ref_cnt, wlt, paid, d_count in page_rows:
+    for u in page_rows:
+        uid = u.get("user_id")
+        ref_cnt = u.get("ref_count", 0)
+        wlt = u.get("wallet", "None")
+        paid = u.get("paid", 0)
+        d_count = u.get("daily_count", 0)
+        
         total_tokens = calculate_total_tokens(ref_cnt, d_count)
         base_used, extra_count = get_ref_details(ref_cnt)
         status_str = "✅ پرداخت‌شده" if paid == 1 else "⏳ در انتظار پرداخت"
@@ -388,11 +360,7 @@ def send_paginated_wallets(message, offset=0, edit=False):
         bot.send_message(ADMIN_CHAT_ID, text, reply_markup=markup, parse_mode="Markdown")
 
 def send_status_excel_report(chat_id, status_filter):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT user_id, ref_count, wallet, paid, daily_count FROM users WHERE submitted > 0 AND paid = ? ORDER BY ref_count DESC", (status_filter,))
-    rows = cursor.fetchall()
-    conn.close()
+    rows = list(users_col.find({"submitted": {"$gt": 0}, "paid": status_filter}).sort("ref_count", -1))
 
     status_name = "پرداخت‌شده" if status_filter == 1 else "در انتظار پرداخت"
     if not rows:
@@ -400,7 +368,13 @@ def send_status_excel_report(chat_id, status_filter):
         return
 
     csv_content = "User ID,Wallet,Referrals,Daily Bonus Count,Total Tokens,Status\n"
-    for uid, ref_cnt, wlt, paid, d_count in rows:
+    for u in rows:
+        uid = u.get("user_id")
+        ref_cnt = u.get("ref_count", 0)
+        wlt = u.get("wallet", "None")
+        paid = u.get("paid", 0)
+        d_count = u.get("daily_count", 0)
+        
         total_tokens = calculate_total_tokens(ref_cnt, d_count)
         st_text = "Paid" if paid == 1 else "Pending"
         csv_content += f"{uid},{wlt},{ref_cnt},{d_count},{total_tokens},{st_text}\n"
@@ -413,21 +387,26 @@ def send_status_excel_report(chat_id, status_filter):
     bot.send_document(chat_id, file_bytes, caption=caption_text, reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
 
 def send_detailed_report_file(chat_id):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT user_id, referred_by, ref_count, submitted, paid, verified, wallet, last_daily, daily_count FROM users ORDER BY paid ASC, ref_count DESC")
-    rows = cursor.fetchall()
-    conn.close()
+    rows = list(users_col.find({}).sort([("paid", 1), ("ref_count", -1)]))
 
     if not rows:
         bot.send_message(chat_id, "⚠️ هیچ کاربری در دیتابیس ثبت نشده است.", reply_markup=get_admin_reply_markup())
         return
 
     csv_content = "User ID,Referred By,Referral Count,Submitted Status,Paid Status,Verified Status,Wallet,Last Daily Timestamp,Daily Bonus Count,Total Tokens\n"
-    for uid, ref_by, ref_cnt, submitted, paid, verified, wlt, last_daily, d_count in rows:
+    for u in rows:
+        uid = u.get("user_id")
+        ref_by = u.get("referred_by", "None")
+        ref_cnt = u.get("ref_count", 0)
+        submitted = u.get("submitted", 0)
+        paid = u.get("paid", 0)
+        verified = u.get("verified", 0)
+        wlt = str(u.get("wallet", "None")).replace(',', '_')
+        last_daily = u.get("last_daily", 0)
+        d_count = u.get("daily_count", 0)
+        
         total_tokens = calculate_total_tokens(ref_cnt, d_count)
-        wallet_clean = str(wlt).replace(',', '_') if wlt else "None"
-        csv_content += f"{uid},{ref_by},{ref_cnt},{submitted},{paid},{verified},{wallet_clean},{last_daily},{d_count},{total_tokens}\n"
+        csv_content += f"{uid},{ref_by},{ref_cnt},{submitted},{paid},{verified},{wlt},{last_daily},{d_count},{total_tokens}\n"
 
     file_bytes = io.BytesIO(csv_content.encode('utf-8'))
     file_bytes.name = 'all_users_complete_database_report.csv'
@@ -435,21 +414,15 @@ def send_detailed_report_file(chat_id):
     bot.send_document(
         chat_id, 
         file_bytes, 
-        caption="📁 **گزارش اکسل جامع و کامل تمام اطلاعات کاربران** (شامل آیدی، ولت، تعداد رفال، وضعیت پرداخت، پاداش روزانه و تمامی جزئیات بدون کم‌وکاست).", 
+        caption="📁 **گزارش اکسل جامع و کامل تمام اطلاعات کاربران**", 
         reply_markup=get_admin_reply_markup(), 
         parse_mode="Markdown"
     )
 
 def show_stats_direct(chat_id):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM users")
-    t_u = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(*) FROM users WHERE submitted > 0")
-    t_s = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(*) FROM users WHERE paid = 1")
-    t_p = cursor.fetchone()[0]
-    conn.close()
+    t_u = users_col.count_documents({})
+    t_s = users_col.count_documents({"submitted": {"$gt": 0}})
+    t_p = users_col.count_documents({"paid": 1})
     total_tokens_all = get_global_total_distributed_tokens()
     bot.send_message(chat_id, f"📊 آمار کلی ربات:\n\n👤 کل کاربران استارت کرده: {t_u}\n📝 تعداد ثبت‌فرم‌ها: {t_s}\n💰 پرداخت‌شده‌ها: {t_p}\n🪙 کل توکن توزیع‌شده: {total_tokens_all:,} PRS", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
 
@@ -528,11 +501,7 @@ def handle_admin_documents(message):
     if message.from_user.id != ADMIN_CHAT_ID:
         return
     
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT user_id FROM users WHERE submitted > 0")
-    valid_users = {row[0] for row in cursor.fetchall()}
-    conn.close()
+    valid_users = {u["user_id"] for u in users_col.find({"submitted": {"$gt": 0}}, {"user_id": 1})}
 
     try:
         file_info = bot.get_file(message.document.file_id)
@@ -542,9 +511,6 @@ def handle_admin_documents(message):
         lines = file_text.splitlines()
         updated_count = 0
         not_found_count = 0
-        
-        conn = get_db_connection()
-        cursor = conn.cursor()
 
         for line in lines:
             line = line.strip()
@@ -562,16 +528,13 @@ def handle_admin_documents(message):
                         break
             
             if target_id:
-                cursor.execute("UPDATE users SET paid = 1 WHERE user_id = ?", (target_id,))
-                if cursor.rowcount > 0:
+                res = users_col.update_one({"user_id": target_id}, {"$set": {"paid": 1}})
+                if res.modified_count > 0 or res.matched_count > 0:
                     updated_count += 1
                 else:
                     not_found_count += 1
             else:
                 not_found_count += 1
-
-        conn.commit()
-        conn.close()
 
         bot.send_message(
             ADMIN_CHAT_ID,
@@ -593,20 +556,16 @@ def handle_all_messages(message):
     persian_to_english = str.maketrans('۰۱۲۳۴۵۶۷۸۹', '0123456789')
     text = text.translate(persian_to_english)
     
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT num1, num2, answer, pending_referrer FROM captcha WHERE user_id = ?", (user_id,))
-    captcha_data = cursor.fetchone()
-    conn.close()
+    captcha_data = captcha_col.find_one({"user_id": user_id})
 
     if captcha_data:
-        n1, n2, correct_ans, referrer_id = captcha_data
+        n1 = captcha_data["num1"]
+        n2 = captcha_data["num2"]
+        correct_ans = captcha_data["answer"]
+        referrer_id = captcha_data["pending_referrer"]
+
         if text.isdigit() and int(text) == correct_ans:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM captcha WHERE user_id = ?", (user_id,))
-            conn.commit()
-            conn.close()
+            captcha_col.delete_one({"user_id": user_id})
             
             if not check_membership(user_id):
                 ask_to_join(chat_id, referrer_id if referrer_id else 0)
@@ -619,11 +578,10 @@ def handle_all_messages(message):
             new_n2 = random.randint(1, 10)
             new_correct_ans = new_n1 + new_n2
 
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("UPDATE captcha SET num1 = ?, num2 = ?, answer = ? WHERE user_id = ?", (new_n1, new_n2, new_correct_ans, user_id))
-            conn.commit()
-            conn.close()
+            captcha_col.update_one(
+                {"user_id": user_id},
+                {"$set": {"num1": new_n1, "num2": new_n2, "answer": new_correct_ans}}
+            )
 
             bot.send_message(
                 chat_id, 
@@ -666,48 +624,40 @@ def handle_all_messages(message):
             return
         elif text.startswith("/search "):
             query = text.replace("/search", "").strip()
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT user_id, referred_by, ref_count, submitted, paid, verified, wallet, daily_count FROM users WHERE user_id = ? OR wallet LIKE ?", 
-                           (int(query) if query.isdigit() else 0, f"%{query}%"))
-            rows = cursor.fetchall()
-            conn.close()
+            query_filter = {"user_id": int(query)} if query.isdigit() else {"wallet": {"$regex": query, "$options": "i"}}
+            rows = list(users_col.find(query_filter))
             if not rows:
                 bot.send_message(ADMIN_CHAT_ID, "❌ هیچ کاربری با این مشخصات پیدا نشد.", reply_markup=get_admin_reply_markup())
                 return
-            res = "🔍 *نتیجه جستجوی ادمین (بر اساس آیدی عددی یا ولت):*\n\n"
+            res = "🔍 *نتیجه جستجوی ادمین:*\n\n"
             for r in rows:
-                ref_cnt = r[2]
-                d_cnt = r[7] if len(r) > 7 else 0
+                uid = r.get("user_id")
+                ref_cnt = r.get("ref_count", 0)
+                d_cnt = r.get("daily_count", 0)
+                wlt = r.get("wallet", "None")
+                submitted = r.get("submitted", 0)
+                paid = r.get("paid", 0)
                 total_tokens = calculate_total_tokens(ref_cnt, d_cnt)
                 base_used, extra_count = get_ref_details(ref_cnt)
-                res += f"👤 آیدی عددی: `{r[0]}`\n👥 کل رفال: {ref_cnt} (ثابت: {base_used} | مازاد: {extra_count})\n🎁 توکن کل: {total_tokens:,} PRS\n👝 ولت: `{r[6]}`\n📌 ثبت فرم: `{r[3]}` | پرداخت: `{r[4]}`\n---\n"
+                res += f"👤 آیدی عددی: `{uid}`\n👥 کل رفال: {ref_cnt} (ثابت: {base_used} | مازاد: {extra_count})\n🎁 توکن کل: {total_tokens:,} PRS\n👝 ولت: `{wlt}`\n📌 ثبت فرم: `{submitted}` | پرداخت: `{paid}`\n---\n"
             bot.send_message(ADMIN_CHAT_ID, res, reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
             return
         elif text.startswith("/deleteuser "):
             target_id = text.replace("/deleteuser", "").strip()
             if target_id.isdigit():
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM users WHERE user_id = ?", (int(target_id),))
-                cursor.execute("DELETE FROM captcha WHERE user_id = ?", (int(target_id),))
-                conn.commit()
-                conn.close()
-                bot.send_message(ADMIN_CHAT_ID, f"✅ کاربر با آیدی عددی `{target_id}` به طور کامل از دیتابیس حذف شد.", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
+                users_col.delete_one({"user_id": int(target_id)})
+                captcha_col.delete_one({"user_id": int(target_id)})
+                bot.send_message(ADMIN_CHAT_ID, f"✅ کاربر با آیدی عددی `{target_id}` به طور کامل حذف شد.", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
             else:
                 bot.send_message(ADMIN_CHAT_ID, "⚠️ آیدی عددی وارد شده معتبر نیست.", reply_markup=get_admin_reply_markup())
             return
         elif text.startswith("/sendall "):
             broadcast_msg = text.replace("/sendall", "").strip()
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT user_id FROM users")
-            all_users = cursor.fetchall()
-            conn.close()
+            all_users = list(users_col.find({}, {"user_id": 1}))
             success_count = 0
             for u in all_users:
                 try:
-                    bot.send_message(u[0], f"📢 {broadcast_msg}")
+                    bot.send_message(u["user_id"], f"📢 {broadcast_msg}")
                     success_count += 1
                 except Exception:
                     pass
@@ -727,7 +677,7 @@ def handle_all_messages(message):
         ref_count = user_data[0] if user_data else 0
         d_count = user_data[5] if user_data and len(user_data) > 5 else 0
         total_earned = calculate_total_tokens(ref_count, d_count)
-        wallet = user_data[6] if user_data and len(user_data) > 6 else "ثبت نشده"
+        wallet = user_data[6] if user_data and len(user_data) > 6 and user_data[6] else "ثبت نشده"
         user_rank = get_user_rank(user_id)
         
         status_msg = (
@@ -767,39 +717,32 @@ def handle_all_messages(message):
             minutes = (remaining % 3600) // 60
             bot.send_message(chat_id, f"⏳ شما قبلاً پاداش امروز خود را دریافت کرده‌اید!\nلطفاً پس از {hours} ساعت و {minutes} دقیقه دیگر تلاش کنید.")
         else:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("UPDATE users SET last_daily = ?, daily_count = daily_count + 1 WHERE user_id = ?", (current_time, user_id))
-            conn.commit()
-            conn.close()
+            users_col.update_one(
+                {"user_id": user_id},
+                {"$set": {"last_daily": current_time}, "$inc": {"daily_count": 1}}
+            )
             bot.send_message(chat_id, f"🎁 تبریک! مبلغ {DAILY_REWARD} توکن PRS به عنوان پاداش روزانه به حساب شما اضافه شد.")
         return
     elif text == "📖 راهنمای ولت و توکن":
         guide_text = (
             f"📖 *راهنمای گام‌به‌گام نصب کیف پول و دریافت آدرس (Wallet):*\n\n"
-            f"🔹 **مقدمه:** برای دریافت توکن‌های PRS، به یک کیف پول معتبر ارز دیجیتال نیاز دارید که از شبکه پروژه پشتیبانی کند (مانند Trust Wallet یا MetaMask).\n\n"
-            f"📱 **مرحله اول: نصب کیف پول**\n"
-            f"• اپلیکیشن **Trust Wallet** را از گوگل‌پلی (اندروید) یا اپ‌استور (آیفون) دانلود و نصب کنید.\n• یک کیف پول جدید بسازید و کلمات بازیابی (Seed Phrase) را یادداشت و در جای امن نگه دارید.\n\n"
-            f"🪙 **مرحله دوم: افزودن سفارشی توکن (Custom Token)**\n"
-            f"• در صفحه اصلی تراست ولت، روی آیکون تنظیمات یا علامت `+` در بالا سمت راست بزنید.\n• شبکه (Network) را روی شبکه اصلی توکن قرار دهید.\n• آدرس قرارداد (Contract Address) توکن پرسپولیس را وارد کنید تا توکن به لیست شما اضافه شود.\n\n"
-            f"📋 **مرحله سوم: کپی کردن آدرس ولت**\n"
-            f"• در لیست ارزهای تراست ولت، روی توکن **PRS** (یا ارز بستر پروژه) بزنید.\n• گزینه **Receive** یا **Copy** را انتخاب کنید تا آدرس ولت شما کپی شود.\n• در نهایت از طریق دکمه «📝 ارسال / ویرایش آدرس ولت» در این ربات، آدرس کپی‌شده را ارسال کنید."
+            f"🔹 **مقدمه:** برای دریافت توکن‌های PRS، به یک کیف پول معتبر ارز دیجیتال نیاز دارید...\n\n"
+            f"📱 **مرحله اول: نصب کیف پول**\n• اپلیکیشن Trust Wallet را نصب کنید.\n\n"
+            f"🪙 **مرحله دوم: افزودن سفارشی توکن**\n• آدرس قرارداد توکن پرسپولیس را اضافه کنید.\n\n"
+            f"📋 **مرحله سوم: کپی کردن آدرس ولت**\n• آدرس را کپی کرده و در ربات ارسال کنید."
         )
         bot.send_message(chat_id, guide_text, parse_mode="Markdown")
         return
     elif text == "🏆 برترین شرکت‌کنندگان":
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT user_id, ref_count, daily_count FROM users")
-        rows = cursor.fetchall()
-        conn.close()
-        
+        all_users = list(users_col.find({}))
         ranked_list = []
-        for uid, r_cnt, d_cnt in rows:
+        for u in all_users:
+            uid = u.get("user_id")
+            r_cnt = u.get("ref_count", 0)
+            d_cnt = u.get("daily_count", 0)
             total_t = calculate_total_tokens(r_cnt, d_cnt)
             ranked_list.append((uid, r_cnt, total_t))
         
-        # اصلاح شده: اولویت بر اساس توکن کل (بیشترین) و سپس تعداد دعوت (بیشترین)
         ranked_list.sort(key=lambda x: (x[2], x[1]), reverse=True)
         top_10 = ranked_list[:10]
         
@@ -827,7 +770,7 @@ def handle_all_messages(message):
             return
         
         if submitted == 1:
-            bot.send_message(chat_id, "✏️ **حالت ویرایش ولت:**\nشما قبلاً ولت خود را ثبت کرده بودید. اکنون می‌توانید آدرس ولت جدید خود را ارسال کنید (این **آخرین فرصت** شما برای ویرایش است):\n\nلطفاً آدرس ولت خود را ارسال کنید:")
+            bot.send_message(chat_id, "✏️ **حالت ویرایش ولت:**\nشما قبلاً ولت خود را ثبت کرده بودید. اکنون می‌توانید آدرس ولت جدید خود را ارسال کنید:")
         else:
             bot.send_message(chat_id, "لطفاً آدرس ولت (ارز دیجیتال) خود را ارسال کنید:")
         return
@@ -841,26 +784,20 @@ def handle_all_messages(message):
         bot.send_message(chat_id, f"📸 صفحه اینستاگرام: {INSTAGRAM_URL}")
         return
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT user_id, submitted FROM users WHERE user_id = ?", (user_id,))
-    row = cursor.fetchone()
-    conn.close()
+    user_doc = users_col.find_one({"user_id": user_id})
+    submitted_status = user_doc.get("submitted", 0) if user_doc else 0
 
-    is_submitting_or_editing = row and row[1] < 2
-
-    if is_submitting_or_editing or len(text) > 10:
-        if row and row[1] >= 2:
-            bot.send_message(chat_id, "⚠️ شما سهمیه ویرایش خود را به اتمام رسانده‌اید و ولت شما قابل تغییر نیست.")
+    if submitted_status < 2 or len(text) > 10:
+        if submitted_status >= 2:
+            bot.send_message(chat_id, "⚠️ شما سهمیه ویرایش خود را به اتمام رسانده‌اید.")
             return
             
-        current_sub_status = row[1] if row else 0
-        save_submission(user_id, text, current_sub_status)
+        save_submission(user_id, text, submitted_status)
         
-        if current_sub_status == 0:
-            bot.send_message(chat_id, "✅ آدرس ولت شما با موفقیت ثبت شد.\n*(توجه: شما فقط یک‌بار دیگر امکان ویرایش این ولت را دارید)*")
+        if submitted_status == 0:
+            bot.send_message(chat_id, "✅ آدرس ولت شما با موفقیت ثبت شد.")
         else:
-            bot.send_message(chat_id, "✅ آدرس ولت شما با موفقیت **ویرایش و به‌روزرسانی شد**.\n*(پرونده اطلاعات شما قفل شد و دیگر قابل تغییر نیست)*")
+            bot.send_message(chat_id, "✅ آدرس ولت شما با موفقیت **ویرایش و به‌روزرسانی شد**.")
         
         show_main_menu(chat_id, user_id)
 
@@ -909,10 +846,8 @@ def handle_callbacks(call):
         
         link_text = (
             f"🔥 بزرگترین ایردراپ توکن هواداری پرسپولیس (PRS) 🔥\n\n"
-            f"🏆 فرصت استثنایی برای دریافت توکن رایگان و ورود به اکوسیستم دیجیتال پرسپولیس!\n"
-            f"🎁 همین الان با لینک زیر وارد ربات شو و پاداش ورودت رو بگیر:\n\n"
-            f"{ref_link}\n\n"
-            f"این پیام رو برای دوستان خود ارسال کنید"
+            f"🏆 فرصت استثنایی برای دریافت توکن رایگان...\n"
+            f"{ref_link}"
         )
         try:
             bot.send_photo(chat_id=chat_id, photo=BANNER_FILE_ID, caption=link_text)
@@ -926,62 +861,46 @@ def handle_callbacks(call):
         ref_count = user_data[0] if user_data else 0
         
         if ref_count < REQUIRED_REFERRALS:
-            bot.answer_callback_query(call.id, f"⚠️ پاداش روزانه قفل است!\nبرای باز شدن آن باید حداقل {REQUIRED_REFERRALS} دوست دعوت کنید.", show_alert=True)
+            bot.answer_callback_query(call.id, f"⚠️ پاداش روزانه قفل است!", show_alert=True)
             return
             
         current_time = int(time.time())
         last_daily = user_data[4] if user_data else 0
         
         if current_time - last_daily < 86400:
-            remaining = 86400 - (current_time - last_daily)
-            hours = remaining // 3600
-            minutes = (remaining % 3600) // 60
-            bot.answer_callback_query(call.id, f"⏳ شما قبلاً پاداش امروز خود را دریافت کرده‌اید!\nلطفاً پس از {hours} ساعت و {minutes} دقیقه دیگر تلاش کنید.", show_alert=True)
+            bot.answer_callback_query(call.id, f"⏳ شما قبلاً پاداش امروز خود را دریافت کرده‌اید!", show_alert=True)
         else:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("UPDATE users SET last_daily = ?, daily_count = daily_count + 1 WHERE user_id = ?", (current_time, user_id))
-            conn.commit()
-            conn.close()
-            bot.answer_callback_query(call.id, f"🎁 تبریک! مبلغ {DAILY_REWARD} توکن PRS به عنوان پاداش روزانه به حساب شما اضافه شد.", show_alert=True)
+            users_col.update_one(
+                {"user_id": user_id},
+                {"$set": {"last_daily": current_time}, "$inc": {"daily_count": 1}}
+            )
+            bot.answer_callback_query(call.id, f"🎁 تبریک! پاداش روزانه اضافه شد.", show_alert=True)
             show_main_menu(chat_id, user_id, message_id=call.message.message_id, edit=True)
     elif call.data == "wallet_guide":
         if not check_membership(user_id):
             bot.answer_callback_query(call.id, "❌ ابتدا در کانال عضو شوید!", show_alert=True)
             return
         bot.answer_callback_query(call.id)
-        guide_text = (
-            f"📖 *راهنمای گام‌به‌گام نصب کیف پول و دریافت آدرس (Wallet):*\n\n"
-            f"🔹 **مقدمه:** برای دریافت توکن‌های PRS، به یک کیف پول معتبر ارز دیجیتال نیاز دارید که از شبکه پروژه پشتیبانی کند (مانند Trust Wallet یا MetaMask).\n\n"
-            f"📱 **مرحله اول: نصب کیف پول**\n"
-            f"• اپلیکیشن **Trust Wallet** را از گوگل‌پلی (اندروید) یا اپ‌استور (آیفون) دانلود و نصب کنید.\n• یک کیف پول جدید بسازید و کلمات بازیابی (Seed Phrase) را یادداشت و در جای امن نگه دارید.\n\n"
-            f"🪙 **مرحله دوم: افزودن سفارشی توکن (Custom Token)**\n"
-            f"• در صفحه اصلی تراست ولت، روی آیکون تنظیمات یا علامت `+` در بالا سمت راست بزنید.\n• شبکه (Network) را روی شبکه اصلی توکن قرار دهید.\n• آدرس قرارداد (Contract Address) توکن پرسپولیس را وارد کنید تا توکن به لیست شما اضافه شود.\n\n"
-            f"📋 **مرحله سوم: کپی کردن آدرس ولت**\n"
-            f"• در لیست ارزهای تراست ولت، روی توکن **PRS** (یا ارز بستر پروژه) بزنید.\n• گزینه **Receive** یا **Copy** را انتخاب کنید تا آدرس ولت شما کپی شود.\n• در نهایت از طریق دکمه «📝 ارسال / ویرایش آدرس ولت» در این ربات، آدرس کپی‌شده را ارسال کنید."
-        )
+        guide_text = "📖 راهنمای گام‌به‌گام نصب کیف پول..."
         bot.send_message(chat_id, guide_text, parse_mode="Markdown")
     elif call.data == "leaderboard":
         if not check_membership(user_id):
             bot.answer_callback_query(call.id, "❌ ابتدا در کانال عضو شوید!", show_alert=True)
             return
         bot.answer_callback_query(call.id)
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT user_id, ref_count, daily_count FROM users")
-        rows = cursor.fetchall()
-        conn.close()
-        
+        all_users = list(users_col.find({}))
         ranked_list = []
-        for uid, r_cnt, d_cnt in rows:
+        for u in all_users:
+            uid = u.get("user_id")
+            r_cnt = u.get("ref_count", 0)
+            d_cnt = u.get("daily_count", 0)
             total_t = calculate_total_tokens(r_cnt, d_cnt)
             ranked_list.append((uid, r_cnt, total_t))
         
-        # اصلاح شده: اولویت بر اساس توکن کل (بیشترین) و سپس تعداد دعوت (بیشترین)
         ranked_list.sort(key=lambda x: (x[2], x[1]), reverse=True)
         top_10 = ranked_list[:10]
         
-        text = "🏆 *۱۰ شرکت‌کننده برتر ایردراپ (براساس مجموع توکن‌ها)*:\n\n"
+        text = "🏆 *۱۰ شرکت‌کننده برتر ایردراپ*:\n\n"
         for idx, (uid, r_cnt, total_t) in enumerate(top_10, 1):
             text += f"{idx}. آیدی: `{uid}` — 🎁 توکن کل: *{total_t:,} PRS* (دعوت: {r_cnt})\n"
         bot.send_message(chat_id, text, parse_mode="Markdown")
@@ -993,7 +912,7 @@ def handle_callbacks(call):
         ref_count = user_data[0] if user_data else 0
         d_count = user_data[5] if user_data and len(user_data) > 5 else 0
         total_earned = calculate_total_tokens(ref_count, d_count)
-        wallet = user_data[6] if user_data and len(user_data) > 6 else "ثبت نشده"
+        wallet = user_data[6] if user_data and len(user_data) > 6 and user_data[6] else "ثبت نشده"
         user_rank = get_user_rank(user_id)
         
         status_msg = (
@@ -1015,38 +934,33 @@ def handle_callbacks(call):
 
         errors = []
         if ref_count < REQUIRED_REFERRALS:
-            errors.append(f"❌ تعداد دعوت‌های شما ({ref_count} نفر) به حد نصاب نرسیده است. (حداقل مورد نیاز: {REQUIRED_REFERRALS} نفر)")
+            errors.append(f"❌ تعداد دعوت‌های شما ({ref_count} نفر) به حد نصاب نرسیده است.")
         if submitted >= 2:
-            errors.append("⚠️ شما سهمیه ثبت‌نام و تنها ویرایش مجاز خود را استفاده کرده‌اید و امکان تغییر مجدد وجود ندارد.")
+            errors.append("⚠️ شما سهمیه ثبت‌نام و تنها ویرایش مجاز خود را استفاده کرده‌اید.")
 
         if errors:
             bot.answer_callback_query(call.id, "⚠️ شرایط لازم را ندارید!", show_alert=True)
             bot.send_message(
                 chat_id,
-                "⚠️ **امکان ثبت/ویرایش ولت وجود ندارد:**\n\n" + "\n".join(errors) + "\n\nلطفاً پس از رفع موانع دوباره تلاش کنید.",
+                "⚠️ **امکان ثبت/ویرایش ولت وجود ندارد:**\n\n" + "\n".join(errors),
                 parse_mode="Markdown"
             )
             return
 
         bot.answer_callback_query(call.id)
         if submitted == 1:
-            bot.send_message(chat_id, "✏️ **حالت ویرایش ولت:**\nشما قبلاً ولت خود را ثبت کرده بودید. اکنون می‌توانید آدرس ولت جدید خود را ارسال کنید (این **آخرین فرصت** شما برای ویرایش است):\n\nلطفاً آدرس ولت خود را ارسال کنید:")
+            bot.send_message(chat_id, "✏️ **حالت ویرایش ولت:** آدرس جدید خود را ارسال کنید:")
         else:
-            bot.send_message(chat_id, "لطفاً آدرس ولت (ارز دیجیتال) خود را ارسال کنید:")
+            bot.send_message(chat_id, "لطفاً آدرس ولت خود را ارسال کنید:")
 
 if __name__ == "__main__":
-    print("Bot is starting...")
-
+    print("Bot is starting with MongoDB...")
     bot.delete_webhook(drop_pending_updates=True)
     time.sleep(2)
 
     while True:
         try:
-            bot.infinity_polling(
-                timeout=30,
-                long_polling_timeout=30,
-                skip_pending=True
-            )
+            bot.infinity_polling(timeout=30, long_polling_timeout=30, skip_pending=True)
         except Exception as e:
             print(f"Polling error: {e}")
             time.sleep(10)
