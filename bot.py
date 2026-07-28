@@ -24,7 +24,7 @@ captcha_col = db.captcha
 BOT_USERNAME = "PRS_Airdrop_Bot"
 CHANNEL_ID = "@persepolisToken6"
 TWITTER_URL = "https://x.com/PersepolisPRS"
-INSTAGRAM_URL = "https://instagram.com/persepolis_token_official"
+INSTAGRAM_URL = "https://www.instagram.com/persepolistoken6?igsh=eHBwbzdtd2ZoaWI5"
 ADMIN_CHAT_ID = 6661478622
 REQUIRED_REFERRALS = 5
 
