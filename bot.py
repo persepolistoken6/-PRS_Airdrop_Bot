@@ -118,8 +118,8 @@ def get_admin_reply_markup():
     markup.row("👝 مدیریت و تایید ولت‌ها", "📊 گزارش کلی توکن‌ها")
     markup.row("🔍 جستجوی کاربر (آیدی یا ولت)", "📁 آپلود اکسل پرداختی‌ها")
     markup.row("🟢 اکسل پرداخت‌شده‌ها", "🟡 اکسل در انتظار پرداخت")
-    markup.row("📊 گزارش تفکیکی (فایل)", "📈 آمار کلی ربات")
-    markup.row("🔙 خروج از حالت ادمین / منوی اصلی")
+    markup.row("📊 گزارش تفکیکی کامل (فایل)", "📈 آمار کلی ربات")
+    markup.row("🔄 به‌روزرسانی پنل ادمین", "🔙 خروج از حالت ادمین / منوی اصلی")
     return markup
 
 def register_user_after_verify(user_id, referrer_id):
@@ -226,7 +226,7 @@ def send_welcome(message):
     if user_id == ADMIN_CHAT_ID:
         bot.send_message(
             user_id, 
-            "👑 *به پنل مدیریت دائمی خوش آمدید.*\nاز دکمه‌های منوی پایین یا دستور `/search [آیدی یا ولت]` استفاده کنید.", 
+            "👑 *به پنل مدیریت دائمی خوش آمدید.*\nاز دکمه‌های منوی پایین استفاده کنید.", 
             reply_markup=get_admin_reply_markup(), 
             parse_mode="Markdown"
         )
@@ -410,46 +410,32 @@ def send_status_excel_report(chat_id, status_filter):
 def send_detailed_report_file(chat_id):
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT user_id, ref_count, wallet, paid, daily_count FROM users WHERE submitted > 0 ORDER BY paid ASC, ref_count DESC")
+    # دریافت تمامی فیلدها و اطلاعات کامل تمام کاربران بدون هیچ کم و کاستی
+    cursor.execute("SELECT user_id, referred_by, ref_count, submitted, paid, verified, wallet, last_daily, daily_count FROM users ORDER BY paid ASC, ref_count DESC")
     rows = cursor.fetchall()
     conn.close()
 
     if not rows:
-        bot.send_message(chat_id, "⚠️ هیچ کاربری فرم اطلاعات ثبت نکرده است.", reply_markup=get_admin_reply_markup())
+        bot.send_message(chat_id, "⚠️ هیچ کاربری در دیتابیس ثبت نشده است.", reply_markup=get_admin_reply_markup())
         return
 
-    paid_text = "🟢 **لیست کاربران پرداخت شده:**\n\n"
-    unpaid_text = "🟡 **لیست کاربران پرداخت نشده (در انتظار):**\n\n"
-
-    paid_count = 0
-    unpaid_count = 0
-
-    for uid, ref_cnt, wlt, paid, d_count in rows:
+    # تولید فایل CSV جامع و کامل از کل اطلاعات کاربران
+    csv_content = "User ID,Referred By,Referral Count,Submitted Status,Paid Status,Verified Status,Wallet,Last Daily Timestamp,Daily Bonus Count,Total Tokens\n"
+    for uid, ref_by, ref_cnt, submitted, paid, verified, wlt, last_daily, d_count in rows:
         total_tokens = calculate_total_tokens(ref_cnt, d_count)
-        base_used, extra_count = get_ref_details(ref_cnt)
-        user_block = (
-            f"📌 آیدی عددی: `{uid}`\n"
-            f"👝 آدرس ولت: `{wlt}`\n"
-            f"👥 رفال ثابت: {base_used} | مازاد: {extra_count} (کل: {ref_cnt})\n"
-            f"🎁 توکن کل: {total_tokens:,} PRS (پاداش روزانه: {d_count} بار)\n"
-            f"----------------------------------\n"
-        )
-        if paid == 1:
-            paid_text += user_block
-            paid_count += 1
-        else:
-            unpaid_text += user_block
-            unpaid_count += 1
+        wallet_clean = str(wlt).replace(',', '_') if wlt else "None"
+        csv_content += f"{uid},{ref_by},{ref_cnt},{submitted},{paid},{verified},{wallet_clean},{last_daily},{d_count},{total_tokens}\n"
 
-    report_content = f"📊 گزارش جامع تفکیکی وضعیت پرداخت‌ها\n\n" \
-                     f"🟢 تعداد پرداخت شده‌ها: {paid_count}\n" \
-                     f"🟡 تعداد در انتظار پرداخت: {unpaid_count}\n\n" \
-                     f"==================================\n\n" + \
-                     paid_text + "\n\n==================================\n\n" + unpaid_text
-
-    file_bytes = io.BytesIO(report_content.encode('utf-8'))
-    file_bytes.name = 'detailed_airdrop_report.txt'
-    bot.send_document(chat_id, file_bytes, caption="📁 گزارش متنی کامل و دسته‌بندی‌شده پرداخت‌ها با تمام جزئیات.", reply_markup=get_admin_reply_markup())
+    file_bytes = io.BytesIO(csv_content.encode('utf-8'))
+    file_bytes.name = 'all_users_complete_database_report.csv'
+    
+    bot.send_document(
+        chat_id, 
+        file_bytes, 
+        caption="📁 **گزارش اکسل جامع و کامل تمام اطلاعات کاربران** (شامل آیدی، ولت، تعداد رفال، وضعیت پرداخت، پاداش روزانه و تمامی جزئیات بدون کم‌وکاست).", 
+        reply_markup=get_admin_reply_markup(), 
+        parse_mode="Markdown"
+    )
 
 def show_stats_direct(chat_id):
     conn = get_db_connection()
@@ -663,11 +649,14 @@ def handle_all_messages(message):
         elif text == "🟡 اکسل در انتظار پرداخت":
             send_status_excel_report(ADMIN_CHAT_ID, status_filter=0)
             return
-        elif text == "📊 گزارش تفکیکی (فایل)":
+        elif text == "📊 گزارش تفکیکی کامل (فایل)":
             send_detailed_report_file(ADMIN_CHAT_ID)
             return
         elif text == "📈 آمار کلی ربات":
             show_stats_direct(ADMIN_CHAT_ID)
+            return
+        elif text == "🔄 به‌روزرسانی پنل ادمین":
+            bot.send_message(ADMIN_CHAT_ID, "🔄 پنل مدیریت با موفقیت به‌روزرسانی و بازنشانی شد.", reply_markup=get_admin_reply_markup())
             return
         elif text == "🔙 خروج از حالت ادمین / منوی اصلی":
             bot.send_message(ADMIN_CHAT_ID, "مجدداً پنل مدیریتی ثابت فعال است.", reply_markup=get_admin_reply_markup())
