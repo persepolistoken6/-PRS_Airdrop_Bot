@@ -15,9 +15,9 @@ MONGO_URL = os.getenv("MONGO_URL")
 if not MONGO_URL:
     raise RuntimeError("MONGO_URL environment variable is not set")
 
-# اتصال به MongoDB
+# اتصال به MongoDB با تعیین صریح نام دیتابیس
 mongo_client = MongoClient(MONGO_URL)
-db = mongo_client.get_database() # به صورت خودکار دیتابیس پیش‌فرض رو انتخاب می‌کنه
+db = mongo_client["persepolis_db"]
 users_col = db.users
 captcha_col = db.captcha
 
