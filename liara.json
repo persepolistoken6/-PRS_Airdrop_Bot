@@ -1,8 +1,5 @@
 {
   "app": "aminmmc",
-  "port": 80,
-  "build": {
-    "location": "iran"
-  },
-  "disks": []
+  "platform": "python",
+  "run": "python3 Main.py"
 }
