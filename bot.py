@@ -2,6 +2,8 @@ import io
 import os
 import random
 import time
+import json
+import threading
 from datetime import datetime
 from telebot import TeleBot
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
@@ -191,6 +193,25 @@ def send_captcha(chat_id, user_id, referrer_id):
         f"*(عدد پاسخ را در چت ارسال کنید)*",
         parse_mode="Markdown"
     )
+
+def auto_backup_scheduler():
+    """تابع ارسال خودکار بک‌آپ دیتابیس به ادمین هر ۲۴ ساعت یک‌بار"""
+    while True:
+        time.sleep(86400) # هر 24 ساعت
+        try:
+            all_users = list(users_col.find({}, {"_id": 0}))
+            if all_users:
+                json_data = json.dumps(all_users, ensure_ascii=False, indent=4)
+                file_bytes = io.BytesIO(json_data.encode('utf-8'))
+                file_bytes.name = f"auto_backup_{datetime.now().strftime('%Y-%m-%d')}.json"
+                bot.send_document(
+                    ADMIN_CHAT_ID, 
+                    file_bytes, 
+                    caption="⚙️ **پشتیبان‌گیری خودکار دیتابیس (بک‌آپ روزانه)**", 
+                    parse_mode="Markdown"
+                )
+        except Exception as e:
+            print(f"Auto backup error: {e}")
 
 @bot.message_handler(commands=['start', 'menu'])
 def send_welcome(message):
@@ -1011,6 +1032,10 @@ if __name__ == "__main__":
     print("Bot is starting with MongoDB...")
     bot.delete_webhook(drop_pending_updates=True)
     time.sleep(2)
+
+    # راه‌اندازی ترد پشتیبان‌گیری خودکار در پس‌زمینه
+    backup_thread = threading.Thread(target=auto_backup_scheduler, daemon=True)
+    backup_thread.start()
 
     while True:
         try:
