@@ -27,7 +27,9 @@ BANNER_FILE_ID = "AgACAgQAAxkBAAMfamINNXWkFr-wk1ONFWAEHF2z-vGAAsgNaxtnhwABU-cbUH
 bot = TeleBot(TOKEN, threaded=True)
 
 def get_db_connection():
-    conn = sqlite3.connect('/tmp/referrals.db', timeout=30.0)
+    db_dir = '/data' if os.path.exists('/data') else os.path.dirname(os.path.abspath(__file__))
+    db_path = os.path.join(db_dir, 'referrals.db')
+    conn = sqlite3.connect(db_path, timeout=30.0)
     return conn
 
 def init_db():
@@ -114,6 +116,8 @@ def get_main_reply_markup():
 def get_admin_reply_markup():
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row("👝 مدیریت و تایید ولت‌ها", "📊 گزارش کلی توکن‌ها")
+    markup.row("🔍 جستجوی کاربر (آیدی یا ولت)", "📁 آپلود اکسل پرداختی‌ها")
+    markup.row("🟢 اکسل پرداخت‌شده‌ها", "🟡 اکسل در انتظار پرداخت")
     markup.row("📊 گزارش تفکیکی (فایل)", "📈 آمار کلی ربات")
     markup.row("🔙 خروج از حالت ادمین / منوی اصلی")
     return markup
@@ -222,7 +226,7 @@ def send_welcome(message):
     if user_id == ADMIN_CHAT_ID:
         bot.send_message(
             user_id, 
-            "👑 *به پنل مدیریت دائمی خوش آمدید.*\nاز دستور `/search [آیدی عددی یا ولت]` برای جستجو استفاده کنید.", 
+            "👑 *به پنل مدیریت دائمی خوش آمدید.*\nاز دکمه‌های منوی پایین یا دستور `/search [آیدی یا ولت]` استفاده کنید.", 
             reply_markup=get_admin_reply_markup(), 
             parse_mode="Markdown"
         )
@@ -293,7 +297,7 @@ def admin_panel(message):
         return
     bot.send_message(
         ADMIN_CHAT_ID,
-        "👑 *پنل مدیریت ثابت فعال است.*\nبرای جستجو از دستور `/search آیدی_عددی_یا_ولت` استفاده کنید.",
+        "👑 *پنل مدیریت ثابت فعال است.*",
         reply_markup=get_admin_reply_markup(),
         parse_mode="Markdown"
     )
@@ -377,6 +381,31 @@ def send_paginated_wallets(message, offset=0, edit=False):
             pass
     else:
         bot.send_message(ADMIN_CHAT_ID, text, reply_markup=markup, parse_mode="Markdown")
+
+def send_status_excel_report(chat_id, status_filter):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id, ref_count, wallet, paid, daily_count FROM users WHERE submitted > 0 AND paid = ? ORDER BY ref_count DESC", (status_filter,))
+    rows = cursor.fetchall()
+    conn.close()
+
+    status_name = "پرداخت‌شده" if status_filter == 1 else "در انتظار پرداخت"
+    if not rows:
+        bot.send_message(chat_id, f"⚠️ هیچ کاربری در وضعیت «{status_name}» وجود ندارد.", reply_markup=get_admin_reply_markup())
+        return
+
+    csv_content = "User ID,Wallet,Referrals,Daily Bonus Count,Total Tokens,Status\n"
+    for uid, ref_cnt, wlt, paid, d_count in rows:
+        total_tokens = calculate_total_tokens(ref_cnt, d_count)
+        st_text = "Paid" if paid == 1 else "Pending"
+        csv_content += f"{uid},{wlt},{ref_cnt},{d_count},{total_tokens},{st_text}\n"
+
+    file_bytes = io.BytesIO(csv_content.encode('utf-8'))
+    file_name = 'paid_users.csv' if status_filter == 1 else 'pending_users.csv'
+    file_bytes.name = file_name
+    
+    caption_text = f"📁 فایل گزارش کاربران **{status_name}** (فرمت سازگار با اکسل/CSV)"
+    bot.send_document(chat_id, file_bytes, caption=caption_text, reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
 
 def send_detailed_report_file(chat_id):
     conn = get_db_connection()
@@ -505,6 +534,67 @@ def show_main_menu(chat_id, user_id, message_id=None, edit=False):
     except Exception as e:
         print(f"Error sending reply markup: {e}")
 
+@bot.message_handler(content_types=['document'])
+def handle_admin_documents(message):
+    if message.from_user.id != ADMIN_CHAT_ID:
+        return
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id FROM users WHERE submitted > 0")
+    valid_users = {row[0] for row in cursor.fetchall()}
+    conn.close()
+
+    try:
+        file_info = bot.get_file(message.document.file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+        file_text = downloaded_file.decode('utf-8', errors='ignore')
+        
+        lines = file_text.splitlines()
+        updated_count = 0
+        not_found_count = 0
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith("User") or line.startswith("user"):
+                continue
+            
+            parts = [p.strip() for p in line.replace(';', ',').split(',')]
+            target_id = None
+            
+            for part in parts:
+                if part.isdigit():
+                    val = int(part)
+                    if val in valid_users or val > 10000:
+                        target_id = val
+                        break
+            
+            if target_id:
+                cursor.execute("UPDATE users SET paid = 1 WHERE user_id = ?", (target_id,))
+                if cursor.rowcount > 0:
+                    updated_count += 1
+                else:
+                    not_found_count += 1
+            else:
+                not_found_count += 1
+
+        conn.commit()
+        conn.close()
+
+        bot.send_message(
+            ADMIN_CHAT_ID,
+            f"✅ **فایل پرداختی با موفقیت پردازش شد!**\n\n"
+            f"🟢 تعداد کاربرانی که وضعیت‌شان به «پرداخت‌شده» تغییر یافت: `{updated_count}` نفر\n"
+            f"⚠️ شناسایی‌نشده یا نامعتبر: `{not_found_count}` مورد",
+            reply_markup=get_admin_reply_markup(),
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        bot.send_message(ADMIN_CHAT_ID, f"❌ خطا در پردازش فایل اکسل/متنی:\n`{e}`", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
+
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
     user_id = message.from_user.id
@@ -560,6 +650,18 @@ def handle_all_messages(message):
             return
         elif text == "📊 گزارش کلی توکن‌ها":
             show_token_summary_direct(ADMIN_CHAT_ID)
+            return
+        elif text == "🔍 جستجوی کاربر (آیدی یا ولت)":
+            bot.send_message(ADMIN_CHAT_ID, "🔍 برای جستجو، دستور زیر را ارسال کنید:\n`/search [آیدی عددی یا بخشی از ولت]`", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
+            return
+        elif text == "📁 آپلود اکسل پرداختی‌ها":
+            bot.send_message(ADMIN_CHAT_ID, "📁 لطفاً فایل خروجی پرداختی خود (فرمت CSV یا متنی حاوی آیدی یا ولت کاربران) را مستقیماً در همین چت آپلود کنید تا وضعیت آن‌ها اتوماتیک به «پرداخت‌شده» تغییر یابد.", reply_markup=get_admin_reply_markup())
+            return
+        elif text == "🟢 اکسل پرداخت‌شده‌ها":
+            send_status_excel_report(ADMIN_CHAT_ID, status_filter=1)
+            return
+        elif text == "🟡 اکسل در انتظار پرداخت":
+            send_status_excel_report(ADMIN_CHAT_ID, status_filter=0)
             return
         elif text == "📊 گزارش تفکیکی (فایل)":
             send_detailed_report_file(ADMIN_CHAT_ID)
