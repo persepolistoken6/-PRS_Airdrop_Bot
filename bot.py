@@ -247,7 +247,16 @@ def send_welcome(message):
     referrer_id = int(args[1]) if len(args) > 1 and args[1].isdigit() else None
     
     if referrer_id == user_id:
-        referrer_id = None
+        bot.send_message(
+            message.chat.id, 
+            "⚠️ **شما نمی‌توانید روی لینک دعوت خودتان کلیک کنید!**\n\nلطفاً این لینک را برای دوستان خود ارسال کنید تا از طریق آن وارد ربات شوند.",
+            parse_mode="Markdown"
+        )
+        if not check_membership(user_id):
+            ask_to_join(message.chat.id, 0)
+            return
+        show_main_menu(message.chat.id, user_id)
+        return
 
     user_data = get_user_data(user_id)
     if user_data and user_data[3] >= 2:
@@ -410,7 +419,6 @@ def send_status_excel_report(chat_id, status_filter):
 def send_detailed_report_file(chat_id):
     conn = get_db_connection()
     cursor = conn.cursor()
-    # دریافت تمامی فیلدها و اطلاعات کامل تمام کاربران بدون هیچ کم و کاستی
     cursor.execute("SELECT user_id, referred_by, ref_count, submitted, paid, verified, wallet, last_daily, daily_count FROM users ORDER BY paid ASC, ref_count DESC")
     rows = cursor.fetchall()
     conn.close()
@@ -419,7 +427,6 @@ def send_detailed_report_file(chat_id):
         bot.send_message(chat_id, "⚠️ هیچ کاربری در دیتابیس ثبت نشده است.", reply_markup=get_admin_reply_markup())
         return
 
-    # تولید فایل CSV جامع و کامل از کل اطلاعات کاربران
     csv_content = "User ID,Referred By,Referral Count,Submitted Status,Paid Status,Verified Status,Wallet,Last Daily Timestamp,Daily Bonus Count,Total Tokens\n"
     for uid, ref_by, ref_cnt, submitted, paid, verified, wlt, last_daily, d_count in rows:
         total_tokens = calculate_total_tokens(ref_cnt, d_count)
