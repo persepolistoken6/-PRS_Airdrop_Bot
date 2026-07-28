@@ -5,9 +5,13 @@ import time
 import json
 import threading
 from datetime import datetime
-from telebot import TeleBot
+from telebot import TeleBot, apihelper
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from pymongo import MongoClient
+
+# تنظیم پراکسی SOCKS5 برای اتصال پایدار ربات روی لیارا
+# (به جای IP و PORT می‌توانید از یک پراکسی سالم و پرسرعت دیگر استفاده کنید)
+apihelper.proxy = {'https': 'socks5://IP:PORT'}
 
 TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
