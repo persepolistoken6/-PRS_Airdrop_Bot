@@ -1,5 +1,0 @@
-{
-  "app": "aminmmc",
-  "platform": "python",
-  "run": "python3 main.py"
-}
