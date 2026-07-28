@@ -99,8 +99,9 @@ def get_admin_reply_markup():
     markup.row("👝 مدیریت و تایید ولت‌ها", "📊 گزارش کلی توکن‌ها")
     markup.row("🔍 جستجوی کاربر (آیدی یا ولت)", "📁 آپلود اکسل پرداختی‌ها")
     markup.row("🟢 اکسل پرداخت‌شده‌ها", "🟡 اکسل در انتظار پرداخت")
-    markup.row("📊 گزارش تفکیکی کامل (فایل)", "📈 آمار کلی ربات")
-    markup.row("🔄 به‌روزرسانی پنل ادمین", "🔙 خروج از حالت ادمین / منوی اصلی")
+    markup.row("📊 گزارش تفکیکی کامل (فایل)", "📥 دریافت فوری بک‌آپ (JSON)")
+    markup.row("📈 آمار کلی ربات", "🔄 به‌روزرسانی پنل ادمین")
+    markup.row("🔙 خروج از حالت ادمین / منوی اصلی")
     return markup
 
 def register_user_after_verify(user_id, referrer_id):
@@ -194,6 +195,28 @@ def send_captcha(chat_id, user_id, referrer_id):
         parse_mode="Markdown"
     )
 
+def send_database_backup(target_chat_id):
+    """تابع کمکی برای تولید و ارسال فایل بک‌آپ دیتابیس"""
+    try:
+        all_users = list(users_col.find({}, {"_id": 0}))
+        if not all_users:
+            bot.send_message(target_chat_id, "⚠️ دیتابیس خالی است و کاربری برای بک‌آپ وجود ندارد.", reply_markup=get_admin_reply_markup())
+            return
+        
+        json_data = json.dumps(all_users, ensure_ascii=False, indent=4)
+        file_bytes = io.BytesIO(json_data.encode('utf-8'))
+        file_bytes.name = f"manual_backup_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.json"
+        
+        bot.send_document(
+            target_chat_id, 
+            file_bytes, 
+            caption="⚙️ **فایل پشتیبان کامل دیتابیس (آماده برای ایمپورت در لیارا)**", 
+            reply_markup=get_admin_reply_markup(),
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        bot.send_message(target_chat_id, f"❌ خطا در تهیه بک‌آپ:\n`{e}`", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
+
 def auto_backup_scheduler():
     """تابع ارسال خودکار بک‌آپ دیتابیس به ادمین هر ۲۴ ساعت یک‌بار"""
     while True:
@@ -207,7 +230,7 @@ def auto_backup_scheduler():
                 bot.send_document(
                     ADMIN_CHAT_ID, 
                     file_bytes, 
-                    caption="⚙️ **پشتیبان‌گیری خودکار دیتابیس (بک‌آپ روزانه)**", 
+                    caption="⚙️ **پشتیبان‌گیری خودکار روزانه دیتابیس**", 
                     parse_mode="Markdown"
                 )
         except Exception as e:
@@ -633,6 +656,9 @@ def handle_all_messages(message):
             return
         elif text == "📊 گزارش تفکیکی کامل (فایل)":
             send_detailed_report_file(ADMIN_CHAT_ID)
+            return
+        elif text == "📥 دریافت فوری بک‌آپ (JSON)":
+            send_database_backup(ADMIN_CHAT_ID)
             return
         elif text == "📈 آمار کلی ربات":
             show_stats_direct(ADMIN_CHAT_ID)
