@@ -246,16 +246,13 @@ def send_welcome(message):
     args = message.text.split()
     referrer_id = int(args[1]) if len(args) > 1 and args[1].isdigit() else None
     
+    # اصلاح شده: اگر کاربر روی لینک خود کلیک کرد، فقط اخطار داده شود و متوقف گردد
     if referrer_id == user_id:
         bot.send_message(
             message.chat.id, 
             "⚠️ **شما نمی‌توانید روی لینک دعوت خودتان کلیک کنید!**\n\nلطفاً این لینک را برای دوستان خود ارسال کنید تا از طریق آن وارد ربات شوند.",
             parse_mode="Markdown"
         )
-        if not check_membership(user_id):
-            ask_to_join(message.chat.id, 0)
-            return
-        show_main_menu(message.chat.id, user_id)
         return
 
     user_data = get_user_data(user_id)
