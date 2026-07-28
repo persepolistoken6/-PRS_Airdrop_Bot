@@ -15,9 +15,9 @@ MONGO_URL = os.getenv("MONGO_URL")
 if not MONGO_URL:
     raise RuntimeError("MONGO_URL environment variable is not set")
 
-# اتصال مستقیم و بدون خطا به دیتابیس
+# اتصال به MongoDB با تعیین صریح نام دیتابیس
 mongo_client = MongoClient(MONGO_URL)
-db = mongo_client.persepolis_db
+db = mongo_client["persepolis_db"]
 users_col = db.users
 captcha_col = db.captcha
 
@@ -826,6 +826,32 @@ def handle_callbacks(call):
             pass
         
         show_main_menu(chat_id, user_id)
+        return
+
+    if call.data.startswith("admin_pay_"):
+        if user_id != ADMIN_CHAT_ID:
+            return
+        parts = call.data.split("_")
+        target_uid = int(parts[2])
+        action = parts[3]
+        
+        new_paid_status = 1 if action == "yes" else 0
+        users_col.update_one({"user_id": target_uid}, {"$set": {"paid": new_paid_status}})
+        
+        bot.answer_callback_query(call.id, f"✅ وضعیت کاربر {target_uid} به‌روز شد.")
+        
+        try:
+            send_paginated_wallets(call.message, offset=0, edit=True)
+        except Exception:
+            pass
+        return
+
+    if call.data.startswith("admin_page_"):
+        if user_id != ADMIN_CHAT_ID:
+            return
+        offset = int(call.data.split("_")[2])
+        bot.answer_callback_query(call.id)
+        send_paginated_wallets(call.message, offset=offset, edit=True)
         return
 
     if call.data == "refresh_menu":
