@@ -109,7 +109,6 @@ def get_admin_reply_markup():
     markup.row("🟢 اکسل پرداخت‌شده‌ها", "🟡 اکسل در انتظار پرداخت")
     markup.row("📊 گزارش تفکیکی کامل (فایل)", "📥 دریافت فوری بک‌آپ (JSON)")
     markup.row("📈 آمار کلی ربات", "🔄 به‌روزرسانی پنل ادمین")
-    # اضافه شدن دکمه‌های ارسال همگانی و پیام شخصی 👇
     markup.row("📢 ارسال همگانی پیام", "✉️ ارسال پیام شخصی به کاربر")
     markup.row("🔴 خاموش کردن ربات", "🟢 روشن کردن ربات")
     markup.row("🔙 خروج از حالت ادمین / منوی اصلی")
@@ -258,7 +257,6 @@ def send_welcome(message):
         )
         return
 
-    # بررسی وضعیت خاموش بودن ربات برای کاربران عادی
     if is_bot_globally_disabled():
         bot.send_message(message.chat.id, "🛑 ربات در حال حاضر توسط مدیریت موقتاً خاموش شده است. لطفاً بعداً مراجعه کنید.")
         return
@@ -517,6 +515,7 @@ def show_main_menu(chat_id, user_id, message_id=None, edit=False):
         f"▫️ پاداش روزانه: `{DAILY_REWARD} PRS` (فعال‌سازی پس از تکمیل ۵ دعوت و هر ۲۴ ساعت یک‌بار)\n"
         f"▫️ پاداش به ازای هر دعوت مازاد: `{EXTRA_REWARD} PRS`\n\n"
         f"📊 *وضعیت حساب شما:*\n"
+        f"🆔 آیدی عددی شما: `{user_id}`\n"
         f"👥 دعوت‌های شما: `{ref_count} / {REQUIRED_REFERRALS}`\n"
         f"🏅 رتبه شما در بین کاربران: `{user_rank}`\n"
         f"🎁 مجموع توکن کسب‌شده: `{total_earned:,} PRS`"
@@ -614,14 +613,11 @@ def handle_all_messages(message):
     persian_to_english = str.maketrans('۰۱۲۳۴۵۶۷۸۹', '0123456789')
     text = text.translate(persian_to_english)
     
-    # بررسی روشن/خاموش بودن ربات برای کاربران عادی
     if is_bot_globally_disabled() and user_id != ADMIN_CHAT_ID:
         bot.send_message(chat_id, "🛑 ربات در حال حاضر توسط مدیریت موقتاً خاموش شده است. لطفاً بعداً مراجعه کنید.")
         return
 
-    # دستورات ادمین برای مدیریت روشن و خاموش کردن ربات
     if user_id == ADMIN_CHAT_ID:
-        # مدیریت وضعیت انتظار برای ارسال همگانی
         admin_state = settings_col.find_one({"key": "admin_state"})
         if admin_state:
             state_val = admin_state.get("state")
@@ -644,7 +640,6 @@ def handle_all_messages(message):
                         except Exception:
                             fail_count += 1
                         
-                        # مکانیزم ضد اسپم: هر ۳۰ پیام حدود ۱ ثانیه مکث (یا ارسال با ریت کنترل‌شده)
                         if (idx + 1) % 30 == 0:
                             time.sleep(1)
                     
@@ -811,6 +806,7 @@ def handle_all_messages(message):
         
         status_msg = (
             f"📊 *اطلاعات حساب و وضعیت شما:*\n\n"
+            f"🆔 آیدی عددی شما: `{user_id}`\n"
             f"👥 تعداد دعوت‌ها: `{ref_count} / {REQUIRED_REFERRALS}`\n"
             f"🎁 مجموع توکن کسب‌شده: `{total_earned:,} PRS`\n"
             f"🏅 رتبه شما در ایردراپ: `{user_rank}`\n"
@@ -1104,6 +1100,7 @@ def handle_callbacks(call):
         
         status_msg = (
             f"📊 *اطلاعات حساب و وضعیت شما:*\n\n"
+            f"🆔 آیدی عددی شما: `{user_id}`\n"
             f"👥 تعداد دعوت‌ها: `{ref_count} / {REQUIRED_REFERRALS}`\n"
             f"🎁 مجموع توکن کسب‌شده: `{total_earned:,} PRS`\n"
             f"🏅 رتبه شما در ایردراپ: `{user_rank}`\n"
