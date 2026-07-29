@@ -58,7 +58,8 @@ def get_user_data(user_id):
         user.get("verified", 0),
         user.get("last_daily", 0),
         user.get("daily_count", 0),
-        user.get("wallet", None)
+        user.get("wallet", None),
+        user.get("paid_amount", 0)
     )
 
 def calculate_tokens(ref_count):
@@ -128,7 +129,8 @@ def register_user_after_verify(user_id, referrer_id):
             "verified": 1,
             "wallet": None,
             "last_daily": 0,
-            "daily_count": 0
+            "daily_count": 0,
+            "paid_amount": 0
         })
         
         if actual_referrer:
@@ -383,21 +385,24 @@ def send_paginated_wallets(message, offset=0, edit=False):
         wlt = u.get("wallet", "None")
         paid = u.get("paid", 0)
         d_count = u.get("daily_count", 0)
+        paid_amt = u.get("paid_amount", 0)
         
         total_tokens = calculate_total_tokens(ref_cnt, d_count)
+        remaining_tokens = max(0, total_tokens - paid_amt)
         base_used, extra_count = get_ref_details(ref_cnt)
         status_str = "✅ پرداخت‌شده" if paid == 1 else "⏳ در انتظار پرداخت"
         
         text += f"📌 آیدی عددی: `{uid}`\n" \
                 f"👝 ولت: `{wlt}`\n" \
                 f"👥 دعوت ثابت: {base_used} | مازاد: {extra_count} (کل: {ref_cnt})\n" \
-                f"🎁 توکن کل: `{total_tokens:,} PRS` (پاداش روزانه: {d_count} بار)\n" \
+                f"🎁 کل توکن: `{total_tokens:,}` | پرداخت‌شده: `{paid_amt:,}` | باقی‌مانده: `{remaining_tokens:,}` PRS\n" \
                 f"وضعیت: *{status_str}*\n" \
                 f"----------------------------------\n"
         
         btn_pay = InlineKeyboardButton(f"✅ تایید ({uid})", callback_data=f"admin_pay_{uid}_yes")
         btn_unpay = InlineKeyboardButton(f"❌ لغو ({uid})", callback_data=f"admin_pay_{uid}_no")
-        markup.row(btn_pay, btn_unpay)
+        btn_unpaid = InlineKeyboardButton(f"⚠️ پرداخت نشده ({uid})", callback_data=f"admin_pay_{uid}_unpaid")
+        markup.row(btn_pay, btn_unpay, btn_unpaid)
 
     nav_buttons = []
     if offset > 0:
@@ -423,17 +428,18 @@ def send_status_excel_report(chat_id, status_filter):
         bot.send_message(chat_id, f"⚠️ هیچ کاربری در وضعیت «{status_name}» وجود ندارد.", reply_markup=get_admin_reply_markup())
         return
 
-    csv_content = "User ID,Wallet,Referrals,Daily Bonus Count,Total Tokens,Status\n"
+    csv_content = "User ID,Wallet,Referrals,Daily Bonus Count,Total Tokens,Paid Amount,Status\n"
     for u in rows:
         uid = u.get("user_id")
         ref_cnt = u.get("ref_count", 0)
         wlt = u.get("wallet", "None")
         paid = u.get("paid", 0)
         d_count = u.get("daily_count", 0)
+        paid_amt = u.get("paid_amount", 0)
         
         total_tokens = calculate_total_tokens(ref_cnt, d_count)
         st_text = "Paid" if paid == 1 else "Pending"
-        csv_content += f"{uid},{wlt},{ref_cnt},{d_count},{total_tokens},{st_text}\n"
+        csv_content += f"{uid},{wlt},{ref_cnt},{d_count},{total_tokens},{paid_amt},{st_text}\n"
 
     file_bytes = io.BytesIO(csv_content.encode('utf-8'))
     file_name = 'paid_users.csv' if status_filter == 1 else 'pending_users.csv'
@@ -449,7 +455,7 @@ def send_detailed_report_file(chat_id):
         bot.send_message(chat_id, f"⚠️ هیچ کاربری در دیتابیس ثبت نشده است.", reply_markup=get_admin_reply_markup())
         return
 
-    csv_content = "User ID,Referred By,Referral Count,Submitted Status,Paid Status,Verified Status,Wallet,Last Daily Timestamp,Daily Bonus Count,Total Tokens\n"
+    csv_content = "User ID,Referred By,Referral Count,Submitted Status,Paid Status,Verified Status,Wallet,Last Daily Timestamp,Daily Bonus Count,Total Tokens,Paid Amount\n"
     for u in rows:
         uid = u.get("user_id")
         ref_by = u.get("referred_by", "None")
@@ -460,9 +466,10 @@ def send_detailed_report_file(chat_id):
         wlt = str(u.get("wallet", "None")).replace(',', '_')
         last_daily = u.get("last_daily", 0)
         d_count = u.get("daily_count", 0)
+        paid_amt = u.get("paid_amount", 0)
         
         total_tokens = calculate_total_tokens(ref_cnt, d_count)
-        csv_content += f"{uid},{ref_by},{ref_cnt},{submitted},{paid},{verified},{wlt},{last_daily},{d_count},{total_tokens}\n"
+        csv_content += f"{uid},{ref_by},{ref_cnt},{submitted},{paid},{verified},{wlt},{last_daily},{d_count},{total_tokens},{paid_amt}\n"
 
     file_bytes = io.BytesIO(csv_content.encode('utf-8'))
     file_bytes.name = 'all_users_complete_database_report.csv'
@@ -491,6 +498,8 @@ def show_main_menu(chat_id, user_id, message_id=None, edit=False):
     ref_count = user_data[0] if user_data else 0
     d_count = user_data[5] if user_data and len(user_data) > 5 else 0
     total_earned = calculate_total_tokens(ref_count, d_count)
+    paid_amt = user_data[7] if user_data and len(user_data) > 7 else 0
+    remaining_earned = max(0, total_earned - paid_amt)
     user_rank = get_user_rank(user_id)
     
     markup = InlineKeyboardMarkup()
@@ -518,7 +527,9 @@ def show_main_menu(chat_id, user_id, message_id=None, edit=False):
         f"🆔 آیدی عددی شما: `{user_id}`\n"
         f"👥 دعوت‌های شما: `{ref_count} / {REQUIRED_REFERRALS}`\n"
         f"🏅 رتبه شما در بین کاربران: `{user_rank}`\n"
-        f"🎁 مجموع توکن کسب‌شده: `{total_earned:,} PRS`"
+        f"🎁 کل توکن کسب‌شده: `{total_earned:,} PRS`\n"
+        f"💳 توکن پرداخت شده: `{paid_amt:,} PRS`\n"
+        f"💰 موجودی باقی‌مانده: `{remaining_earned:,} PRS`"
     )
     
     reply_markup_kb = get_main_reply_markup()
@@ -585,8 +596,12 @@ def handle_admin_documents(message):
                         break
             
             if target_id:
-                res = users_col.update_one({"user_id": target_id}, {"$set": {"paid": 1}})
-                if res.modified_count > 0 or res.matched_count > 0:
+                usr = users_col.find_one({"user_id": target_id})
+                if usr:
+                    r_cnt = usr.get("ref_count", 0)
+                    d_cnt = usr.get("daily_count", 0)
+                    tot = calculate_total_tokens(r_cnt, d_cnt)
+                    users_col.update_one({"user_id": target_id}, {"$set": {"paid": 1, "paid_amount": tot}})
                     updated_count += 1
                 else:
                     not_found_count += 1
@@ -596,7 +611,7 @@ def handle_admin_documents(message):
         bot.send_message(
             ADMIN_CHAT_ID,
             f"✅ **فایل پرداختی با موفقیت پردازش شد!**\n\n"
-            f"🟢 تعداد کاربرانی که وضعیت‌شان به «پرداخت‌شده» تغییر یافت: `{updated_count}` نفر\n"
+            f"🟢 تعداد کاربرانی که وضعیت‌شان به «پرداخت‌شده» تغییر یافت و موجودی‌شان ثبت شد: `{updated_count}` نفر\n"
             f"⚠️ شناسایی‌نشده یا نامعتبر: `{not_found_count}` مورد",
             reply_markup=get_admin_reply_markup(),
             parse_mode="Markdown"
@@ -674,6 +689,53 @@ def handle_all_messages(message):
                     bot.send_message(ADMIN_CHAT_ID, f"❌ خطا در ارسال پیام به کاربر:\n`{e}`", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
                 return
 
+            elif state_val == "waiting_manual_pay_id":
+                if text == "❌ انصراف":
+                    settings_col.delete_one({"key": "admin_state"})
+                    bot.send_message(ADMIN_CHAT_ID, "❌ ثبت پرداخت دستی لغو شد.", reply_markup=get_admin_reply_markup())
+                    return
+                if not text.isdigit():
+                    bot.send_message(ADMIN_CHAT_ID, "⚠️ لطفاً یک آیدی عددی معتبر وارد کنید:")
+                    return
+                target_uid = int(text)
+                usr = users_col.find_one({"user_id": target_uid})
+                if not usr:
+                    bot.send_message(ADMIN_CHAT_ID, "❌ کاربری با این آیدی در دیتابیس یافت نشد. لطفاً آیدی دیگری وارد کنید:")
+                    return
+                settings_col.update_one({"key": "admin_state"}, {"$set": {"state": "waiting_manual_pay_amount", "target_uid": target_uid}}, upsert=True)
+                r_cnt = usr.get("ref_count", 0)
+                d_cnt = usr.get("daily_count", 0)
+                tot = calculate_total_tokens(r_cnt, d_cnt)
+                bot.send_message(ADMIN_CHAT_ID, f"👤 کاربر پیدا شد.\n🎁 کل توکن محاسبه‌شده برای این کاربر: `{tot:,} PRS`\n\nحالا مقدار توکنی که می‌خواهید به عنوان پرداخت ثبت شود را وارد کنید (یا بنویسید `all` تا کل مبلغ ثبت شود):", reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).row("❌ انصراف"), parse_mode="Markdown")
+                return
+
+            elif state_val == "waiting_manual_pay_amount":
+                if text == "❌ انصراف":
+                    settings_col.delete_one({"key": "admin_state"})
+                    bot.send_message(ADMIN_CHAT_ID, "❌ ثبت پرداخت دستی لغو شد.", reply_markup=get_admin_reply_markup())
+                    return
+                target_uid = admin_state.get("target_uid")
+                settings_col.delete_one({"key": "admin_state"})
+                usr = users_col.find_one({"user_id": target_uid})
+                if not usr:
+                    bot.send_message(ADMIN_CHAT_ID, "❌ خطا: کاربر یافت نشد.", reply_markup=get_admin_reply_markup())
+                    return
+                r_cnt = usr.get("ref_count", 0)
+                d_cnt = usr.get("daily_count", 0)
+                tot = calculate_total_tokens(r_cnt, d_cnt)
+                
+                if text.lower() == "all":
+                    pay_amt = tot
+                elif text.isdigit():
+                    pay_amt = int(text)
+                else:
+                    bot.send_message(ADMIN_CHAT_ID, "⚠️ مقدار وارد شده نامعتبر است. عملیات لغو شد.", reply_markup=get_admin_reply_markup())
+                    return
+                
+                users_col.update_one({"user_id": target_uid}, {"$set": {"paid": 1, "paid_amount": pay_amt}})
+                bot.send_message(ADMIN_CHAT_ID, f"✅ پرداخت دستی با موفقیت ثبت شد!\n🆔 آیدی: `{target_uid}`\n💳 مبلغ ثبت‌شده: `{pay_amt:,} PRS`", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
+                return
+
         if text == "🔴 خاموش کردن ربات":
             settings_col.replace_one({"key": "bot_status"}, {"key": "bot_status", "status": "off"}, upsert=True)
             bot.send_message(ADMIN_CHAT_ID, "🔴 ربات با موفقیت **خاموش** شد. کاربران عادی دیگر قادر به استفاده از ربات نخواهند بود.", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
@@ -738,9 +800,10 @@ def handle_all_messages(message):
                 wlt = r.get("wallet", "None")
                 submitted = r.get("submitted", 0)
                 paid = r.get("paid", 0)
+                paid_amt = r.get("paid_amount", 0)
                 total_tokens = calculate_total_tokens(ref_cnt, d_cnt)
                 base_used, extra_count = get_ref_details(ref_cnt)
-                res += f"👤 آیدی عددی: `{uid}`\n👥 کل رفال: {ref_cnt} (ثابت: {base_used} | مازاد: {extra_count})\n🎁 توکن کل: {total_tokens:,} PRS\n👝 ولت: `{wlt}`\n📌 ثبت فرم: `{submitted}` | پرداخت: `{paid}`\n---\n"
+                res += f"👤 آیدی عددی: `{uid}`\n👥 کل رفال: {ref_cnt} (ثابت: {base_used} | مازاد: {extra_count})\n🎁 توکن کل: {total_tokens:,} | پرداخت شده: {paid_amt:,} PRS\n👝 ولت: `{wlt}`\n📌 ثبت فرم: `{submitted}` | پرداخت: `{paid}`\n---\n"
             bot.send_message(ADMIN_CHAT_ID, res, reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
             return
         elif text.startswith("/deleteuser "):
@@ -801,6 +864,8 @@ def handle_all_messages(message):
         ref_count = user_data[0] if user_data else 0
         d_count = user_data[5] if user_data and len(user_data) > 5 else 0
         total_earned = calculate_total_tokens(ref_count, d_count)
+        paid_amt = user_data[7] if user_data and len(user_data) > 7 else 0
+        remaining_earned = max(0, total_earned - paid_amt)
         wallet = user_data[6] if user_data and len(user_data) > 6 and user_data[6] else "ثبت نشده"
         user_rank = get_user_rank(user_id)
         
@@ -808,7 +873,9 @@ def handle_all_messages(message):
             f"📊 *اطلاعات حساب و وضعیت شما:*\n\n"
             f"🆔 آیدی عددی شما: `{user_id}`\n"
             f"👥 تعداد دعوت‌ها: `{ref_count} / {REQUIRED_REFERRALS}`\n"
-            f"🎁 مجموع توکن کسب‌شده: `{total_earned:,} PRS`\n"
+            f"🎁 کل توکن کسب‌شده: `{total_earned:,} PRS`\n"
+            f"💳 توکن پرداخت شده: `{paid_amt:,} PRS`\n"
+            f"💰 موجودی باقی‌مانده: `{remaining_earned:,} PRS`\n"
             f"🏅 رتبه شما در ایردراپ: `{user_rank}`\n"
             f"👝 آدرس ولت فعلی: `{wallet}`"
         )
@@ -974,8 +1041,18 @@ def handle_callbacks(call):
         target_uid = int(parts[2])
         action = parts[3]
         
-        new_paid_status = 1 if action == "yes" else 0
-        users_col.update_one({"user_id": target_uid}, {"$set": {"paid": new_paid_status}})
+        usr = users_col.find_one({"user_id": target_uid})
+        if usr:
+            r_cnt = usr.get("ref_count", 0)
+            d_cnt = usr.get("daily_count", 0)
+            tot_tokens = calculate_total_tokens(r_cnt, d_cnt)
+            
+            if action == "yes":
+                users_col.update_one({"user_id": target_uid}, {"$set": {"paid": 1, "paid_amount": tot_tokens}})
+            elif action == "no":
+                users_col.update_one({"user_id": target_uid}, {"$set": {"paid": 0}})
+            elif action == "unpaid":
+                users_col.update_one({"user_id": target_uid}, {"$set": {"paid": 0, "paid_amount": 0}})
         
         bot.answer_callback_query(call.id, f"✅ وضعیت کاربر {target_uid} به‌روز شد.")
         
@@ -1095,6 +1172,8 @@ def handle_callbacks(call):
         ref_count = user_data[0] if user_data else 0
         d_count = user_data[5] if user_data and len(user_data) > 5 else 0
         total_earned = calculate_total_tokens(ref_count, d_count)
+        paid_amt = user_data[7] if user_data and len(user_data) > 7 else 0
+        remaining_earned = max(0, total_earned - paid_amt)
         wallet = user_data[6] if user_data and len(user_data) > 6 and user_data[6] else "ثبت نشده"
         user_rank = get_user_rank(user_id)
         
@@ -1102,7 +1181,9 @@ def handle_callbacks(call):
             f"📊 *اطلاعات حساب و وضعیت شما:*\n\n"
             f"🆔 آیدی عددی شما: `{user_id}`\n"
             f"👥 تعداد دعوت‌ها: `{ref_count} / {REQUIRED_REFERRALS}`\n"
-            f"🎁 مجموع توکن کسب‌شده: `{total_earned:,} PRS`\n"
+            f"🎁 کل توکن کسب‌شده: `{total_earned:,} PRS`\n"
+            f"💳 توکن پرداخت شده: `{paid_amt:,} PRS`\n"
+            f"💰 موجودی باقی‌مانده: `{remaining_earned:,} PRS`\n"
             f"🏅 رتبه شما در ایردراپ: `{user_rank}`\n"
             f"👝 آدرس ولت فعلی: `{wallet}`"
         )
