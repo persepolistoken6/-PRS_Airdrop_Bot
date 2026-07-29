@@ -22,6 +22,7 @@ mongo_client = MongoClient(MONGO_URL)
 db = mongo_client["persepolis_db"]
 users_col = db.users
 captcha_col = db.captcha
+settings_col = db.bot_settings  # کالکشن جدید برای ذخیره تنظیمات ربات (مانند وضعیت روشن/خاموش)
 
 BOT_USERNAME = "PRS_Airdrop_Bot"
 CHANNEL_ID = "@persepolisToken6"
@@ -38,6 +39,13 @@ MAX_TOTAL_TOKENS_LIMIT = 500_000_000
 BANNER_FILE_ID = "AgACAgQAAxkBAAMfamINNXWkFr-wk1ONFWAEHF2z-vGAAsgNaxtnhwABU-cbUHZe_7c6AQADAgADeQADPQQ"
 
 bot = TeleBot(TOKEN, threaded=True)
+
+def is_bot_globally_disabled():
+    """بررسی اینکه آیا ربات توسط ادمین خاموش شده است یا خیر"""
+    setting = settings_col.find_one({"key": "bot_status"})
+    if setting and setting.get("status") == "off":
+        return True
+    return False
 
 def get_user_data(user_id):
     user = users_col.find_one({"user_id": user_id})
@@ -101,6 +109,8 @@ def get_admin_reply_markup():
     markup.row("🟢 اکسل پرداخت‌شده‌ها", "🟡 اکسل در انتظار پرداخت")
     markup.row("📊 گزارش تفکیکی کامل (فایل)", "📥 دریافت فوری بک‌آپ (JSON)")
     markup.row("📈 آمار کلی ربات", "🔄 به‌روزرسانی پنل ادمین")
+    # اضافه شدن دکمه‌های کنترل روشن/خاموش ربات 👇
+    markup.row("🔴 خاموش کردن ربات", "🟢 روشن کردن ربات")
     markup.row("🔙 خروج از حالت ادمین / منوی اصلی")
     return markup
 
@@ -196,7 +206,6 @@ def send_captcha(chat_id, user_id, referrer_id):
     )
 
 def send_database_backup(target_chat_id):
-    """تابع کمکی برای تولید و ارسال فایل بک‌آپ دیتابیس"""
     try:
         all_users = list(users_col.find({}, {"_id": 0}))
         if not all_users:
@@ -218,9 +227,8 @@ def send_database_backup(target_chat_id):
         bot.send_message(target_chat_id, f"❌ خطا در تهیه بک‌آپ:\n`{e}`", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
 
 def auto_backup_scheduler():
-    """تابع ارسال خودکار بک‌آپ دیتابیس به ادمین هر ۲۴ ساعت یک‌بار"""
     while True:
-        time.sleep(86400) # هر 24 ساعت
+        time.sleep(86400)
         try:
             all_users = list(users_col.find({}, {"_id": 0}))
             if all_users:
@@ -247,6 +255,11 @@ def send_welcome(message):
             reply_markup=get_admin_reply_markup(), 
             parse_mode="Markdown"
         )
+        return
+
+    # بررسی وضعیت خاموش بودن ربات برای کاربران عادی
+    if is_bot_globally_disabled():
+        bot.send_message(message.chat.id, "🛑 ربات در حال حاضر توسط مدیریت موقتاً خاموش شده است. لطفاً بعداً مراجعه کنید.")
         return
 
     if is_airdrop_finished():
@@ -600,43 +613,22 @@ def handle_all_messages(message):
     persian_to_english = str.maketrans('۰۱۲۳۴۵۶۷۸۹', '0123456789')
     text = text.translate(persian_to_english)
     
-    captcha_data = captcha_col.find_one({"user_id": user_id})
-
-    if captcha_data:
-        n1 = captcha_data["num1"]
-        n2 = captcha_data["num2"]
-        correct_ans = captcha_data["answer"]
-        referrer_id = captcha_data["pending_referrer"]
-
-        if text.isdigit() and int(text) == correct_ans:
-            captcha_col.delete_one({"user_id": user_id})
-            
-            if not check_membership(user_id):
-                ask_to_join(chat_id, referrer_id if referrer_id else 0)
-                return
-
-            register_user_after_verify(user_id, referrer_id)
-            show_main_menu(chat_id, user_id)
-        else:
-            new_n1 = random.randint(1, 10)
-            new_n2 = random.randint(1, 10)
-            new_correct_ans = new_n1 + new_n2
-
-            captcha_col.update_one(
-                {"user_id": user_id},
-                {"$set": {"num1": new_n1, "num2": new_n2, "answer": new_correct_ans}}
-            )
-
-            bot.send_message(
-                chat_id, 
-                f"❌ پاسخ اشتباه است!\n\n"
-                f"🛡 یک سوال امنیتی جدید برای شما ارسال شد:\n"
-                f"❓ لطفاً حاصل جمع {new_n1} + {new_n2} را بفرستید:"
-            )
+    # بررسی روشن/خاموش بودن ربات برای کاربران عادی
+    if is_bot_globally_disabled() and user_id != ADMIN_CHAT_ID:
+        bot.send_message(chat_id, "🛑 ربات در حال حاضر توسط مدیریت موقتاً خاموش شده است. لطفاً بعداً مراجعه کنید.")
         return
 
+    # دستورات ادمین برای مدیریت روشن و خاموش کردن ربات
     if user_id == ADMIN_CHAT_ID:
-        if text == "👝 مدیریت و تایید ولت‌ها":
+        if text == "🔴 خاموش کردن ربات":
+            settings_col.replace_one({"key": "bot_status"}, {"key": "bot_status", "status": "off"}, upsert=True)
+            bot.send_message(ADMIN_CHAT_ID, "🔴 ربات با موفقیت **خاموش** شد. کاربران عادی دیگر قادر به استفاده از ربات نخواهند بود.", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
+            return
+        elif text == "🟢 روشن کردن ربات":
+            settings_col.replace_one({"key": "bot_status"}, {"key": "bot_status", "status": "on"}, upsert=True)
+            bot.send_message(ADMIN_CHAT_ID, "🟢 ربات با موفقیت **روشن** شد و به حالت عادی برگشت.", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
+            return
+        elif text == "👝 مدیریت و تایید ولت‌ها":
             send_paginated_wallets(message, offset=0)
             return
         elif text == "📊 گزارش کلی توکن‌ها":
@@ -710,6 +702,41 @@ def handle_all_messages(message):
                     pass
             bot.send_message(ADMIN_CHAT_ID, f"✅ ارسال همگانی با موفقیت به {success_count} کاربر انجام شد.", reply_markup=get_admin_reply_markup())
             return
+
+    captcha_data = captcha_col.find_one({"user_id": user_id})
+
+    if captcha_data:
+        n1 = captcha_data["num1"]
+        n2 = captcha_data["num2"]
+        correct_ans = captcha_data["answer"]
+        referrer_id = captcha_data["pending_referrer"]
+
+        if text.isdigit() and int(text) == correct_ans:
+            captcha_col.delete_one({"user_id": user_id})
+            
+            if not check_membership(user_id):
+                ask_to_join(chat_id, referrer_id if referrer_id else 0)
+                return
+
+            register_user_after_verify(user_id, referrer_id)
+            show_main_menu(chat_id, user_id)
+        else:
+            new_n1 = random.randint(1, 10)
+            new_n2 = random.randint(1, 10)
+            new_correct_ans = new_n1 + new_n2
+
+            captcha_col.update_one(
+                {"user_id": user_id},
+                {"$set": {"num1": new_n1, "num2": new_n2, "answer": new_correct_ans}}
+            )
+
+            bot.send_message(
+                chat_id, 
+                f"❌ پاسخ اشتباه است!\n\n"
+                f"🛡 یک سوال امنیتی جدید برای شما ارسال شد:\n"
+                f"❓ لطفاً حاصل جمع {new_n1} + {new_n2} را بفرستید:"
+            )
+        return
 
     if is_airdrop_finished() and user_id != ADMIN_CHAT_ID:
         bot.send_message(user_id, "🛑 کل توکن های ایردارپ ( ۵۰۰ میلیون PRS) توسط شرکت کننده های این ایردراپ استخراج شد و این ربات غیر فعال شد به زودی تمام توکن ها بین کاربران توزیع خواهد شد.")
@@ -863,6 +890,10 @@ def handle_callbacks(call):
     user_id = call.from_user.id
     chat_id = call.message.chat.id
     
+    if is_bot_globally_disabled() and user_id != ADMIN_CHAT_ID:
+        bot.answer_callback_query(call.id, "🛑 ربات در حال حاضر توسط مدیریت خاموش است.", show_alert=True)
+        return
+
     if is_airdrop_finished() and user_id != ADMIN_CHAT_ID:
         bot.answer_callback_query(call.id, "🛑 ایردراپ به اتمام رسید.", show_alert=True)
         return
@@ -1059,7 +1090,6 @@ if __name__ == "__main__":
     bot.delete_webhook(drop_pending_updates=True)
     time.sleep(2)
 
-    # راه‌اندازی ترد پشتیبان‌گیری خودکار در پس‌زمینه
     backup_thread = threading.Thread(target=auto_backup_scheduler, daemon=True)
     backup_thread.start()
 
