@@ -109,7 +109,8 @@ def get_admin_reply_markup():
     markup.row("🟢 اکسل پرداخت‌شده‌ها", "🟡 اکسل در انتظار پرداخت")
     markup.row("📊 گزارش تفکیکی کامل (فایل)", "📥 دریافت فوری بک‌آپ (JSON)")
     markup.row("📈 آمار کلی ربات", "🔄 به‌روزرسانی پنل ادمین")
-    # اضافه شدن دکمه‌های کنترل روشن/خاموش ربات 👇
+    # اضافه شدن دکمه‌های ارسال همگانی و پیام شخصی 👇
+    markup.row("📢 ارسال همگانی پیام", "✉️ ارسال پیام شخصی به کاربر")
     markup.row("🔴 خاموش کردن ربات", "🟢 روشن کردن ربات")
     markup.row("🔙 خروج از حالت ادمین / منوی اصلی")
     return markup
@@ -447,7 +448,7 @@ def send_detailed_report_file(chat_id):
     rows = list(users_col.find({}).sort([("paid", 1), ("ref_count", -1)]))
 
     if not rows:
-        bot.send_message(chat_id, "⚠️ هیچ کاربری در دیتابیس ثبت نشده است.", reply_markup=get_admin_reply_markup())
+        bot.send_message(chat_id, f"⚠️ هیچ کاربری در دیتابیس ثبت نشده است.", reply_markup=get_admin_reply_markup())
         return
 
     csv_content = "User ID,Referred By,Referral Count,Submitted Status,Paid Status,Verified Status,Wallet,Last Daily Timestamp,Daily Bonus Count,Total Tokens\n"
@@ -620,6 +621,64 @@ def handle_all_messages(message):
 
     # دستورات ادمین برای مدیریت روشن و خاموش کردن ربات
     if user_id == ADMIN_CHAT_ID:
+        # مدیریت وضعیت انتظار برای ارسال همگانی
+        admin_state = settings_col.find_one({"key": "admin_state"})
+        if admin_state:
+            state_val = admin_state.get("state")
+            if state_val == "waiting_broadcast":
+                settings_col.delete_one({"key": "admin_state"})
+                if text == "❌ انصراف":
+                    bot.send_message(ADMIN_CHAT_ID, "❌ ارسال همگانی لغو شد.", reply_markup=get_admin_reply_markup())
+                    return
+                
+                bot.send_message(ADMIN_CHAT_ID, "🚀 عملیات ارسال همگانی با مکانیزم ضد اسپم آغاز شد...", reply_markup=get_admin_reply_markup())
+                
+                def run_broadcast():
+                    all_users = list(users_col.find({}, {"user_id": 1}))
+                    success_count = 0
+                    fail_count = 0
+                    for idx, u in enumerate(all_users):
+                        try:
+                            bot.send_message(u["user_id"], text)
+                            success_count += 1
+                        except Exception:
+                            fail_count += 1
+                        
+                        # مکانیزم ضد اسپم: هر ۳۰ پیام حدود ۱ ثانیه مکث (یا ارسال با ریت کنترل‌شده)
+                        if (idx + 1) % 30 == 0:
+                            time.sleep(1)
+                    
+                    bot.send_message(
+                        ADMIN_CHAT_ID,
+                        f"📊 **گزارش پایان ارسال همگانی:**\n\n"
+                        f"✅ ارسال موفق: `{success_count}` کاربر\n"
+                        f"❌ ارسال ناموفق (بلاک شده یا غیرفعال): `{fail_count}` کاربر",
+                        reply_markup=get_admin_reply_markup(),
+                        parse_mode="Markdown"
+                    )
+                
+                threading.Thread(target=run_broadcast, daemon=True).start()
+                return
+
+            elif state_val == "waiting_direct_target":
+                settings_col.update_one({"key": "admin_state"}, {"$set": {"state": "waiting_direct_text", "target_uid": int(text) if text.isdigit() else 0}}, upsert=True)
+                bot.send_message(ADMIN_CHAT_ID, "✍️ حالا متن پیام شخصی خود را برای این کاربر ارسال کنید:", reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).row("❌ انصراف"))
+                return
+
+            elif state_val == "waiting_direct_text":
+                target_uid = admin_state.get("target_uid")
+                settings_col.delete_one({"key": "admin_state"})
+                if text == "❌ انصراف":
+                    bot.send_message(ADMIN_CHAT_ID, "❌ ارسال پیام شخصی لغو شد.", reply_markup=get_admin_reply_markup())
+                    return
+                
+                try:
+                    bot.send_message(target_uid, f"📩 **پیام از طرف مدیریت ربات:**\n\n{text}", parse_mode="Markdown")
+                    bot.send_message(ADMIN_CHAT_ID, f"✅ پیام شخصی با موفقیت به کاربر `{target_uid}` ارسال شد.", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
+                except Exception as e:
+                    bot.send_message(ADMIN_CHAT_ID, f"❌ خطا در ارسال پیام به کاربر:\n`{e}`", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
+                return
+
         if text == "🔴 خاموش کردن ربات":
             settings_col.replace_one({"key": "bot_status"}, {"key": "bot_status", "status": "off"}, upsert=True)
             bot.send_message(ADMIN_CHAT_ID, "🔴 ربات با موفقیت **خاموش** شد. کاربران عادی دیگر قادر به استفاده از ربات نخواهند بود.", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
@@ -627,6 +686,14 @@ def handle_all_messages(message):
         elif text == "🟢 روشن کردن ربات":
             settings_col.replace_one({"key": "bot_status"}, {"key": "bot_status", "status": "on"}, upsert=True)
             bot.send_message(ADMIN_CHAT_ID, "🟢 ربات با موفقیت **روشن** شد و به حالت عادی برگشت.", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
+            return
+        elif text == "📢 ارسال همگانی پیام":
+            settings_col.replace_one({"key": "admin_state"}, {"key": "admin_state", "state": "waiting_broadcast"}, upsert=True)
+            bot.send_message(ADMIN_CHAT_ID, "📢 لطفاً متن پیام خود را برای ارسال همگانی به تمام کاربران ارسال کنید:\n*(برای انصراف دکمه زیر را بزنید)*", reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).row("❌ انصراف"))
+            return
+        elif text == "✉️ ارسال پیام شخصی به کاربر":
+            settings_col.replace_one({"key": "admin_state"}, {"key": "admin_state", "state": "waiting_direct_target"}, upsert=True)
+            bot.send_message(ADMIN_CHAT_ID, "👤 لطفاً آیدی عددی (User ID) کاربر مورد نظر را ارسال کنید:\n*(برای انصراف دکمه زیر را بزنید)*", reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).row("❌ انصراف"))
             return
         elif text == "👝 مدیریت و تایید ولت‌ها":
             send_paginated_wallets(message, offset=0)
@@ -689,18 +756,6 @@ def handle_all_messages(message):
                 bot.send_message(ADMIN_CHAT_ID, f"✅ کاربر با آیدی عددی `{target_id}` به طور کامل حذف شد.", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
             else:
                 bot.send_message(ADMIN_CHAT_ID, "⚠️ آیدی عددی وارد شده معتبر نیست.", reply_markup=get_admin_reply_markup())
-            return
-        elif text.startswith("/sendall "):
-            broadcast_msg = text.replace("/sendall", "").strip()
-            all_users = list(users_col.find({}, {"user_id": 1}))
-            success_count = 0
-            for u in all_users:
-                try:
-                    bot.send_message(u["user_id"], f"📢 {broadcast_msg}")
-                    success_count += 1
-                except Exception:
-                    pass
-            bot.send_message(ADMIN_CHAT_ID, f"✅ ارسال همگانی با موفقیت به {success_count} کاربر انجام شد.", reply_markup=get_admin_reply_markup())
             return
 
     captcha_data = captcha_col.find_one({"user_id": user_id})
