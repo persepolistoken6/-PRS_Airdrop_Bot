@@ -117,12 +117,12 @@ def get_admin_reply_markup():
 
 def register_user_after_verify(user_id, referrer_id):
     user = users_col.find_one({"user_id": user_id})
+    valid_referrer = referrer_id if (referrer_id and referrer_id != user_id) else None
     
     if not user:
-        actual_referrer = referrer_id if (referrer_id and referrer_id != user_id) else None
         users_col.insert_one({
             "user_id": user_id,
-            "referred_by": actual_referrer,
+            "referred_by": valid_referrer,
             "ref_count": 0,
             "submitted": 0,
             "paid": 0,
@@ -133,15 +133,15 @@ def register_user_after_verify(user_id, referrer_id):
             "paid_amount": 0
         })
         
-        if actual_referrer:
-            users_col.update_one({"user_id": actual_referrer}, {"$inc": {"ref_count": 1}})
+        if valid_referrer:
+            users_col.update_one({"user_id": valid_referrer}, {"$inc": {"ref_count": 1}})
             try:
-                ref_user = users_col.find_one({"user_id": actual_referrer})
+                ref_user = users_col.find_one({"user_id": valid_referrer})
                 current_refs = ref_user.get("ref_count", 1) if ref_user else 1
                 d_count = ref_user.get("daily_count", 0) if ref_user else 0
                 earned_now = calculate_total_tokens(current_refs, d_count)
                 bot.send_message(
-                    actual_referrer,
+                    valid_referrer,
                     f"🎉 *یک زیرمجموعه جدید با لینک شما وارد شد!*\n\n"
                     f"👥 تعداد کل دعوت‌های شما: `{current_refs}`\n"
                     f"🎁 مجموع توکن کسب‌شده: `{earned_now}` PRS",
@@ -151,16 +151,19 @@ def register_user_after_verify(user_id, referrer_id):
                 pass
     else:
         current_referred_by = user.get("referred_by")
-        if not current_referred_by and referrer_id and referrer_id != user_id:
-            users_col.update_one({"user_id": user_id}, {"$set": {"verified": 1, "referred_by": referrer_id}})
-            users_col.update_one({"user_id": referrer_id}, {"$inc": {"ref_count": 1}})
+        if not current_referred_by and valid_referrer:
+            users_col.update_one(
+                {"user_id": user_id}, 
+                {"$set": {"verified": 1, "referred_by": valid_referrer}}
+            )
+            users_col.update_one({"user_id": valid_referrer}, {"$inc": {"ref_count": 1}})
             try:
-                ref_user = users_col.find_one({"user_id": referrer_id})
+                ref_user = users_col.find_one({"user_id": valid_referrer})
                 current_refs = ref_user.get("ref_count", 1) if ref_user else 1
                 d_count = ref_user.get("daily_count", 0) if ref_user else 0
                 earned_now = calculate_total_tokens(current_refs, d_count)
                 bot.send_message(
-                    referrer_id,
+                    valid_referrer,
                     f"🎉 *یک زیرمجموعه جدید با لینک شما وارد شد!*\n\n"
                     f"👥 تعداد کل دعوت‌های شما: `{current_refs}`\n"
                     f"🎁 مجموع توکن کسب‌شده: `{earned_now}` PRS",
