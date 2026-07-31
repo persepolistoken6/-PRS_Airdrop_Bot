@@ -29,7 +29,7 @@ CHANNEL_ID = "@persepolisToken6"
 TWITTER_URL = "https://x.com/PersepolisPRS"
 INSTAGRAM_URL = "https://www.instagram.com/persepolistoken6?igsh=eHBwbzdtd2ZoaWI5"
 ADMIN_CHAT_ID = 6661478622
-REQUIRED_REFERRALS = 5
+REQUIRED_REFERRALS = 3
 
 BASE_REWARD = 1000
 EXTRA_REWARD = 1000
@@ -524,7 +524,7 @@ def show_main_menu(chat_id, user_id, message_id=None, edit=False):
         f"🪙 *معرفی پروژه:* توکن هواداری پرسپولیس بستری مدرن برای هواداران عزیز است تا در اکوسیستم دیجیتال باشگاه سهم داشته باشند.\n\n"
         f"🎁 *سیستم پاداش‌دهی و ایردراپ:*\n"
         f"▫️ پاداش پایه: `{BASE_REWARD} PRS` (پس از عضویت در کانال و دعوت `{REQUIRED_REFERRALS}` دوست)\n"
-        f"▫️ پاداش روزانه: `{DAILY_REWARD} PRS` (فعال‌سازی پس از تکمیل ۵ دعوت و هر ۲۴ ساعت یک‌بار)\n"
+        f"▫️ پاداش روزانه: `{DAILY_REWARD} PRS` (فعال‌سازی پس از تکمیل ۳ دعوت و هر ۲۴ ساعت یک‌بار)\n"
         f"▫️ پاداش به ازای هر دعوت مازاد: `{EXTRA_REWARD} PRS`\n\n"
         f"📊 *وضعیت حساب شما:*\n"
         f"🆔 آیدی عددی شما: `{user_id}`\n"
