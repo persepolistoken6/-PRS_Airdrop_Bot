@@ -806,7 +806,17 @@ def handle_all_messages(message):
                 paid_amt = r.get("paid_amount", 0)
                 total_tokens = calculate_total_tokens(ref_cnt, d_cnt)
                 base_used, extra_count = get_ref_details(ref_cnt)
-                res += f"👤 آیدی عددی: `{uid}`\n👥 کل رفال: {ref_cnt} (ثابت: {base_used} | مازاد: {extra_count})\n🎁 توکن کل: {total_tokens:,} | پرداخت شده: {paid_amt:,} PRS\n👝 ولت: `{wlt}`\n📌 ثبت فرم: `{submitted}` | پرداخت: `{paid}`\n---\n"
+                
+                paid_status_str = "✅ پرداخت‌شده" if paid == 1 else "⏳ در انتظار پرداخت"
+                
+                res += (
+                    f"👤 آیدی عددی: `{uid}`\n"
+                    f"👥 کل رفال: {ref_cnt} (ثابت: {base_used} | مازاد: {extra_count})\n"
+                    f"🎁 توکن کل: {total_tokens:,} | پرداخت شده: {paid_amt:,} PRS\n"
+                    f"👝 ولت: `{wlt}`\n"
+                    f"📌 ثبت فرم: `{submitted}` | وضعیت: *{paid_status_str}*\n"
+                    f"---\n"
+                )
             bot.send_message(ADMIN_CHAT_ID, res, reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
             return
         elif text.startswith("/deleteuser "):
