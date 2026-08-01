@@ -1,4 +1,4 @@
-Import io
+import io
 import os
 import random
 import time
@@ -108,11 +108,12 @@ def get_admin_reply_markup():
     markup.row("👝 مدیریت و تایید ولت‌ها", "📊 گزارش کلی توکن‌ها")
     markup.row("🔍 جستجوی کاربر (آیدی یا ولت)", "📁 آپلود اکسل پرداختی‌ها")
     markup.row("🟢 اکسل پرداخت‌شده‌ها", "🟡 اکسل در انتظار پرداخت")
-    markup.row("📥 اکسل واجدین شرایط بی‌ولت", "📊 گزارش تفکیکی کامل (فایل)")
-    markup.row("📥 دریافت فوری بک‌آپ (JSON)", "📈 آمار کلی ربات")
-    markup.row("🔄 به‌روزرسانی پنل ادمین", "📢 ارسال همگانی پیام")
-    markup.row("✉️ ارسال پیام شخصی به کاربر", "🔴 خاموش کردن ربات")
-    markup.row("🟢 روشن کردن ربات", "🔙 خروج از حالت ادمین / منوی اصلی")
+    markup.row("📥 اکسل واجدین شرایط بی‌ولت", "📥 اکسل کاربران زیر حد نصاب (<3 دعوت)")
+    markup.row("📊 گزارش تفکیکی کامل (فایل)", "📥 دریافت فوری بک‌آپ (JSON)")
+    markup.row("📈 آمار کلی ربات", "🔄 به‌روزرسانی پنل ادمین")
+    markup.row("📢 ارسال همگانی پیام", "✉️ ارسال پیام شخصی به کاربر")
+    markup.row("🔴 خاموش کردن ربات", "🟢 روشن کردن ربات")
+    markup.row("🔙 خروج از حالت ادمین / منوی اصلی")
     return markup
 
 def register_user_after_verify(user_id, referrer_id):
@@ -271,6 +272,36 @@ def send_eligible_no_wallet_excel(chat_id):
         chat_id, 
         file_bytes, 
         caption="📁 فایل کاربران **واجد شرایط (دعوت ۳ نفر به بالا) که هنوز ولت ثبت نکرده‌اند**", 
+        reply_markup=get_admin_reply_markup(), 
+        parse_mode="Markdown"
+    )
+
+def send_under_threshold_excel(chat_id):
+    rows = list(users_col.find({"ref_count": {"$lt": REQUIRED_REFERRALS}}).sort("ref_count", -1))
+
+    if not rows:
+        bot.send_message(chat_id, "⚠️ هیچ کاربری با تعداد دعوت کمتر از ۳ نفر یافت نشد.", reply_markup=get_admin_reply_markup())
+        return
+
+    csv_content = "User ID,Referrals,Daily Bonus Count,Total Tokens,Wallet Status,Submission Status\n"
+    for u in rows:
+        uid = u.get("user_id")
+        ref_cnt = u.get("ref_count", 0)
+        d_count = u.get("daily_count", 0)
+        total_tokens = calculate_total_tokens(ref_cnt, d_count)
+        wlt = u.get("wallet")
+        wallet_status = f"Registered ({wlt})" if wlt else "Not Registered"
+        sub_status = u.get("submitted", 0)
+        
+        csv_content += f"{uid},{ref_cnt},{d_count},{total_tokens},{wallet_status},{sub_status}\n"
+
+    file_bytes = io.BytesIO(csv_content.encode('utf-8'))
+    file_bytes.name = 'under_threshold_users.csv'
+    
+    bot.send_document(
+        chat_id, 
+        file_bytes, 
+        caption="📁 فایل کاربران **زیر حد نصاب (کمتر از ۳ دعوت)**", 
         reply_markup=get_admin_reply_markup(), 
         parse_mode="Markdown"
     )
@@ -791,7 +822,7 @@ def handle_all_messages(message):
             bot.send_message(ADMIN_CHAT_ID, "🔍 برای جستجو، دستور زیر را ارسال کنید:\n`/search [آیدی عددی یا بخشی از ولت]`", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
             return
         elif text == "📁 آپلود اکسل پرداختی‌ها":
-            bot.send_message(ADMIN_CHAT_ID, "📁 لطفاً فایل خروجی پرداختی خود (فرمت CSV یا متنی حاوی آیدی یا ولت کاربران) را مستقیماً در همین چت آپلود کنید تا وضعیت آن‌ها اتوماتیک به «پرداخت‌شده» تغییر یابد.", reply_markup=get_admin_reply_markup())
+            bot.send_message(ADMIN_CHAT_ID, "📁 لطفاً فایل خروجی پرداختی خود (فرمت CSV یا متنی حاوی آیدی یا ولت کاربران) را مستقیماً در همین چت آپلود کنید تا وضعیت آن‌ها اتوماتیک به «پرداخت‌شده» تغییر يابد.", reply_markup=get_admin_reply_markup())
             return
         elif text == "🟢 اکسل پرداخت‌شده‌ها":
             send_status_excel_report(ADMIN_CHAT_ID, status_filter=1)
@@ -801,6 +832,9 @@ def handle_all_messages(message):
             return
         elif text == "📥 اکسل واجدین شرایط بی‌ولت":
             send_eligible_no_wallet_excel(ADMIN_CHAT_ID)
+            return
+        elif text == "📥 اکسل کاربران زیر حد نصاب (<3 دعوت)":
+            send_under_threshold_excel(ADMIN_CHAT_ID)
             return
         elif text == "📊 گزارش تفکیکی کامل (فایل)":
             send_detailed_report_file(ADMIN_CHAT_ID)
