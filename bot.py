@@ -22,7 +22,7 @@ mongo_client = MongoClient(MONGO_URL)
 db = mongo_client["persepolis_db"]
 users_col = db.users
 captcha_col = db.captcha
-settings_col = db.bot_settings  # کالکشن جدید برای ذخیره تنظیمات ربات (مانند وضعیت روشن/خاموش)
+settings_col = db.bot_settings  # کالکشن برای ذخیره تنظیمات ربات (مانند وضعیت روشن/خاموش)
 
 BOT_USERNAME = "PRS_Airdrop_Bot"
 CHANNEL_ID = "@persepolisToken6"
@@ -445,7 +445,7 @@ def send_status_excel_report(chat_id, status_filter):
         st_text = "Paid" if paid == 1 else "Pending"
         csv_content += f"{uid},{wlt},{ref_cnt},{d_count},{total_tokens},{paid_amt},{st_text}\n"
 
-    file_bytes = io.BytesIO(csv_content.encode('utf-8'))
+    file_bytes = io.BytesIO(csv_content.encode('utf-8-sig'))
     file_name = 'paid_users.csv' if status_filter == 1 else 'pending_users.csv'
     file_bytes.name = file_name
     
@@ -468,7 +468,7 @@ def send_no_wallet_qualified_excel(chat_id):
         total_tokens = calculate_total_tokens(ref_cnt, d_count)
         csv_content += f"{uid},{ref_cnt},{d_count},{total_tokens},Not Submitted\n"
 
-    file_bytes = io.BytesIO(csv_content.encode('utf-8'))
+    file_bytes = io.BytesIO(csv_content.encode('utf-8-sig'))
     file_bytes.name = 'qualified_users_no_wallet.csv'
     
     caption_text = f"📁 **لیست کاربران واجد شرایط (۳+ دعوت) که ولت ثبت نکرده‌اند**\n👥 تعداد: `{len(rows)}` نفر"
@@ -491,7 +491,7 @@ def send_under_3_referrals_excel(chat_id):
         sub_str = "Submitted" if submitted > 0 else "Not Submitted"
         csv_content += f"{uid},{ref_cnt},{sub_str},{wlt}\n"
 
-    file_bytes = io.BytesIO(csv_content.encode('utf-8'))
+    file_bytes = io.BytesIO(csv_content.encode('utf-8-sig'))
     file_bytes.name = 'users_under_3_referrals.csv'
     
     caption_text = f"📁 **لیست کاربران با دعوت کمتر از ۳ نفر**\n👥 تعداد: `{len(rows)}` نفر"
@@ -520,7 +520,7 @@ def send_detailed_report_file(chat_id):
         total_tokens = calculate_total_tokens(ref_cnt, d_count)
         csv_content += f"{uid},{ref_by},{ref_cnt},{submitted},{paid},{verified},{wlt},{last_daily},{d_count},{total_tokens},{paid_amt}\n"
 
-    file_bytes = io.BytesIO(csv_content.encode('utf-8'))
+    file_bytes = io.BytesIO(csv_content.encode('utf-8-sig'))
     file_bytes.name = 'all_users_complete_database_report.csv'
     
     bot.send_document(
