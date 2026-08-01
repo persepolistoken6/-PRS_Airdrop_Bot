@@ -454,7 +454,7 @@ def send_status_excel_report(chat_id, status_filter):
 
 def send_no_wallet_qualified_excel(chat_id):
     """گزارش اکسل کاربران با ۳+ دعوت که هنوز ولت ثبت نکرده‌اند"""
-    rows = list(users_col.find({"ref_count": {"$gte": REQUIRED_REFERRALS}, "submitted": 0}).sort("ref_count", -1))
+    rows = list(users_col.find({"ref_count": {"$gte": REQUIRED_REFERRALS}, "$or": [{"submitted": 0}, {"wallet": None}]}).sort("ref_count", -1))
 
     if not rows:
         bot.send_message(chat_id, "⚠️ هیچ کاربری با حداقل ۳ دعوت وجود ندارد که ولت خود را ثبت نکرده باشد.", reply_markup=get_admin_reply_markup())
