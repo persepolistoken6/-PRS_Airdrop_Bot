@@ -17,12 +17,11 @@ MONGO_URL = os.getenv("MONGO_URL")
 if not MONGO_URL:
     raise RuntimeError("MONGO_URL environment variable is not set")
 
-# اتصال به MongoDB با تعیین صریح نام دیتابیس
 mongo_client = MongoClient(MONGO_URL)
 db = mongo_client["persepolis_db"]
 users_col = db.users
 captcha_col = db.captcha
-settings_col = db.bot_settings  # کالکشن برای ذخیره تنظیمات ربات (مانند وضعیت روشن/خاموش)
+settings_col = db.bot_settings
 
 BOT_USERNAME = "PRS_Airdrop_Bot"
 CHANNEL_ID = "@persepolisToken6"
@@ -41,7 +40,6 @@ BANNER_FILE_ID = "AgACAgQAAxkBAAMfamINNXWkFr-wk1ONFWAEHF2z-vGAAsgNaxtnhwABU-cbUH
 bot = TeleBot(TOKEN, threaded=True)
 
 def is_bot_globally_disabled():
-    """بررسی اینکه آیا ربات توسط ادمین خاموش شده است یا خیر"""
     setting = settings_col.find_one({"key": "bot_status"})
     if setting and setting.get("status") == "off":
         return True
@@ -453,7 +451,6 @@ def send_status_excel_report(chat_id, status_filter):
     bot.send_document(chat_id, file_bytes, caption=caption_text, reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
 
 def send_no_wallet_qualified_excel(chat_id):
-    """گزارش اکسل کاربران با ۳+ دعوت که هنوز ولت ثبت نکرده‌اند"""
     rows = list(users_col.find({"ref_count": {"$gte": REQUIRED_REFERRALS}, "$or": [{"submitted": 0}, {"wallet": None}]}).sort("ref_count", -1))
 
     if not rows:
@@ -475,7 +472,6 @@ def send_no_wallet_qualified_excel(chat_id):
     bot.send_document(chat_id, file_bytes, caption=caption_text, reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
 
 def send_under_3_referrals_excel(chat_id):
-    """گزارش اکسل کاربران با کمتر از ۳ دعوت"""
     rows = list(users_col.find({"ref_count": {"$lt": REQUIRED_REFERRALS}}).sort("ref_count", -1))
 
     if not rows:
@@ -819,10 +815,10 @@ def handle_all_messages(message):
         elif text == "🟡 اکسل در انتظار پرداخت":
             send_status_excel_report(ADMIN_CHAT_ID, status_filter=0)
             return
-        elif text == "🟢 دعوت ۳+ بدون ثبت ولت":
+        elif "دعوت ۳+ بدون ثبت ولت" in text:
             send_no_wallet_qualified_excel(ADMIN_CHAT_ID)
             return
-        elif text == "🔴 دعوت زیر ۳ نفر":
+        elif "دعوت زیر ۳ نفر" in text:
             send_under_3_referrals_excel(ADMIN_CHAT_ID)
             return
         elif text == "📊 گزارش تفکیکی کامل (فایل)":
@@ -1290,11 +1286,9 @@ if __name__ == "__main__":
     bot.delete_webhook(drop_pending_updates=True)
     time.sleep(2)
 
-    # اجرای ترد پشتیبان‌گیری خودکار دیتابیس
     backup_thread = threading.Thread(target=auto_backup_scheduler, daemon=True)
     backup_thread.start()
 
-    # حلقه اصلی پایش و دریافت پیام‌ها
     while True:
         try:
             bot.infinity_polling(timeout=30, long_polling_timeout=30, skip_pending=True)
