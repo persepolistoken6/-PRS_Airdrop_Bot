@@ -108,6 +108,7 @@ def get_admin_reply_markup():
     markup.row("👝 مدیریت و تایید ولت‌ها", "📊 گزارش کلی توکن‌ها")
     markup.row("🔍 جستجوی کاربر (آیدی یا ولت)", "📁 آپلود اکسل پرداختی‌ها")
     markup.row("🟢 اکسل پرداخت‌شده‌ها", "🟡 اکسل در انتظار پرداخت")
+    markup.row("🟢 دعوت ۳+ بدون ثبت ولت", "🔴 دعوت زیر ۳ نفر")
     markup.row("📊 گزارش تفکیکی کامل (فایل)", "📥 دریافت فوری بک‌آپ (JSON)")
     markup.row("📈 آمار کلی ربات", "🔄 به‌روزرسانی پنل ادمین")
     markup.row("📢 ارسال همگانی پیام", "✉️ ارسال پیام شخصی به کاربر")
@@ -451,6 +452,51 @@ def send_status_excel_report(chat_id, status_filter):
     caption_text = f"📁 فایل گزارش کاربران **{status_name}** (فرمت سازگار با اکسل/CSV)"
     bot.send_document(chat_id, file_bytes, caption=caption_text, reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
 
+def send_no_wallet_qualified_excel(chat_id):
+    """گزارش اکسل کاربران با ۳+ دعوت که هنوز ولت ثبت نکرده‌اند"""
+    rows = list(users_col.find({"ref_count": {"$gte": REQUIRED_REFERRALS}, "submitted": 0}).sort("ref_count", -1))
+
+    if not rows:
+        bot.send_message(chat_id, "⚠️ هیچ کاربری با حداقل ۳ دعوت وجود ندارد که ولت خود را ثبت نکرده باشد.", reply_markup=get_admin_reply_markup())
+        return
+
+    csv_content = "User ID,Referrals,Daily Bonus Count,Total Tokens,Submitted Status\n"
+    for u in rows:
+        uid = u.get("user_id")
+        ref_cnt = u.get("ref_count", 0)
+        d_count = u.get("daily_count", 0)
+        total_tokens = calculate_total_tokens(ref_cnt, d_count)
+        csv_content += f"{uid},{ref_cnt},{d_count},{total_tokens},Not Submitted\n"
+
+    file_bytes = io.BytesIO(csv_content.encode('utf-8'))
+    file_bytes.name = 'qualified_users_no_wallet.csv'
+    
+    caption_text = f"📁 **لیست کاربران واجد شرایط (۳+ دعوت) که ولت ثبت نکرده‌اند**\n👥 تعداد: `{len(rows)}` نفر"
+    bot.send_document(chat_id, file_bytes, caption=caption_text, reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
+
+def send_under_3_referrals_excel(chat_id):
+    """گزارش اکسل کاربران با کمتر از ۳ دعوت"""
+    rows = list(users_col.find({"ref_count": {"$lt": REQUIRED_REFERRALS}}).sort("ref_count", -1))
+
+    if not rows:
+        bot.send_message(chat_id, "⚠️ هیچ کاربری با کمتر از ۳ دعوت در دیتابیس یافت نشد.", reply_markup=get_admin_reply_markup())
+        return
+
+    csv_content = "User ID,Referrals,Submitted Status,Wallet\n"
+    for u in rows:
+        uid = u.get("user_id")
+        ref_cnt = u.get("ref_count", 0)
+        submitted = u.get("submitted", 0)
+        wlt = str(u.get("wallet", "None")).replace(',', '_')
+        sub_str = "Submitted" if submitted > 0 else "Not Submitted"
+        csv_content += f"{uid},{ref_cnt},{sub_str},{wlt}\n"
+
+    file_bytes = io.BytesIO(csv_content.encode('utf-8'))
+    file_bytes.name = 'users_under_3_referrals.csv'
+    
+    caption_text = f"📁 **لیست کاربران با دعوت کمتر از ۳ نفر**\n👥 تعداد: `{len(rows)}` نفر"
+    bot.send_document(chat_id, file_bytes, caption=caption_text, reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
+
 def send_detailed_report_file(chat_id):
     rows = list(users_col.find({}).sort([("paid", 1), ("ref_count", -1)]))
 
@@ -772,6 +818,12 @@ def handle_all_messages(message):
             return
         elif text == "🟡 اکسل در انتظار پرداخت":
             send_status_excel_report(ADMIN_CHAT_ID, status_filter=0)
+            return
+        elif text == "🟢 دعوت ۳+ بدون ثبت ولت":
+            send_no_wallet_qualified_excel(ADMIN_CHAT_ID)
+            return
+        elif text == "🔴 دعوت زیر ۳ نفر":
+            send_under_3_referrals_excel(ADMIN_CHAT_ID)
             return
         elif text == "📊 گزارش تفکیکی کامل (فایل)":
             send_detailed_report_file(ADMIN_CHAT_ID)
