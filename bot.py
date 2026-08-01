@@ -1,4 +1,4 @@
-import io
+Import io
 import os
 import random
 import time
@@ -108,12 +108,11 @@ def get_admin_reply_markup():
     markup.row("👝 مدیریت و تایید ولت‌ها", "📊 گزارش کلی توکن‌ها")
     markup.row("🔍 جستجوی کاربر (آیدی یا ولت)", "📁 آپلود اکسل پرداختی‌ها")
     markup.row("🟢 اکسل پرداخت‌شده‌ها", "🟡 اکسل در انتظار پرداخت")
-    markup.row("📥 اکسل واجدین شرایط بی‌ولت", "📥 اکسل زیر ۳ دعوت‌ها")
-    markup.row("📊 گزارش تفکیکی کامل (فایل)", "📥 دریافت فوری بک‌آپ (JSON)")
-    markup.row("📈 آمار کلی ربات", "🔄 به‌روزرسانی پنل ادمین")
-    markup.row("📢 ارسال همگانی پیام", "✉️ ارسال پیام شخصی به کاربر")
-    markup.row("🔴 خاموش کردن ربات", "🟢 روشن کردن ربات")
-    markup.row("🔙 خروج از حالت ادمین / منوی اصلی")
+    markup.row("📥 اکسل واجدین شرایط بی‌ولت", "📊 گزارش تفکیکی کامل (فایل)")
+    markup.row("📥 دریافت فوری بک‌آپ (JSON)", "📈 آمار کلی ربات")
+    markup.row("🔄 به‌روزرسانی پنل ادمین", "📢 ارسال همگانی پیام")
+    markup.row("✉️ ارسال پیام شخصی به کاربر", "🔴 خاموش کردن ربات")
+    markup.row("🟢 روشن کردن ربات", "🔙 خروج از حالت ادمین / منوی اصلی")
     return markup
 
 def register_user_after_verify(user_id, referrer_id):
@@ -272,33 +271,6 @@ def send_eligible_no_wallet_excel(chat_id):
         chat_id, 
         file_bytes, 
         caption="📁 فایل کاربران **واجد شرایط (دعوت ۳ نفر به بالا) که هنوز ولت ثبت نکرده‌اند**", 
-        reply_markup=get_admin_reply_markup(), 
-        parse_mode="Markdown"
-    )
-
-def send_under_required_refs_excel(chat_id):
-    rows = list(users_col.find({"ref_count": {"$lt": REQUIRED_REFERRALS}}).sort("ref_count", -1))
-
-    if not rows:
-        bot.send_message(chat_id, "⚠️ هیچ کاربری با کمتر از ۳ دعوت وجود ندارد.", reply_markup=get_admin_reply_markup())
-        return
-
-    csv_content = "User ID,Referrals,Daily Bonus Count,Submitted Status,Wallet\n"
-    for u in rows:
-        uid = u.get("user_id")
-        ref_cnt = u.get("ref_count", 0)
-        d_count = u.get("daily_count", 0)
-        submitted = u.get("submitted", 0)
-        wlt = str(u.get("wallet", "None")).replace(',', '_')
-        csv_content += f"{uid},{ref_cnt},{d_count},{submitted},{wlt}\n"
-
-    file_bytes = io.BytesIO(csv_content.encode('utf-8'))
-    file_bytes.name = 'under_3_referrals_users.csv'
-    
-    bot.send_document(
-        chat_id, 
-        file_bytes, 
-        caption="📁 فایل کاربران **زیر ۳ نفر دعوت (فاقد شرایط اولیه)** با مشخصات کامل", 
         reply_markup=get_admin_reply_markup(), 
         parse_mode="Markdown"
     )
@@ -829,9 +801,6 @@ def handle_all_messages(message):
             return
         elif text == "📥 اکسل واجدین شرایط بی‌ولت":
             send_eligible_no_wallet_excel(ADMIN_CHAT_ID)
-            return
-        elif text == "📥 اکسل زیر ۳ دعوت‌ها":
-            send_under_required_refs_excel(ADMIN_CHAT_ID)
             return
         elif text == "📊 گزارش تفکیکی کامل (فایل)":
             send_detailed_report_file(ADMIN_CHAT_ID)
