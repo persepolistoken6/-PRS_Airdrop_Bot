@@ -28,7 +28,11 @@ BOT_USERNAME = "PRS_Airdrop_Bot"
 CHANNEL_ID = "@persepolisToken6"
 TWITTER_URL = "https://x.com/PersepolisPRS"
 INSTAGRAM_URL = "https://www.instagram.com/persepolistoken6?igsh=eHBwbzdtd2ZoaWI5"
-ADMIN_CHAT_ID = 6661478622
+
+# لیست ادمین‌های ربات (ادمین اول و ادمین دوم با دسترسی‌های کاملاً برابر)
+ADMIN_IDS = [6661478622, 84460885]
+ADMIN_CHAT_ID = 6661478622  # ادمین اصلی برای ارسال گزارشات خودکار (مثل بک‌آپ روزانه)
+
 REQUIRED_REFERRALS = 3
 
 BASE_REWARD = 1000
@@ -39,6 +43,10 @@ MAX_TOTAL_TOKENS_LIMIT = 500_000_000
 BANNER_FILE_ID = "AgACAgQAAxkBAAMfamINNXWkFr-wk1ONFWAEHF2z-vGAAsgNaxtnhwABU-cbUHZe_7c6AQADAgADeQADPQQ"
 
 bot = TeleBot(TOKEN, threaded=True)
+
+def is_admin(user_id):
+    """بررسی اینکه آیا کاربر جزو ادمین‌ها است یا خیر"""
+    return user_id in ADMIN_IDS
 
 def is_bot_globally_disabled():
     """بررسی اینکه آیا ربات توسط ادمین خاموش شده است یا خیر"""
@@ -310,10 +318,10 @@ def send_under_threshold_excel(chat_id):
 def send_welcome(message):
     user_id = message.from_user.id
     
-    if user_id == ADMIN_CHAT_ID:
+    if is_admin(user_id):
         bot.send_message(
             user_id, 
-            "👑 *به پنل مدیریت دائمی خوش آمدید.*\nاز دکمه‌های منوی پایین استفاده کنید.", 
+            "👑 *به پنل مدیریت خوش آمدید.*\nاز دکمه‌های منوی پایین استفاده کنید.", 
             reply_markup=get_admin_reply_markup(), 
             parse_mode="Markdown"
         )
@@ -387,11 +395,11 @@ def get_user_rank(user_id):
 
 @bot.message_handler(commands=['admin'])
 def admin_panel(message):
-    if message.from_user.id != ADMIN_CHAT_ID:
+    if not is_admin(message.from_user.id):
         return
     bot.send_message(
-        ADMIN_CHAT_ID,
-        "👑 *پنل مدیریت ثابت فعال است.*",
+        message.from_user.id,
+        "👑 *پنل مدیریت فعال است.*",
         reply_markup=get_admin_reply_markup(),
         parse_mode="Markdown"
     )
@@ -428,9 +436,9 @@ def send_paginated_wallets(message, offset=0, edit=False):
     if not rows:
         msg = "⚠️ هیچ کاربری هنوز فرم اطلاعاتش را ارسال نکرده است."
         if edit:
-            bot.edit_message_text(msg, chat_id=ADMIN_CHAT_ID, message_id=message.message_id)
+            bot.edit_message_text(msg, chat_id=message.chat.id, message_id=message.message_id)
         else:
-            bot.send_message(ADMIN_CHAT_ID, msg, reply_markup=get_admin_reply_markup())
+            bot.send_message(message.chat.id, msg, reply_markup=get_admin_reply_markup())
         return
 
     limit = 5
@@ -474,11 +482,11 @@ def send_paginated_wallets(message, offset=0, edit=False):
 
     if edit:
         try:
-            bot.edit_message_text(text, chat_id=ADMIN_CHAT_ID, message_id=message.message_id, reply_markup=markup, parse_mode="Markdown")
+            bot.edit_message_text(text, chat_id=message.chat.id, message_id=message.message_id, reply_markup=markup, parse_mode="Markdown")
         except Exception:
             pass
     else:
-        bot.send_message(ADMIN_CHAT_ID, text, reply_markup=markup, parse_mode="Markdown")
+        bot.send_message(message.chat.id, text, reply_markup=markup, parse_mode="Markdown")
 
 def send_status_excel_report(chat_id, status_filter):
     rows = list(users_col.find({"submitted": {"$gt": 0}, "paid": status_filter}).sort("ref_count", -1))
@@ -626,7 +634,7 @@ def show_main_menu(chat_id, user_id, message_id=None, edit=False):
 
 @bot.message_handler(content_types=['document'])
 def handle_admin_documents(message):
-    if message.from_user.id != ADMIN_CHAT_ID:
+    if not is_admin(message.from_user.id):
         return
     
     valid_users = {u["user_id"] for u in users_col.find({"submitted": {"$gt": 0}}, {"user_id": 1})}
@@ -669,7 +677,7 @@ def handle_admin_documents(message):
                 not_found_count += 1
 
         bot.send_message(
-            ADMIN_CHAT_ID,
+            message.chat.id,
             f"✅ **فایل پرداختی با موفقیت پردازش شد!**\n\n"
             f"🟢 تعداد کاربرانی که وضعیت‌شان به «پرداخت‌شده» تغییر یافت و موجودی‌شان ثبت شد: `{updated_count}` نفر\n"
             f"⚠️ شناسایی‌نشده یا نامعتبر: `{not_found_count}` مورد",
@@ -677,7 +685,7 @@ def handle_admin_documents(message):
             parse_mode="Markdown"
         )
     except Exception as e:
-        bot.send_message(ADMIN_CHAT_ID, f"❌ خطا در پردازش فایل اکسل/متنی:\n`{e}`", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
+        bot.send_message(message.chat.id, f"❌ خطا در پردازش فایل اکسل/متنی:\n`{e}`", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
 
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
@@ -688,21 +696,21 @@ def handle_all_messages(message):
     persian_to_english = str.maketrans('۰۱۲۳۴۵۶۷۸۹', '0123456789')
     text = text.translate(persian_to_english)
     
-    if is_bot_globally_disabled() and user_id != ADMIN_CHAT_ID:
+    if is_bot_globally_disabled() and not is_admin(user_id):
         bot.send_message(chat_id, "🛑 ربات در حال حاضر توسط مدیریت موقتاً خاموش شده است. لطفاً بعداً مراجعه کنید.")
         return
 
-    if user_id == ADMIN_CHAT_ID:
+    if is_admin(user_id):
         admin_state = settings_col.find_one({"key": "admin_state"})
         if admin_state:
             state_val = admin_state.get("state")
             if state_val == "waiting_broadcast":
                 settings_col.delete_one({"key": "admin_state"})
                 if text == "❌ انصراف":
-                    bot.send_message(ADMIN_CHAT_ID, "❌ ارسال همگانی لغو شد.", reply_markup=get_admin_reply_markup())
+                    bot.send_message(chat_id, "❌ ارسال همگانی لغو شد.", reply_markup=get_admin_reply_markup())
                     return
                 
-                bot.send_message(ADMIN_CHAT_ID, "🚀 عملیات ارسال همگانی با مکانیزم ضد اسپم آغاز شد...", reply_markup=get_admin_reply_markup())
+                bot.send_message(chat_id, "🚀 عملیات ارسال همگانی با مکانیزم ضد اسپم آغاز شد...", reply_markup=get_admin_reply_markup())
                 
                 def run_broadcast():
                     all_users = list(users_col.find({}, {"user_id": 1}))
@@ -719,7 +727,7 @@ def handle_all_messages(message):
                             time.sleep(1)
                     
                     bot.send_message(
-                        ADMIN_CHAT_ID,
+                        chat_id,
                         f"📊 **گزارش پایان ارسال همگانی:**\n\n"
                         f"✅ ارسال موفق: `{success_count}` کاربر\n"
                         f"❌ ارسال ناموفق (بلاک شده یا غیرفعال): `{fail_count}` کاربر",
@@ -732,53 +740,53 @@ def handle_all_messages(message):
 
             elif state_val == "waiting_direct_target":
                 settings_col.update_one({"key": "admin_state"}, {"$set": {"state": "waiting_direct_text", "target_uid": int(text) if text.isdigit() else 0}}, upsert=True)
-                bot.send_message(ADMIN_CHAT_ID, "✍️ حالا متن پیام شخصی خود را برای این کاربر ارسال کنید:", reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).row("❌ انصراف"))
+                bot.send_message(chat_id, "✍️ حالا متن پیام شخصی خود را برای این کاربر ارسال کنید:", reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).row("❌ انصراف"))
                 return
 
             elif state_val == "waiting_direct_text":
                 target_uid = admin_state.get("target_uid")
                 settings_col.delete_one({"key": "admin_state"})
                 if text == "❌ انصراف":
-                    bot.send_message(ADMIN_CHAT_ID, "❌ ارسال پیام شخصی لغو شد.", reply_markup=get_admin_reply_markup())
+                    bot.send_message(chat_id, "❌ ارسال پیام شخصی لغو شد.", reply_markup=get_admin_reply_markup())
                     return
                 
                 try:
                     bot.send_message(target_uid, f"📩 **پیام از طرف مدیریت ربات:**\n\n{text}", parse_mode="Markdown")
-                    bot.send_message(ADMIN_CHAT_ID, f"✅ پیام شخصی با موفقیت به کاربر `{target_uid}` ارسال شد.", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
+                    bot.send_message(chat_id, f"✅ پیام شخصی با موفقیت به کاربر `{target_uid}` ارسال شد.", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
                 except Exception as e:
-                    bot.send_message(ADMIN_CHAT_ID, f"❌ خطا در ارسال پیام به کاربر:\n`{e}`", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
+                    bot.send_message(chat_id, f"❌ خطا در ارسال پیام به کاربر:\n`{e}`", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
                 return
 
             elif state_val == "waiting_manual_pay_id":
                 if text == "❌ انصراف":
                     settings_col.delete_one({"key": "admin_state"})
-                    bot.send_message(ADMIN_CHAT_ID, "❌ ثبت پرداخت دستی لغو شد.", reply_markup=get_admin_reply_markup())
+                    bot.send_message(chat_id, "❌ ثبت پرداخت دستی لغو شد.", reply_markup=get_admin_reply_markup())
                     return
                 if not text.isdigit():
-                    bot.send_message(ADMIN_CHAT_ID, "⚠️ لطفاً یک آیدی عددی معتبر وارد کنید:")
+                    bot.send_message(chat_id, "⚠️ لطفاً یک آیدی عددی معتبر وارد کنید:")
                     return
                 target_uid = int(text)
                 usr = users_col.find_one({"user_id": target_uid})
                 if not usr:
-                    bot.send_message(ADMIN_CHAT_ID, "❌ کاربری با این آیدی در دیتابیس یافت نشد. لطفاً آیدی دیگری وارد کنید:")
+                    bot.send_message(chat_id, "❌ کاربری با این آیدی در دیتابیس یافت نشد. لطفاً آیدی دیگری وارد کنید:")
                     return
                 settings_col.update_one({"key": "admin_state"}, {"$set": {"state": "waiting_manual_pay_amount", "target_uid": target_uid}}, upsert=True)
                 r_cnt = usr.get("ref_count", 0)
                 d_cnt = usr.get("daily_count", 0)
                 tot = calculate_total_tokens(r_cnt, d_cnt)
-                bot.send_message(ADMIN_CHAT_ID, f"👤 کاربر پیدا شد.\n🎁 کل توکن محاسبه‌شده برای این کاربر: `{tot:,} PRS`\n\nحالا مقدار توکنی که می‌خواهید به عنوان پرداخت ثبت شود را وارد کنید (یا بنویسید `all` تا کل مبلغ ثبت شود):", reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).row("❌ انصراف"), parse_mode="Markdown")
+                bot.send_message(chat_id, f"👤 کاربر پیدا شد.\n🎁 کل توکن محاسبه‌شده برای این کاربر: `{tot:,} PRS`\n\nحالا مقدار توکنی که می‌خواهید به عنوان پرداخت ثبت شود را وارد کنید (یا بنویسید `all` تا کل مبلغ ثبت شود):", reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).row("❌ انصراف"), parse_mode="Markdown")
                 return
 
             elif state_val == "waiting_manual_pay_amount":
                 if text == "❌ انصراف":
                     settings_col.delete_one({"key": "admin_state"})
-                    bot.send_message(ADMIN_CHAT_ID, "❌ ثبت پرداخت دستی لغو شد.", reply_markup=get_admin_reply_markup())
+                    bot.send_message(chat_id, "❌ ثبت پرداخت دستی لغو شد.", reply_markup=get_admin_reply_markup())
                     return
                 target_uid = admin_state.get("target_uid")
                 settings_col.delete_one({"key": "admin_state"})
                 usr = users_col.find_one({"user_id": target_uid})
                 if not usr:
-                    bot.send_message(ADMIN_CHAT_ID, "❌ خطا: کاربر یافت نشد.", reply_markup=get_admin_reply_markup())
+                    bot.send_message(chat_id, "❌ خطا: کاربر یافت نشد.", reply_markup=get_admin_reply_markup())
                     return
                 r_cnt = usr.get("ref_count", 0)
                 d_cnt = usr.get("daily_count", 0)
@@ -789,74 +797,74 @@ def handle_all_messages(message):
                 elif text.isdigit():
                     pay_amt = int(text)
                 else:
-                    bot.send_message(ADMIN_CHAT_ID, "⚠️ مقدار وارد شده نامعتبر است. عملیات لغو شد.", reply_markup=get_admin_reply_markup())
+                    bot.send_message(chat_id, "⚠️ مقدار وارد شده نامعتبر است. عملیات لغو شد.", reply_markup=get_admin_reply_markup())
                     return
                 
                 users_col.update_one({"user_id": target_uid}, {"$set": {"paid": 1, "paid_amount": pay_amt}})
-                bot.send_message(ADMIN_CHAT_ID, f"✅ پرداخت دستی با موفقیت ثبت شد!\n🆔 آیدی: `{target_uid}`\n💳 مبلغ ثبت‌شده: `{pay_amt:,} PRS`", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
+                bot.send_message(chat_id, f"✅ پرداخت دستی با موفقیت ثبت شد!\n🆔 آیدی: `{target_uid}`\n💳 مبلغ ثبت‌شده: `{pay_amt:,} PRS`", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
                 return
 
         if text == "🔴 خاموش کردن ربات":
             settings_col.replace_one({"key": "bot_status"}, {"key": "bot_status", "status": "off"}, upsert=True)
-            bot.send_message(ADMIN_CHAT_ID, "🔴 ربات با موفقیت **خاموش** شد. کاربران عادی دیگر قادر به استفاده از ربات نخواهند بود.", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
+            bot.send_message(chat_id, "🔴 ربات با موفقیت **خاموش** شد. کاربران عادی دیگر قادر به استفاده از ربات نخواهند بود.", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
             return
         elif text == "🟢 روشن کردن ربات":
             settings_col.replace_one({"key": "bot_status"}, {"key": "bot_status", "status": "on"}, upsert=True)
-            bot.send_message(ADMIN_CHAT_ID, "🟢 ربات با موفقیت **روشن** شد و به حالت عادی برگشت.", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
+            bot.send_message(chat_id, "🟢 ربات با موفقیت **روشن** شد و به حالت عادی برگشت.", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
             return
         elif text == "📢 ارسال همگانی پیام":
             settings_col.replace_one({"key": "admin_state"}, {"key": "admin_state", "state": "waiting_broadcast"}, upsert=True)
-            bot.send_message(ADMIN_CHAT_ID, "📢 لطفاً متن پیام خود را برای ارسال همگانی به تمام کاربران ارسال کنید:\n*(برای انصراف دکمه زیر را بزنید)*", reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).row("❌ انصراف"))
+            bot.send_message(chat_id, "📢 لطفاً متن پیام خود را برای ارسال همگانی به تمام کاربران ارسال کنید:\n*(برای انصراف دکمه زیر را بزنید)*", reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).row("❌ انصراف"))
             return
         elif text == "✉️ ارسال پیام شخصی به کاربر":
             settings_col.replace_one({"key": "admin_state"}, {"key": "admin_state", "state": "waiting_direct_target"}, upsert=True)
-            bot.send_message(ADMIN_CHAT_ID, "👤 لطفاً آیدی عددی (User ID) کاربر مورد نظر را ارسال کنید:\n*(برای انصراف دکمه زیر را بزنید)*", reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).row("❌ انصراف"))
+            bot.send_message(chat_id, "👤 لطفاً آیدی عددی (User ID) کاربر مورد نظر را ارسال کنید:\n*(برای انصراف دکمه زیر را بزنید)*", reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).row("❌ انصراف"))
             return
         elif text == "👝 مدیریت و تایید ولت‌ها":
             send_paginated_wallets(message, offset=0)
             return
         elif text == "📊 گزارش کلی توکن‌ها":
-            show_token_summary_direct(ADMIN_CHAT_ID)
+            show_token_summary_direct(chat_id)
             return
         elif text == "🔍 جستجوی کاربر (آیدی یا ولت)":
-            bot.send_message(ADMIN_CHAT_ID, "🔍 برای جستجو، دستور زیر را ارسال کنید:\n`/search [آیدی عددی یا بخشی از ولت]`", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
+            bot.send_message(chat_id, "🔍 برای جستجو، دستور زیر را ارسال کنید:\n`/search [آیدی عددی یا بخشی از ولت]`", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
             return
         elif text == "📁 آپلود اکسل پرداختی‌ها":
-            bot.send_message(ADMIN_CHAT_ID, "📁 لطفاً فایل خروجی پرداختی خود (فرمت CSV یا متنی حاوی آیدی یا ولت کاربران) را مستقیماً در همین چت آپلود کنید تا وضعیت آن‌ها اتوماتیک به «پرداخت‌شده» تغییر يابد.", reply_markup=get_admin_reply_markup())
+            bot.send_message(chat_id, "📁 لطفاً فایل خروجی پرداختی خود (فرمت CSV یا متنی حاوی آیدی یا ولت کاربران) را مستقیماً در همین چت آپلود کنید تا وضعیت آن‌ها اتوماتیک به «پرداخت‌شده» تغییر يابد.", reply_markup=get_admin_reply_markup())
             return
         elif text == "🟢 اکسل پرداخت‌شده‌ها":
-            send_status_excel_report(ADMIN_CHAT_ID, status_filter=1)
+            send_status_excel_report(chat_id, status_filter=1)
             return
         elif text == "🟡 اکسل در انتظار پرداخت":
-            send_status_excel_report(ADMIN_CHAT_ID, status_filter=0)
+            send_status_excel_report(chat_id, status_filter=0)
             return
         elif text == "📥 اکسل واجدین شرایط بی‌ولت":
-            send_eligible_no_wallet_excel(ADMIN_CHAT_ID)
+            send_eligible_no_wallet_excel(chat_id)
             return
         elif text == "📥 اکسل کاربران زیر حد نصاب (<3 دعوت)":
-            send_under_threshold_excel(ADMIN_CHAT_ID)
+            send_under_threshold_excel(chat_id)
             return
         elif text == "📊 گزارش تفکیکی کامل (فایل)":
-            send_detailed_report_file(ADMIN_CHAT_ID)
+            send_detailed_report_file(chat_id)
             return
         elif text == "📥 دریافت فوری بک‌آپ (JSON)":
-            send_database_backup(ADMIN_CHAT_ID)
+            send_database_backup(chat_id)
             return
         elif text == "📈 آمار کلی ربات":
-            show_stats_direct(ADMIN_CHAT_ID)
+            show_stats_direct(chat_id)
             return
         elif text == "🔄 به‌روزرسانی پنل ادمین":
-            bot.send_message(ADMIN_CHAT_ID, "🔄 پنل مدیریت با موفقیت به‌روزرسانی و بازنشانی شد.", reply_markup=get_admin_reply_markup())
+            bot.send_message(chat_id, "🔄 پنل مدیریت با موفقیت به‌روزرسانی و بازنشانی شد.", reply_markup=get_admin_reply_markup())
             return
         elif text == "🔙 خروج از حالت ادمین / منوی اصلی":
-            bot.send_message(ADMIN_CHAT_ID, "مجدداً پنل مدیریتی ثابت فعال است.", reply_markup=get_admin_reply_markup())
+            bot.send_message(chat_id, "مجدداً پنل مدیریتی فعال است.", reply_markup=get_admin_reply_markup())
             return
         elif text.startswith("/search "):
             query = text.replace("/search", "").strip()
             query_filter = {"user_id": int(query)} if query.isdigit() else {"wallet": {"$regex": query, "$options": "i"}}
             rows = list(users_col.find(query_filter))
             if not rows:
-                bot.send_message(ADMIN_CHAT_ID, "❌ هیچ کاربری با این مشخصات پیدا نشد.", reply_markup=get_admin_reply_markup())
+                bot.send_message(chat_id, "❌ هیچ کاربری با این مشخصات پیدا نشد.", reply_markup=get_admin_reply_markup())
                 return
             res = "🔍 *نتیجه جستجوی ادمین:*\n\n"
             for r in rows:
@@ -880,16 +888,16 @@ def handle_all_messages(message):
                     f"📌 ثبت فرم: `{submitted}` | وضعیت: *{paid_status_str}*\n"
                     f"---\n"
                 )
-            bot.send_message(ADMIN_CHAT_ID, res, reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
+            bot.send_message(chat_id, res, reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
             return
         elif text.startswith("/deleteuser "):
             target_id = text.replace("/deleteuser", "").strip()
             if target_id.isdigit():
                 users_col.delete_one({"user_id": int(target_id)})
                 captcha_col.delete_one({"user_id": int(target_id)})
-                bot.send_message(ADMIN_CHAT_ID, f"✅ کاربر با آیدی عددی `{target_id}` به طور کامل حذف شد.", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
+                bot.send_message(chat_id, f"✅ کاربر با آیدی عددی `{target_id}` به طور کامل حذف شد.", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
             else:
-                bot.send_message(ADMIN_CHAT_ID, "⚠️ آیدی عددی وارد شده معتبر نیست.", reply_markup=get_admin_reply_markup())
+                bot.send_message(chat_id, "⚠️ آیدی عددی وارد شده معتبر نیست.", reply_markup=get_admin_reply_markup())
             return
 
     captcha_data = captcha_col.find_one({"user_id": user_id})
@@ -927,7 +935,7 @@ def handle_all_messages(message):
             )
         return
 
-    if is_airdrop_finished() and user_id != ADMIN_CHAT_ID:
+    if is_airdrop_finished() and not is_admin(user_id):
         bot.send_message(user_id, "🛑 کل توکن های ایردارپ ( ۵۰۰ میلیون PRS) توسط شرکت کننده های این ایردراپ استخراج شد و این ربات غیر فعال شد به زودی تمام توکن ها بین کاربران توزیع خواهد شد.")
         return
 
@@ -1084,11 +1092,11 @@ def handle_callbacks(call):
     user_id = call.from_user.id
     chat_id = call.message.chat.id
     
-    if is_bot_globally_disabled() and user_id != ADMIN_CHAT_ID:
+    if is_bot_globally_disabled() and not is_admin(user_id):
         bot.answer_callback_query(call.id, "🛑 ربات در حال حاضر توسط مدیریت خاموش است.", show_alert=True)
         return
 
-    if is_airdrop_finished() and user_id != ADMIN_CHAT_ID:
+    if is_airdrop_finished() and not is_admin(user_id):
         bot.answer_callback_query(call.id, "🛑 ایردراپ به اتمام رسید.", show_alert=True)
         return
 
@@ -1111,7 +1119,7 @@ def handle_callbacks(call):
         return
 
     if call.data.startswith("admin_pay_"):
-        if user_id != ADMIN_CHAT_ID:
+        if not is_admin(user_id):
             return
         parts = call.data.split("_")
         target_uid = int(parts[2])
@@ -1139,7 +1147,7 @@ def handle_callbacks(call):
         return
 
     if call.data.startswith("admin_page_"):
-        if user_id != ADMIN_CHAT_ID:
+        if not is_admin(user_id):
             return
         offset = int(call.data.split("_")[2])
         bot.answer_callback_query(call.id)
