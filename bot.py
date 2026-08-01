@@ -678,109 +678,6 @@ def handle_all_messages(message):
         return
 
     if user_id == ADMIN_CHAT_ID:
-        admin_state = settings_col.find_one({"key": "admin_state"})
-        if admin_state:
-            state_val = admin_state.get("state")
-            if state_val == "waiting_broadcast":
-                settings_col.delete_one({"key": "admin_state"})
-                if text == "❌ انصراف":
-                    bot.send_message(ADMIN_CHAT_ID, "❌ ارسال همگانی لغو شد.", reply_markup=get_admin_reply_markup())
-                    return
-                
-                bot.send_message(ADMIN_CHAT_ID, "🚀 عملیات ارسال همگانی با مکانیزم ضد اسپم آغاز شد...", reply_markup=get_admin_reply_markup())
-                
-                def run_broadcast():
-                    all_users = list(users_col.find({}, {"user_id": 1}))
-                    success_count = 0
-                    fail_count = 0
-                    for idx, u in enumerate(all_users):
-                        try:
-                            bot.send_message(u["user_id"], text)
-                            success_count += 1
-                        except Exception:
-                            fail_count += 1
-                        
-                        if (idx + 1) % 30 == 0:
-                            time.sleep(1)
-                    
-                    bot.send_message(
-                        ADMIN_CHAT_ID,
-                        f"📊 **گزارش پایان ارسال همگانی:**\n\n"
-                        f"✅ ارسال موفق: `{success_count}` کاربر\n"
-                        f"❌ ارسال ناموفق (بلاک شده یا غیرفعال): `{fail_count}` کاربر",
-                        reply_markup=get_admin_reply_markup(),
-                        parse_mode="Markdown"
-                    )
-                
-                threading.Thread(target=run_broadcast, daemon=True).start()
-                return
-
-            elif state_val == "waiting_direct_target":
-                settings_col.update_one({"key": "admin_state"}, {"$set": {"state": "waiting_direct_text", "target_uid": int(text) if text.isdigit() else 0}}, upsert=True)
-                bot.send_message(ADMIN_CHAT_ID, "✍️ حالا متن پیام شخصی خود را برای این کاربر ارسال کنید:", reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).row("❌ انصراف"))
-                return
-
-            elif state_val == "waiting_direct_text":
-                target_uid = admin_state.get("target_uid")
-                settings_col.delete_one({"key": "admin_state"})
-                if text == "❌ انصراف":
-                    bot.send_message(ADMIN_CHAT_ID, "❌ ارسال پیام شخصی لغو شد.", reply_markup=get_admin_reply_markup())
-                    return
-                
-                try:
-                    bot.send_message(target_uid, f"📩 **پیام از طرف مدیریت ربات:**\n\n{text}", parse_mode="Markdown")
-                    bot.send_message(ADMIN_CHAT_ID, f"✅ پیام شخصی با موفقیت به کاربر `{target_uid}` ارسال شد.", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
-                except Exception as e:
-                    bot.send_message(ADMIN_CHAT_ID, f"❌ خطا در ارسال پیام به کاربر:\n`{e}`", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
-                return
-
-            elif state_val == "waiting_manual_pay_id":
-                if text == "❌ انصراف":
-                    settings_col.delete_one({"key": "admin_state"})
-                    bot.send_message(ADMIN_CHAT_ID, "❌ ثبت پرداخت دستی لغو شد.", reply_markup=get_admin_reply_markup())
-                    return
-                if not text.isdigit():
-                    bot.send_message(ADMIN_CHAT_ID, "⚠️ لطفاً یک آیدی عددی معتبر وارد کنید:")
-                    return
-                target_uid = int(text)
-                usr = users_col.find_one({"user_id": target_uid})
-                if not usr:
-                    bot.send_message(ADMIN_CHAT_ID, "❌ کاربری با این آیدی در دیتابیس یافت نشد. لطفاً آیدی دیگری وارد کنید:")
-                    return
-                settings_col.update_one({"key": "admin_state"}, {"$set": {"state": "waiting_manual_pay_amount", "target_uid": target_uid}}, upsert=True)
-                r_cnt = usr.get("ref_count", 0)
-                d_cnt = usr.get("daily_count", 0)
-                tot = calculate_total_tokens(r_cnt, d_cnt)
-                bot.send_message(ADMIN_CHAT_ID, f"👤 کاربر پیدا شد.\n🎁 کل توکن محاسبه‌شده برای این کاربر: `{tot:,} PRS`\n\nحالا مقدار توکنی که می‌خواهید به عنوان پرداخت ثبت شود را وارد کنید (یا بنویسید `all` تا کل مبلغ ثبت شود):", reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).row("❌ انصراف"), parse_mode="Markdown")
-                return
-
-            elif state_val == "waiting_manual_pay_amount":
-                if text == "❌ انصراف":
-                    settings_col.delete_one({"key": "admin_state"})
-                    bot.send_message(ADMIN_CHAT_ID, "❌ ثبت پرداخت دستی لغو شد.", reply_markup=get_admin_reply_markup())
-                    return
-                target_uid = admin_state.get("target_uid")
-                settings_col.delete_one({"key": "admin_state"})
-                usr = users_col.find_one({"user_id": target_uid})
-                if not usr:
-                    bot.send_message(ADMIN_CHAT_ID, "❌ خطا: کاربر یافت نشد.", reply_markup=get_admin_reply_markup())
-                    return
-                r_cnt = usr.get("ref_count", 0)
-                d_cnt = usr.get("daily_count", 0)
-                tot = calculate_total_tokens(r_cnt, d_cnt)
-                
-                if text.lower() == "all":
-                    pay_amt = tot
-                elif text.isdigit():
-                    pay_amt = int(text)
-                else:
-                    bot.send_message(ADMIN_CHAT_ID, "⚠️ مقدار وارد شده نامعتبر است. عملیات لغو شد.", reply_markup=get_admin_reply_markup())
-                    return
-                
-                users_col.update_one({"user_id": target_uid}, {"$set": {"paid": 1, "paid_amount": pay_amt}})
-                bot.send_message(ADMIN_CHAT_ID, f"✅ پرداخت دستی با موفقیت ثبت شد!\n🆔 آیدی: `{target_uid}`\n💳 مبلغ ثبت‌شده: `{pay_amt:,} PRS`", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
-                return
-
         if text == "🔴 خاموش کردن ربات":
             settings_col.replace_one({"key": "bot_status"}, {"key": "bot_status", "status": "off"}, upsert=True)
             bot.send_message(ADMIN_CHAT_ID, "🔴 ربات با موفقیت **خاموش** شد. کاربران عادی دیگر قادر به استفاده از ربات نخواهند بود.", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
@@ -791,11 +688,11 @@ def handle_all_messages(message):
             return
         elif text == "📢 ارسال همگانی پیام":
             settings_col.replace_one({"key": "admin_state"}, {"key": "admin_state", "state": "waiting_broadcast"}, upsert=True)
-            bot.send_message(ADMIN_CHAT_ID, "📢 لطفاً متن پیام خود را برای ارسال همگانی به تمام کاربران ارسال کنید:\n*(برای انصراف دکمه زیر را بزنید)*", reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).row("❌ انصراف"))
+            bot.send_message(ADMIN_CHAT_ID, "📢 لطفاً متن پیام خود را برای ارسال همگانی به تمام کاربران ارسال کنید:\n*(برای انصراف دستور /cancel را بفرستید)*", reply_markup=get_admin_reply_markup())
             return
         elif text == "✉️ ارسال پیام شخصی به کاربر":
             settings_col.replace_one({"key": "admin_state"}, {"key": "admin_state", "state": "waiting_direct_target"}, upsert=True)
-            bot.send_message(ADMIN_CHAT_ID, "👤 لطفاً آیدی عددی (User ID) کاربر مورد نظر را ارسال کنید:\n*(برای انصراف دکمه زیر را بزنید)*", reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).row("❌ انصراف"))
+            bot.send_message(ADMIN_CHAT_ID, "👤 لطفاً آیدی عددی (User ID) کاربر مورد نظر را ارسال کنید:", reply_markup=get_admin_reply_markup())
             return
         elif text == "👝 مدیریت و تایید ولت‌ها":
             send_paginated_wallets(message, offset=0)
@@ -877,6 +774,52 @@ def handle_all_messages(message):
                 bot.send_message(ADMIN_CHAT_ID, "⚠️ آیدی عددی وارد شده معتبر نیست.", reply_markup=get_admin_reply_markup())
             return
         
+        # مدیریت حالت‌های خاص ادمین (Broadcast و غیره)
+        admin_state = settings_col.find_one({"key": "admin_state"})
+        if admin_state:
+            state_val = admin_state.get("state")
+            if state_val == "waiting_broadcast":
+                settings_col.delete_one({"key": "admin_state"})
+                bot.send_message(ADMIN_CHAT_ID, "🚀 عملیات ارسال همگانی آغاز شد...", reply_markup=get_admin_reply_markup())
+                
+                def run_broadcast():
+                    all_users = list(users_col.find({}, {"user_id": 1}))
+                    success_count = 0
+                    fail_count = 0
+                    for idx, u in enumerate(all_users):
+                        try:
+                            bot.send_message(u["user_id"], text)
+                            success_count += 1
+                        except Exception:
+                            fail_count += 1
+                        if (idx + 1) % 30 == 0:
+                            time.sleep(1)
+                    bot.send_message(
+                        ADMIN_CHAT_ID,
+                        f"📊 **گزارش ارسال همگانی:**\n\n✅ موفق: `{success_count}`\n❌ ناموفق: `{fail_count}`",
+                        reply_markup=get_admin_reply_markup(),
+                        parse_mode="Markdown"
+                    )
+                threading.Thread(target=run_broadcast, daemon=True).start()
+                return
+
+            elif state_val == "waiting_direct_target":
+                if text.isdigit():
+                    settings_col.update_one({"key": "admin_state"}, {"$set": {"state": "waiting_direct_text", "target_uid": int(text)}}, upsert=True)
+                    bot.send_message(ADMIN_CHAT_ID, "✍️ حالا متن پیام شخصی خود را برای این کاربر ارسال کنید:", reply_markup=get_admin_reply_markup())
+                else:
+                    bot.send_message(ADMIN_CHAT_ID, "⚠️ آیدی عددی نامعتبر است.")
+                return
+
+            elif state_val == "waiting_direct_text":
+                target_uid = admin_state.get("target_uid")
+                settings_col.delete_one({"key": "admin_state"})
+                try:
+                    bot.send_message(target_uid, f"📩 **پیام از طرف مدیریت:**\n\n{text}", parse_mode="Markdown")
+                    bot.send_message(ADMIN_CHAT_ID, f"✅ پیام به کاربر `{target_uid}` ارسال شد.", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
+                except Exception as e:
+                    bot.send_message(ADMIN_CHAT_ID, f"❌ خطا در ارسال پیام:\n`{e}`", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
+                return
         return
 
     captcha_data = captcha_col.find_one({"user_id": user_id})
