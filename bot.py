@@ -712,10 +712,10 @@ def handle_all_messages(message):
         elif text == "🟡 اکسل در انتظار پرداخت":
             send_status_excel_report(ADMIN_CHAT_ID, status_filter=0)
             return
-        elif "دعوت ۳+ بدون ثبت ولت" in text:
+        elif text == "🟢 دعوت ۳+ بدون ثبت ولت":
             send_no_wallet_qualified_excel(ADMIN_CHAT_ID)
             return
-        elif "دعوت زیر ۳ نفر" in text:
+        elif text == "🔴 دعوت زیر ۳ نفر":
             send_under_3_referrals_excel(ADMIN_CHAT_ID)
             return
         elif text == "📊 گزارش تفکیکی کامل (فایل)":
@@ -774,7 +774,6 @@ def handle_all_messages(message):
                 bot.send_message(ADMIN_CHAT_ID, "⚠️ آیدی عددی وارد شده معتبر نیست.", reply_markup=get_admin_reply_markup())
             return
         
-        # مدیریت حالت‌های خاص ادمین (Broadcast و غیره)
         admin_state = settings_col.find_one({"key": "admin_state"})
         if admin_state:
             state_val = admin_state.get("state")
