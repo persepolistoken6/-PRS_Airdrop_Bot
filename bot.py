@@ -880,6 +880,9 @@ def handle_all_messages(message):
             else:
                 bot.send_message(ADMIN_CHAT_ID, "⚠️ آیدی عددی وارد شده معتبر نیست.", reply_markup=get_admin_reply_markup())
             return
+        
+        # اگر ادمین پیامی داد که دستور نبود، عملیات متوقف شود تا ولت برایش ثبت نشود
+        return
 
     captcha_data = captcha_col.find_one({"user_id": user_id})
 
@@ -996,6 +999,7 @@ def handle_all_messages(message):
             f"1. وارد تراست ولت شوید و روی **علامت مثبت (+)** یا آیکون تنظیمات در بالای صفحه بزنید.\n"
             f"2. شبکه (Network) را روی حالت **BNB Smart Chain** قرار دهید.\n"
             f"3. آدرس قرارداد (Contract Address) توکن پرسپولیس را در کادر مربوطه وارد کنید تا نام و مشخصات توکن ظاهر شود.\n"
+
             f"4. روی گزینه **Save** یا **Add Token** بزنید تا توکن پرسپولیس به لیست کیف پول شما اضافه شود و پس از واریز، موجودی خود را ببینید."
         )
         bot.send_message(chat_id, guide_text, parse_mode="Markdown")
