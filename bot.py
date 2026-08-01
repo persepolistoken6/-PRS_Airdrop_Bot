@@ -298,7 +298,7 @@ def send_under_required_refs_excel(chat_id):
     bot.send_document(
         chat_id, 
         file_bytes, 
-        caption="📁 فایل کاربران **زیر ۳ نفر دعوت (فاقد شرایط اولیه)**", 
+        caption="📁 فایل کاربران **زیر ۳ نفر دعوت (فاقد شرایط اولیه)** با مشخصات کامل", 
         reply_markup=get_admin_reply_markup(), 
         parse_mode="Markdown"
     )
