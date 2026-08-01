@@ -1288,9 +1288,11 @@ if __name__ == "__main__":
     bot.delete_webhook(drop_pending_updates=True)
     time.sleep(2)
 
+    # اجرای ترد پشتیبان‌گیری خودکار دیتابیس
     backup_thread = threading.Thread(target=auto_backup_scheduler, daemon=True)
     backup_thread.start()
 
+    # حلقه اصلی پایش و دریافت پیام‌ها
     while True:
         try:
             bot.infinity_polling(timeout=30, long_polling_timeout=30, skip_pending=True)
