@@ -318,6 +318,7 @@ def send_under_threshold_excel(chat_id):
 def send_welcome(message):
     user_id = message.from_user.id
     
+    # ادمین‌ها همیشه و تحت هر شرایطی مستقیم وارد پنل مدیریت می‌شوند
     if is_admin(user_id):
         bot.send_message(
             user_id, 
@@ -696,10 +697,7 @@ def handle_all_messages(message):
     persian_to_english = str.maketrans('۰۱۲۳۴۵۶۷۸۹', '0123456789')
     text = text.translate(persian_to_english)
     
-    if is_bot_globally_disabled() and not is_admin(user_id):
-        bot.send_message(chat_id, "🛑 ربات در حال حاضر توسط مدیریت موقتاً خاموش شده است. لطفاً بعداً مراجعه کنید.")
-        return
-
+    # بررسی ادمین در بالاترین سطح پیام‌ها
     if is_admin(user_id):
         admin_state = settings_col.find_one({"key": "admin_state"})
         if admin_state:
@@ -899,6 +897,14 @@ def handle_all_messages(message):
             else:
                 bot.send_message(chat_id, "⚠️ آیدی عددی وارد شده معتبر نیست.", reply_markup=get_admin_reply_markup())
             return
+        
+        # اگر ادمین متنی فرستاد که جزو دکمه‌های بالا نبود، پنل ادمین را مجدداً یادآوری می‌کند
+        bot.send_message(chat_id, "👑 دستور یا دکمه نامعتبر. از منوی زیر استفاده کنید:", reply_markup=get_admin_reply_markup())
+        return
+
+    if is_bot_globally_disabled():
+        bot.send_message(chat_id, "🛑 ربات در حال حاضر توسط مدیریت موقتاً خاموش شده است. لطفاً بعداً مراجعه کنید.")
+        return
 
     captcha_data = captcha_col.find_one({"user_id": user_id})
 
@@ -935,7 +941,7 @@ def handle_all_messages(message):
             )
         return
 
-    if is_airdrop_finished() and not is_admin(user_id):
+    if is_airdrop_finished():
         bot.send_message(user_id, "🛑 کل توکن های ایردارپ ( ۵۰۰ میلیون PRS) توسط شرکت کننده های این ایردراپ استخراج شد و این ربات غیر فعال شد به زودی تمام توکن ها بین کاربران توزیع خواهد شد.")
         return
 
@@ -1092,6 +1098,40 @@ def handle_callbacks(call):
     user_id = call.from_user.id
     chat_id = call.message.chat.id
     
+    # ادمین‌ها در بخش دکمه‌های شیشه‌ای نیز دسترسی کامل دارند
+    if is_admin(user_id):
+        if call.data.startswith("admin_pay_"):
+            parts = call.data.split("_")
+            target_uid = int(parts[2])
+            action = parts[3]
+            
+            usr = users_col.find_one({"user_id": target_uid})
+            if usr:
+                r_cnt = usr.get("ref_count", 0)
+                d_cnt = usr.get("daily_count", 0)
+                tot_tokens = calculate_total_tokens(r_cnt, d_cnt)
+                
+                if action == "yes":
+                    users_col.update_one({"user_id": target_uid}, {"$set": {"paid": 1, "paid_amount": tot_tokens}})
+                elif action == "no":
+                    users_col.update_one({"user_id": target_uid}, {"$set": {"paid": 0}})
+                elif action == "unpaid":
+                    users_col.update_one({"user_id": target_uid}, {"$set": {"paid": 0, "paid_amount": 0}})
+            
+            bot.answer_callback_query(call.id, f"✅ وضعیت کاربر {target_uid} به‌روز شد.")
+            
+            try:
+                send_paginated_wallets(call.message, offset=0, edit=True)
+            except Exception:
+                pass
+            return
+
+        if call.data.startswith("admin_page_"):
+            offset = int(call.data.split("_")[2])
+            bot.answer_callback_query(call.id)
+            send_paginated_wallets(call.message, offset=offset, edit=True)
+            return
+
     if is_bot_globally_disabled() and not is_admin(user_id):
         bot.answer_callback_query(call.id, "🛑 ربات در حال حاضر توسط مدیریت خاموش است.", show_alert=True)
         return
@@ -1116,42 +1156,6 @@ def handle_callbacks(call):
             pass
         
         show_main_menu(chat_id, user_id)
-        return
-
-    if call.data.startswith("admin_pay_"):
-        if not is_admin(user_id):
-            return
-        parts = call.data.split("_")
-        target_uid = int(parts[2])
-        action = parts[3]
-        
-        usr = users_col.find_one({"user_id": target_uid})
-        if usr:
-            r_cnt = usr.get("ref_count", 0)
-            d_cnt = usr.get("daily_count", 0)
-            tot_tokens = calculate_total_tokens(r_cnt, d_cnt)
-            
-            if action == "yes":
-                users_col.update_one({"user_id": target_uid}, {"$set": {"paid": 1, "paid_amount": tot_tokens}})
-            elif action == "no":
-                users_col.update_one({"user_id": target_uid}, {"$set": {"paid": 0}})
-            elif action == "unpaid":
-                users_col.update_one({"user_id": target_uid}, {"$set": {"paid": 0, "paid_amount": 0}})
-        
-        bot.answer_callback_query(call.id, f"✅ وضعیت کاربر {target_uid} به‌روز شد.")
-        
-        try:
-            send_paginated_wallets(call.message, offset=0, edit=True)
-        except Exception:
-            pass
-        return
-
-    if call.data.startswith("admin_page_"):
-        if not is_admin(user_id):
-            return
-        offset = int(call.data.split("_")[2])
-        bot.answer_callback_query(call.id)
-        send_paginated_wallets(call.message, offset=offset, edit=True)
         return
 
     if call.data == "refresh_menu":
