@@ -1068,23 +1068,21 @@ def handle_all_messages(message):
         bot.send_message(chat_id, f"📸 صفحه اینستاگرام: {INSTAGRAM_URL}")
         return
 
+    # بررسی اینکه آیا متن ارسالی یک آدرس ولت معتبر است یا خیر
+    wallet_address = text.strip()
+    if not re.match(r"^0x[a-fA-F0-9]{40}$", wallet_address):
+        bot.send_message(
+            chat_id,
+            "⚠️ لطفاً از پنل کاربری اقدام کنید.",
+            parse_mode="Markdown"
+        )
+        return
+
     user_doc = users_col.find_one({"user_id": user_id})
     submitted_status = user_doc.get("submitted", 0) if user_doc else 0
 
     if submitted_status >= 2:
         bot.send_message(chat_id, "⚠️ شما سهمیه ویرایش خود را به اتمام رسانده‌اید.")
-        return
-
-    # اعتبارسنجی آدرس ولت (جلوگیری از ارسال متن‌های الکی و غیرمرتبط)
-    wallet_address = text.strip()
-    if not re.match(r"^0x[a-fA-F0-9]{40}$", wallet_address):
-        bot.send_message(
-            chat_id,
-            "❌ **آدرس ولت نامعتبر است!**\n\n"
-            "لطفاً فقط آدرس معتبر شبکه **BNB Smart Chain (BEP20)** خود را ارسال کنید (باید با `0x` شروع شود و ۴۲ کاراکتر باشد).\n"
-            "متن‌های نامعتبر یا مربوط به شبکه‌های دیگر قابل قبول نیستند.",
-            parse_mode="Markdown"
-        )
         return
 
     save_submission(user_id, wallet_address, submitted_status)
