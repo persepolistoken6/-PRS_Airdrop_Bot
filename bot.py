@@ -4,6 +4,7 @@ import random
 import time
 import json
 import threading
+import re
 from datetime import datetime
 from telebot import TeleBot
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
@@ -114,14 +115,14 @@ def get_main_reply_markup():
 def get_admin_reply_markup():
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row("👝 مدیریت و تایید ولت‌ها", "📊 گزارش کلی توکن‌ها")
-    markup.row("🔍 جستجوی کاربر (آیدی یا ولت)", "📁 آپلود اکسل پرداختی‌ها")
-    markup.row("🟢 اکسل پرداخت‌شده‌ها", "🟡 اکسل در انتظار پرداخت")
-    markup.row("📥 اکسل واجدین شرایط بی‌ولت", "📥 اکسل کاربران زیر حد نصاب (<3 دعوت)")
-    markup.row("📊 گزارش تفکیکی کامل (فایل)", "📥 دریافت فوری بک‌آپ (JSON)")
-    markup.row("📈 آمار کلی ربات", "🔄 به‌روزرسانی پنل ادمین")
-    markup.row("📢 ارسال همگانی پیام", "✉️ ارسال پیام شخصی به کاربر")
-    markup.row("🔴 خاموش کردن ربات", "🟢 روشن کردن ربات")
-    markup.row("🔙 خروج از حالت ادمین / منوی اصلی")
+    markup.row("🔍 جستجوی کاربر (آیدی یا ولت)", "✏️ ویرایش ولت کاربر با آیدی")
+    markup.row("📁 آپلود اکسل پرداختی‌ها", "🟢 اکسل پرداخت‌شده‌ها")
+    markup.row("🟡 اکسل در انتظار پرداخت", "📥 اکسل واجدین شرایط بی‌ولت")
+    markup.row("📥 اکسل کاربران زیر حد نصاب (<3 دعوت)", "📊 گزارش تفکیکی کامل (فایل)")
+    markup.row("📥 دریافت فوری بک‌آپ (JSON)", "📈 آمار کلی ربات")
+    markup.row("🔄 به‌روزرسانی پنل ادمین", "📢 ارسال همگانی پیام")
+    markup.row("✉️ ارسال پیام شخصی به کاربر", "🔴 خاموش کردن ربات")
+    markup.row("🟢 روشن کردن ربات", "🔙 خروج از حالت ادمین / منوی اصلی")
     return markup
 
 def register_user_after_verify(user_id, referrer_id):
@@ -758,10 +759,10 @@ def handle_all_messages(message):
                     bot.send_message(chat_id, f"❌ خطا در ارسال پیام به کاربر:\n`{e}`", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
                 return
 
-            elif state_val == "waiting_manual_pay_id":
+            elif state_val == "waiting_admin_edit_wallet_id":
                 if text == "❌ انصراف":
                     settings_col.delete_one({"key": "admin_state"})
-                    bot.send_message(chat_id, "❌ ثبت پرداخت دستی لغو شد.", reply_markup=get_admin_reply_markup())
+                    bot.send_message(chat_id, "❌ عملیات لغو شد.", reply_markup=get_admin_reply_markup())
                     return
                 if not text.isdigit():
                     bot.send_message(chat_id, "⚠️ لطفاً یک آیدی عددی معتبر وارد کنید:")
@@ -771,38 +772,20 @@ def handle_all_messages(message):
                 if not usr:
                     bot.send_message(chat_id, "❌ کاربری با این آیدی در دیتابیس یافت نشد. لطفاً آیدی دیگری وارد کنید:")
                     return
-                settings_col.update_one({"key": "admin_state"}, {"$set": {"state": "waiting_manual_pay_amount", "target_uid": target_uid}}, upsert=True)
-                r_cnt = usr.get("ref_count", 0)
-                d_cnt = usr.get("daily_count", 0)
-                tot = calculate_total_tokens(r_cnt, d_cnt)
-                bot.send_message(chat_id, f"👤 کاربر پیدا شد.\n🎁 کل توکن محاسبه‌شده برای این کاربر: `{tot:,} PRS`\n\nحالا مقدار توکنی که می‌خواهید به عنوان پرداخت ثبت شود را وارد کنید (یا بنویسید `all` تا کل مبلغ ثبت شود):", reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).row("❌ انصراف"), parse_mode="Markdown")
+                settings_col.update_one({"key": "admin_state"}, {"$set": {"state": "waiting_admin_edit_wallet_val", "target_uid": target_uid}}, upsert=True)
+                current_wlt = usr.get("wallet", "ثبت نشده")
+                bot.send_message(chat_id, f"👤 کاربر پیدا شد.\n👝 ولت فعلی: `{current_wlt}`\n\nحالا آدرس ولت جدید (یا متن جدید) را برای این کاربر ارسال کنید:", reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).row("❌ انصراف"), parse_mode="Markdown")
                 return
 
-            elif state_val == "waiting_manual_pay_amount":
+            elif state_val == "waiting_admin_edit_wallet_val":
                 if text == "❌ انصراف":
                     settings_col.delete_one({"key": "admin_state"})
-                    bot.send_message(chat_id, "❌ ثبت پرداخت دستی لغو شد.", reply_markup=get_admin_reply_markup())
+                    bot.send_message(chat_id, "❌ عملیات لغو شد.", reply_markup=get_admin_reply_markup())
                     return
                 target_uid = admin_state.get("target_uid")
                 settings_col.delete_one({"key": "admin_state"})
-                usr = users_col.find_one({"user_id": target_uid})
-                if not usr:
-                    bot.send_message(chat_id, "❌ خطا: کاربر یافت نشد.", reply_markup=get_admin_reply_markup())
-                    return
-                r_cnt = usr.get("ref_count", 0)
-                d_cnt = usr.get("daily_count", 0)
-                tot = calculate_total_tokens(r_cnt, d_cnt)
-                
-                if text.lower() == "all":
-                    pay_amt = tot
-                elif text.isdigit():
-                    pay_amt = int(text)
-                else:
-                    bot.send_message(chat_id, "⚠️ مقدار وارد شده نامعتبر است. عملیات لغو شد.", reply_markup=get_admin_reply_markup())
-                    return
-                
-                users_col.update_one({"user_id": target_uid}, {"$set": {"paid": 1, "paid_amount": pay_amt}})
-                bot.send_message(chat_id, f"✅ پرداخت دستی با موفقیت ثبت شد!\n🆔 آیدی: `{target_uid}`\n💳 مبلغ ثبت‌شده: `{pay_amt:,} PRS`", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
+                users_col.update_one({"user_id": target_uid}, {"$set": {"wallet": text, "submitted": 1}})
+                bot.send_message(chat_id, f"✅ ولت کاربر `{target_uid}` با موفقیت به مقدار جدید تغییر یافت:\n`{text}`", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
                 return
 
         if text == "🔴 خاموش کردن ربات":
@@ -820,6 +803,10 @@ def handle_all_messages(message):
         elif text == "✉️ ارسال پیام شخصی به کاربر":
             settings_col.replace_one({"key": "admin_state"}, {"key": "admin_state", "state": "waiting_direct_target"}, upsert=True)
             bot.send_message(chat_id, "👤 لطفاً آیدی عددی (User ID) کاربر مورد نظر را ارسال کنید:\n*(برای انصراف دکمه زیر را بزنید)*", reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).row("❌ انصراف"))
+            return
+        elif text == "✏️ ویرایش ولت کاربر با آیدی":
+            settings_col.replace_one({"key": "admin_state"}, {"key": "admin_state", "state": "waiting_admin_edit_wallet_id"}, upsert=True)
+            bot.send_message(chat_id, "🔍 لطفاً آیدی عددی کاربر مورد نظری که می‌خواهید ولتش را تغییر دهید ارسال کنید:\n*(برای انصراف دکمه زیر را بزنید)*", reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).row("❌ انصراف"))
             return
         elif text == "👝 مدیریت و تایید ولت‌ها":
             send_paginated_wallets(message, offset=0)
@@ -1084,19 +1071,30 @@ def handle_all_messages(message):
     user_doc = users_col.find_one({"user_id": user_id})
     submitted_status = user_doc.get("submitted", 0) if user_doc else 0
 
-    if submitted_status < 2 or len(text) > 10:
-        if submitted_status >= 2:
-            bot.send_message(chat_id, "⚠️ شما سهمیه ویرایش خود را به اتمام رسانده‌اید.")
-            return
-            
-        save_submission(user_id, text, submitted_status)
-        
-        if submitted_status == 0:
-            bot.send_message(chat_id, "✅ آدرس ولت توکن PRS شما با موفقیت ثبت شد.")
-        else:
-            bot.send_message(chat_id, "✅ آدرس ولت شما با موفقیت **ویرایش و به‌روزرسانی شد**.")
-        
-        show_main_menu(chat_id, user_id)
+    if submitted_status >= 2:
+        bot.send_message(chat_id, "⚠️ شما سهمیه ویرایش خود را به اتمام رسانده‌اید.")
+        return
+
+    # اعتبارسنجی آدرس ولت (جلوگیری از ارسال متن‌های الکی و غیرمرتبط)
+    wallet_address = text.strip()
+    if not re.match(r"^0x[a-fA-F0-9]{40}$", wallet_address):
+        bot.send_message(
+            chat_id,
+            "❌ **آدرس ولت نامعتبر است!**\n\n"
+            "لطفاً فقط آدرس معتبر شبکه **BNB Smart Chain (BEP20)** خود را ارسال کنید (باید با `0x` شروع شود و ۴۲ کاراکتر باشد).\n"
+            "متن‌های نامعتبر یا مربوط به شبکه‌های دیگر قابل قبول نیستند.",
+            parse_mode="Markdown"
+        )
+        return
+
+    save_submission(user_id, wallet_address, submitted_status)
+    
+    if submitted_status == 0:
+        bot.send_message(chat_id, "✅ آدرس ولت توکن PRS شما با موفقیت ثبت شد.")
+    else:
+        bot.send_message(chat_id, "✅ آدرس ولت شما با موفقیت **ویرایش و به‌روزرسانی شد**.")
+    
+    show_main_menu(chat_id, user_id)
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
