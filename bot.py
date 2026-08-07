@@ -38,7 +38,7 @@ REQUIRED_REFERRALS = 3
 BASE_REWARD = 1000
 EXTRA_REWARD = 1000
 DAILY_REWARD = 100
-MAX_TOTAL_TOKENS_LIMIT = 500_000_000
+MAX_TOTAL_TOKENS_LIMIT = 300_000_000
 
 BANNER_FILE_ID = "AgACAgQAAxkBAAMfamINNXWkFr-wk1ONFWAEHF2z-vGAAsgNaxtnhwABU-cbUHZe_7c6AQADAgADeQADPQQ"
 
@@ -333,7 +333,7 @@ def send_welcome(message):
         return
 
     if is_airdrop_finished():
-        bot.send_message(user_id, "🛑 کل توکن های ایردارپ ( ۵۰۰ میلیون PRS) توسط شرکت کننده های این ایردراپ استخراج شد و این ربات غیر فعال شد به زودی تمام توکن ها بین کاربران توزیع خواهد شد.")
+        bot.send_message(user_id, "🛑 کل توکن های ایردارپ ( ۳۰۰ میلیون PRS) توسط شرکت کننده های این ایردراپ استخراج شد و این ربات غیر فعال شد به زودی تمام توکن ها بین کاربران توزیع خواهد شد.")
         return
 
     if message.text and message.text.startswith('/menu'):
@@ -560,7 +560,7 @@ def show_stats_direct(chat_id):
 
 def show_main_menu(chat_id, user_id, message_id=None, edit=False):
     if is_airdrop_finished():
-        bot.send_message(chat_id, "🛑 کل توکن های ایردارپ ( ۵۰۰ میلیون PRS) توسط شرکت کننده های این ایردراپ استخراج شد و این ربات غیر فعال شد به زودی تمام توکن ها بین کاربران توزیع خواهد شد.")
+        bot.send_message(chat_id, "🛑 کل توکن های ایردارپ ( ۳۰۰ میلیون PRS) توسط شرکت کننده های این ایردراپ استخراج شد و این ربات غیر فعال شد به زودی تمام توکن ها بین کاربران توزیع خواهد شد.")
         return
 
     user_data = get_user_data(user_id)
@@ -942,7 +942,7 @@ def handle_all_messages(message):
         return
 
     if is_airdrop_finished():
-        bot.send_message(user_id, "🛑 کل توکن های ایردارپ ( ۵۰۰ میلیون PRS) توسط شرکت کننده های این ایردراپ استخراج شد و این ربات غیر فعال شد به زودی تمام توکن ها بین کاربران توزیع خواهد شد.")
+        bot.send_message(user_id, "🛑 کل توکن های ایردارپ ( ۳۰۰ میلیون PRS) توسط شرکت کننده های این ایردراپ استخراج شد و این ربات غیر فعال شد به زودی تمام توکن ها بین کاربران توزیع خواهد شد.")
         return
 
     if not check_membership(user_id):
