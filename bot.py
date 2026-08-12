@@ -276,11 +276,9 @@ def get_main_reply_markup(user_id):
 # ---------------------------------------------------------------------
 
 def is_admin(user_id):
-    """بررسی اینکه آیا کاربر جزو ادمین‌ها است یا خیر"""
     return user_id in ADMIN_IDS
 
 def is_bot_globally_disabled():
-    """بررسی اینکه آیا ربات توسط ادمین خاموش شده است یا خیر"""
     setting = settings_col.find_one({"key": "bot_status"})
     if setting and setting.get("status") == "off":
         return True
@@ -594,7 +592,6 @@ def send_welcome(message):
         show_main_menu(message.chat.id, user_id)
         return
 
-    # برای کاربر جدید ابتدا انتخاب زبان نمایش داده می‌شود
     send_language_selection(message.chat.id, referrer_id if referrer_id else 0)
 
 def ask_to_join(chat_id, referrer_id, user_id_or_lang="fa"):
@@ -1109,8 +1106,8 @@ def handle_all_messages(message):
         bot.send_message(chat_id, get_msg(user_id, "global_off"))
         return
 
+    # ۱. اولویت اول: بررسی کپچا
     captcha_data = captcha_col.find_one({"user_id": user_id})
-
     if captcha_data:
         n1 = captcha_data["num1"]
         n2 = captcha_data["num2"]
@@ -1148,7 +1145,7 @@ def handle_all_messages(message):
         ask_to_join(chat_id, 0, user_id)
         return
 
-    # پشتیبانی از دکمه‌های ترجمه شده منوی اصلی
+    # ۲. بررسی دکمه‌های منوی اصلی (فارسی و انگلیسی)
     if text in [LANG["fa"]["main_kb_status"], LANG["en"]["main_kb_status"]]:
         user_data = get_user_data(user_id)
         ref_count = user_data[0] if user_data else 0
@@ -1207,10 +1204,10 @@ def handle_all_messages(message):
         ranked_list.sort(key=lambda x: (x[2], x[1]), reverse=True)
         top_10 = ranked_list[:10]
         
-        text = get_msg(user_id, "top_title")
+        text_lb = get_msg(user_id, "top_title")
         for idx, (uid, r_cnt, total_t) in enumerate(top_10, 1):
-            text += get_msg(user_id, "top_row", idx, uid=uid, total=total_t, refs=r_cnt)
-        bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=get_main_reply_markup(user_id))
+            text_lb += get_msg(user_id, "top_row", idx, uid=uid, total=total_t, refs=r_cnt)
+        bot.send_message(chat_id, text_lb, parse_mode="Markdown", reply_markup=get_main_reply_markup(user_id))
         return
     elif text in [LANG["fa"]["main_kb_refresh"], LANG["en"]["main_kb_refresh"]]:
         show_main_menu(chat_id, user_id)
@@ -1245,30 +1242,32 @@ def handle_all_messages(message):
         bot.send_message(chat_id, f"📸 Instagram: {INSTAGRAM_URL}")
         return
 
+    # ۳. بررسی اینکه آیا متن ارسالی یک آدرس ولت معتبر است یا خیر
     wallet_address = text.strip()
-    if not re.match(r"^0x[a-fA-F0-9]{40}$", wallet_address):
-        bot.send_message(
-            chat_id,
-            "⚠️ لطفاً از پنل کاربری اقدام کنید / Please use the user panel.",
-            parse_mode="Markdown"
-        )
+    if re.match(r"^0x[a-fA-F0-9]{40}$", wallet_address):
+        user_doc = users_col.find_one({"user_id": user_id})
+        submitted_status = user_doc.get("submitted", 0) if user_doc else 0
+
+        if submitted_status >= 2:
+            bot.send_message(chat_id, get_msg(user_id, "wallet_limit_err"))
+            return
+
+        save_submission(user_id, wallet_address, submitted_status)
+        
+        if submitted_status == 0:
+            bot.send_message(chat_id, get_msg(user_id, "wallet_saved"))
+        else:
+            bot.send_message(chat_id, get_msg(user_id, "wallet_updated"))
+        
+        show_main_menu(chat_id, user_id)
         return
 
-    user_doc = users_col.find_one({"user_id": user_id})
-    submitted_status = user_doc.get("submitted", 0) if user_doc else 0
-
-    if submitted_status >= 2:
-        bot.send_message(chat_id, get_msg(user_id, "wallet_limit_err"))
-        return
-
-    save_submission(user_id, wallet_address, submitted_status)
-    
-    if submitted_status == 0:
-        bot.send_message(chat_id, get_msg(user_id, "wallet_saved"))
-    else:
-        bot.send_message(chat_id, get_msg(user_id, "wallet_updated"))
-    
-    show_main_menu(chat_id, user_id)
+    # ۴. اگر متن هیچ‌کدام نبود (متن متفرقه یا نامعتبر)
+    bot.send_message(
+        chat_id,
+        "⚠️ لطفاً از پنل کاربری اقدام کنید / Please use the user panel.",
+        parse_mode="Markdown"
+    )
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
@@ -1422,10 +1421,10 @@ def handle_callbacks(call):
         ranked_list.sort(key=lambda x: (x[2], x[1]), reverse=True)
         top_10 = ranked_list[:10]
         
-        text = get_msg(user_id, "top_title")
+        text_lb = get_msg(user_id, "top_title")
         for idx, (uid, r_cnt, total_t) in enumerate(top_10, 1):
-            text += get_msg(user_id, "top_row", idx, uid=uid, total=total_t, refs=r_cnt)
-        bot.send_message(chat_id, text, parse_mode="Markdown")
+            text_lb += get_msg(user_id, "top_row", idx, uid=uid, total=total_t, refs=r_cnt)
+        bot.send_message(chat_id, text_lb, parse_mode="Markdown")
     elif call.data == "my_status":
         if not check_membership(user_id):
             bot.answer_callback_query(call.id, "❌ ابتدا در کانال عضو شوید!", show_alert=True)
