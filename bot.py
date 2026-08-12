@@ -45,6 +45,236 @@ BANNER_FILE_ID = "AgACAgQAAxkBAAMfamINNXWkFr-wk1ONFWAEHF2z-vGAAsgNaxtnhwABU-cbUH
 
 bot = TeleBot(TOKEN, threaded=True)
 
+# ----------------- سیستم چندزبانه (فارسی / انگلیسی) -----------------
+LANG = {
+    "fa": {
+        "global_off": "🛑 ربات در حال حاضر توسط مدیریت موقتاً خاموش شده است. لطفاً بعداً مراجعه کنید.",
+        "airdrop_finished": "🛑 کل توکن های ایردارپ ( ۳۰۰ میلیون PRS) توسط شرکت کننده های این ایردراپ استخراج شد و این ربات غیر فعال شد به زودی تمام توکن ها بین کاربران توزیع خواهد شد.",
+        "self_ref": "⚠️ **شما نمی‌توانید روی لینک دعوت خودتان کلیک کنید!**\n\nلطفاً این لینک را برای دوستان خود ارسال کنید تا از طریق آن وارد ربات شوند.",
+        "join_req": "⚠️ **لطفاً برای ادامه کار ابتدا در کانال ما عضو شوید:**\n\n▫️ {}\n\nپس از عضویت، روی دکمه‌ی «عضو شدم، تایید کن» بزنید.",
+        "join_btn": "📢 عضویت در کانال رسمی",
+        "joined_btn": "✅ عضو شدم، تایید کن",
+        "captcha_title": "🛡 *تایید هویت امنیتی (ضد ربات و فیک)* \n\nلطفاً حاصل جمع زیر را به عنوان پاسخ ارسال کنید:\n❓ {} + {} = ؟\n\n*(عدد پاسخ را در چت ارسال کنید)*",
+        "captcha_wrong": "❌ پاسخ اشتباه است!\n\n🛡 یک سوال امنیتی جدید برای شما ارسال شد:\n❓ لطفاً حاصل جمع {} + {} را بفرستید:",
+        "main_kb_status": "📊 وضعیت من و رتبه",
+        "main_kb_ref": "🔗 دریافت لینک دعوت",
+        "main_kb_daily": "🎁 پاداش روزانه",
+        "main_kb_wallet": "📝 ارسال / ویرایش آدرس ولت",
+        "main_kb_guide": "📖 راهنمای ولت و توکن",
+        "main_kb_leaderboard": "🏆 برترین شرکت‌کنندگان",
+        "main_kb_refresh": "🔄 به‌روزرسانی پنل کاربری",
+        "main_kb_channel": "📢 کانال تلگرام",
+        "main_kb_twitter": "🐦 توییتر (ایکس)",
+        "main_kb_instagram": "📸 اینستاگرام",
+        "btn_channel": "📢 کانال تلگرام",
+        "btn_twitter": "🐦 توییتر (ایکس)",
+        "btn_insta": "📸 اینستاگرام پرسپولیس",
+        "btn_ref": "🔗 دریافت لینک دعوت جذاب و اختصاصی",
+        "btn_daily": "🎁 پاداش روزانه (100 PRS)",
+        "btn_guide": "📖 راهنمای ولت و توکن PRS",
+        "btn_top": "🏆 برترین شرکت‌کنندگان (تاپ ۱۰)",
+        "btn_status": "📊 وضعیت من و رتبه",
+        "btn_submit_w": "📝 ارسال / ویرایش ولت",
+        "btn_refresh": "🔄 به‌روزرسانی پنل کاربری",
+        "quick_menu_text": "👇 منوی دسترسی سریع همیشه در پایین صفحه شما قرار دارد:",
+        "main_caption": (
+            "🔴 *به ربات رسمی ایردراپ توکن هواداری پرسپولیس (PRS) خوش آمدید* 🏆\n\n"
+            "⚡ **صدای مستقلِ یک جامعه‌؛ بدون مرز و قدرتمند!**\n\n"
+            "توکن PRS فرصتی برای ساخت آینده‌ای نوین روی بلاک‌چین است. سهم خودت را از این موج بزرگ بگیر\n\n"
+            "🦅 **ظرفیت محدود است؛ عقب نمان!**\n"
+            "همین الان وارد شو و توکن‌هات رو دریافت کن.\n\n"
+            "🎁 *سیستم پاداش‌دهی و ایردراپ:*\n"
+            "▫️ پاداش پایه: `{base} PRS` (پس از عضویت در کانال و دعوت `{req}` دوست)\n"
+            "▫️ پاداش روزانه: `{daily} PRS` (فعال‌سازی پس از تکمیل ۳ دعوت و هر ۲۴ ساعت یک‌بار)\n"
+            "▫️ پاداش به ازای هر دعوت مازاد: `{extra} PRS`\n\n"
+            "📊 *وضعیت حساب شما:*\n"
+            "🆔 آیدی عددی شما: `{uid}`\n"
+            "👥 دعوت‌های شما: `{refs} / {req}`\n"
+            "🏅 رتبه شما در بین کاربران: `{rank}`\n"
+            "🎁 کل توکن کسب‌شده: `{earned:,} PRS`\n"
+            "💳 توکن پرداخت شده: `{paid:,} PRS`\n"
+            "💰 موجودی باقی‌مانده: `{rem:,} PRS`"
+        ),
+        "ref_text": (
+            "🔥 بزرگترین ایردراپ توکن هواداری پرسپولیس (PRS) 🔥\n\n"
+            "🏆 فرصت استثنایی برای دریافت توکن رایگان و ورود به اکوسیستم دیجیتال پرسپولیس!\n"
+            "🎁 همین الان با لینک زیر وارد ربات شو و پاداش ورودت رو بگیر:\n\n"
+            "{link}\n\n"
+            "این پیام رو برای دوستان خود ارسال کنید"
+        ),
+        "daily_locked": "⚠️ پاداش روزانه قفل است!\nبرای باز شدن آن باید حداقل {} دوست دعوت کنید.",
+        "daily_already": "⏳ شما قبلاً پاداش امروز خود را دریافت کرده‌اید!\nلطفاً پس از {} ساعت و {} دقیقه دیگر تلاش کنید.",
+        "daily_success": "🎁 تبریک! مبلغ {} توکن PRS به عنوان پاداش روزانه به حساب شما اضافه شد.",
+        "wallet_guide_text": (
+            "📖 *راهنمای کامل و گام‌به‌گام نصب کیف پول و اضافه کردن توکن پرسپولیس (PRS):*\n\n"
+            "🔹 **مقدمه:** توکن هواداری پرسپولیس روی شبکه قدرتمند **BNB Smart Chain (BSC / BEP20)** راه‌اندازی شده است. برای دریافت و نگهداری آن، بهترین پیشنهاد استفاده از اپلیکیشن امن **Trust Wallet (تراست ولت)** است.\n\n"
+            "📱 **مرحله اول: نصب و ساخت کیف پول**\n"
+            "• برنامه Trust Wallet را از گوگل‌پلی یا اپ‌استور دانلود کنید.\n"
+            "• یک کیف پول جدید بسازید و **۱۲ کلمه بازیابی (Seed Phrase)** خود را حتماً روی کاغذ یادداشت کنید و در جای امن نگه دارید.\n\n"
+            "📋 **مرحله دوم: نحوه اضافه کردن توکن PRS (Custom Token)**\n"
+            "چون این توکن جدید است، برای نمایش آن در تراست ولت باید مراحل زیر را انجام دهید:\n"
+            "1. وارد تراست ولت شوید و در قسمت پایین سمت راست، روی آیکون ذره‌بین (Search) بزنید.\n"
+            "2. آدرس قرارداد (Contract Address) توکن پرسپولیس را در کادر جستجو وارد کنید:\n"
+            "`0x1f67eB3e7487b7D70C69264Ab907Dd074ef1d39f`\n"
+            "3. **دقت کنید که نام کامل آن حتماً PERSEPOLIS باشد.**\n"
+            "4. روی گزینه افزودن یا فعال‌سازی توکن بزنید تا به لیست کیف پول شما اضافه شود.\n\n"
+            "📤 **مرحله سوم: ارسال آدرس ولت به ربات**\n"
+            "• وارد توکن **PERSEPOLIS (PRS)** در کیف پول خود شوید و روی گزینه **Receive** (دریافت) بزنید.\n"
+            "• آدرس اختصاصی ولت PRS خود (شروع شده با `0x`) را کپی کرده و در بخش **«ارسال / ویرایش آدرس ولت»** در همین ربات بفرستید.\n\n"
+            "❓ اگر هر گونه سوالی داشتید، می‌توانید به پشتیبانی پیام دهید: @PRSsupportt"
+        ),
+        "top_title": "🏆 *۱۰ شرکت‌کننده برتر ایردراپ (براساس مجموع توکن‌ها)*:\n\n",
+        "top_row": "{}. آیدی: `{uid}` — 🎁 توکن کل: *{total:,} PRS* (دعوت: {refs})\n",
+        "submit_errors": "⚠️ **امکان ثبت/ویرایش ولت وجود ندارد:**\n\n{}\n\nلطفاً پس از رفع موانع دوباره تلاش کنید.",
+        "submit_err_ref": "❌ تعداد دعوت‌های شما ({} نفر) به حد نصاب نرسیده است. (حداقل مورد نیاز: {} نفر)",
+        "submit_err_limit": "⚠️ شما سهمیه ثبت‌نام و تنها ویرایش مجاز خود را استفاده کرده‌اید و دیگر امکان تغییر ولت وجود ندارد.",
+        "submit_edit_mode": "✏️ **حالت ویرایش ولت:**\nشما قبلاً ولت خود را ثبت کرده بودید. اکنون می‌توانید آدرس ولت اختصاصی **PRS** خود را ارسال کنید:",
+        "submit_new_mode": "لطفاً آدرس ولت اختصاصی توکن **PERSEPOLIS (PRS)** (شروع شده با 0x) خود را ارسال کنید:",
+        "wallet_saved": "✅ آدرس ولت توکن PRS شما با موفقیت ثبت شد.",
+        "wallet_updated": "✅ آدرس ولت شما با موفقیت **ویرایش و به‌روزرسانی شد**.",
+        "wallet_limit_err": "⚠️ شما سهمیه ویرایش خود را به اتمام رسانده‌اید.",
+        "status_box": (
+            "📊 *اطلاعات حساب و وضعیت شما:*\n\n"
+            "🆔 آیدی عددی شما: `{uid}`\n"
+            "👥 تعداد دعوت‌ها: `{refs} / {req}`\n"
+            "🎁 کل توکن کسب‌شده: `{earned:,} PRS`\n"
+            "💳 توکن پرداخت شده: `{paid:,} PRS`\n"
+            "💰 موجودی باقی‌مانده: `{rem:,} PRS`\n"
+            "🏅 رتبه شما در ایردراپ: `{rank}`\n"
+            "👝 آدرس ولت فعلی: `{wallet}`"
+        )
+    },
+    "en": {
+        "global_off": "🛑 The bot is currently turned off by management. Please try again later.",
+        "airdrop_finished": "🛑 All airdrop tokens (300M PRS) have been claimed and this bot is now inactive. Tokens will be distributed soon.",
+        "self_ref": "⚠️ **You cannot click on your own referral link!**\n\nPlease send this link to your friends so they can join via it.",
+        "join_req": "⚠️ **Please join our official channel first to continue:**\n\n▫️ {}\n\nAfter joining, click the 'I have joined, verify' button.",
+        "join_btn": "📢 Join Official Channel",
+        "joined_btn": "✅ I joined, verify",
+        "captcha_title": "🛡 *Security Verification (Anti-bot)* \n\nPlease send the sum of the following numbers as your answer:\n❓ {} + {} = ?\n\n*(Send the answer number in chat)*",
+        "captcha_wrong": "❌ Wrong answer!\n\n🛡 A new security question has been sent:\n❓ Please send the sum of {} + {}:",
+        "main_kb_status": "📊 My Status & Rank",
+        "main_kb_ref": "🔗 Get Referral Link",
+        "main_kb_daily": "🎁 Daily Bonus",
+        "main_kb_wallet": "📝 Submit / Edit Wallet",
+        "main_kb_guide": "📖 Wallet & Token Guide",
+        "main_kb_leaderboard": "🏆 Top Participants",
+        "main_kb_refresh": "🔄 Refresh User Panel",
+        "main_kb_channel": "📢 Telegram Channel",
+        "main_kb_twitter": "🐦 Twitter (X)",
+        "main_kb_instagram": "📸 Instagram",
+        "btn_channel": "📢 Telegram Channel",
+        "btn_twitter": "🐦 Twitter (X)",
+        "btn_insta": "📸 Persepolis Instagram",
+        "btn_ref": "🔗 Get Exclusive Referral Link",
+        "btn_daily": "🎁 Daily Bonus (100 PRS)",
+        "btn_guide": "📖 PRS Wallet & Token Guide",
+        "btn_top": "🏆 Top Participants (Top 10)",
+        "btn_status": "📊 My Status & Rank",
+        "btn_submit_w": "📝 Submit / Edit Wallet",
+        "btn_refresh": "🔄 Refresh User Panel",
+        "quick_menu_text": "👇 Quick access menu is always at the bottom of your screen:",
+        "main_caption": (
+            "🔴 *Welcome to Official Persepolis Fan Token (PRS) Airdrop Bot* 🏆\n\n"
+            "⚡ **The independent voice of a community; boundless and powerful!**\n\n"
+            "PRS token is an opportunity to build a modern future on blockchain. Claim your share of this massive wave!\n\n"
+            "🦅 **Capacity is limited; don't miss out!**\n"
+            "Join right now and get your tokens.\n\n"
+            "🎁 *Airdrop & Reward System:*\n"
+            "▫️ Base Reward: `{base} PRS` (After joining channel & inviting `{req}` friends)\n"
+            "▫️ Daily Bonus: `{daily} PRS` (Unlocked after 3 referrals, every 24 hours)\n"
+            "▫️ Extra Referral Reward: `{extra} PRS`\n\n"
+            "📊 *Your Account Status:*\n"
+            "🆔 Your User ID: `{uid}`\n"
+            "👥 Your Referrals: `{refs} / {req}`\n"
+            "🏅 Your Rank: `{rank}`\n"
+            "🎁 Total Earned Tokens: `{earned:,} PRS`\n"
+            "💳 Paid Tokens: `{paid:,} PRS`\n"
+            "💰 Remaining Balance: `{rem:,} PRS`"
+        ),
+        "ref_text": (
+            "🔥 Biggest Persepolis Fan Token (PRS) Airdrop 🔥\n\n"
+            "🏆 Exceptional opportunity to get free tokens and enter the Persepolis digital ecosystem!\n"
+            "🎁 Join the bot with the link below right now and claim your entry bonus:\n\n"
+            "{link}\n\n"
+            "Send this message to your friends!"
+        ),
+        "daily_locked": "⚠️ Daily bonus is locked!\nYou must invite at least {} friends to unlock it.",
+        "daily_already": "⏳ You have already claimed your daily bonus today!\nPlease try again after {} hours and {} minutes.",
+        "daily_success": "🎁 Congratulations! {} PRS tokens added to your account as daily bonus.",
+        "wallet_guide_text": (
+            "📖 *Complete Step-by-Step Guide to Installing Wallet & Adding Persepolis Token (PRS):*\n\n"
+            "🔹 **Introduction:** Persepolis Fan Token runs on the powerful **BNB Smart Chain (BSC / BEP20)**. To receive and store it, **Trust Wallet** is recommended.\n\n"
+            "📱 **Step 1: Install & Create Wallet**\n"
+            "• Download Trust Wallet from Google Play or App Store.\n"
+            "• Create a new wallet and securely write down your **12-word Seed Phrase** on paper.\n\n"
+            "📋 **Step 2: Add PRS Token (Custom Token)**\n"
+            "To display it in Trust Wallet:\n"
+            "1. Open Trust Wallet and tap the search icon in the top/bottom right.\n"
+            "2. Enter Persepolis contract address in the search box:\n"
+            "`0x1f67eB3e7487b7D70C69264Ab907Dd074ef1d39f`\n"
+            "3. **Ensure the full name is PERSEPOLIS.**\n"
+            "4. Enable/add the token to your wallet list.\n\n"
+            "📤 **Step 3: Send Wallet Address to Bot**\n"
+            "• Go to **PERSEPOLIS (PRS)** token in your wallet and tap **Receive**.\n"
+            "• Copy your PRS wallet address (starting with `0x`) and send it in the **«Submit / Edit Wallet»** section of this bot.\n\n"
+            "❓ If you have any questions, contact support: @PRSsupportt"
+        ),
+        "top_title": "🏆 *Top 10 Airdrop Participants (By Total Tokens)*:\n\n",
+        "top_row": "{}. ID: `{uid}` — 🎁 Total Tokens: *{total:,} PRS* (Refs: {refs})\n",
+        "submit_errors": "⚠️ **Cannot submit/edit wallet:**\n\n{}\n\nPlease try again after resolving issues.",
+        "submit_err_ref": "❌ Your referral count ({} users) has not reached the threshold. (Min required: {} users)",
+        "submit_err_limit": "⚠️ You have used your registration and only allowed edit quota; wallet changes are no longer permitted.",
+        "submit_edit_mode": "✏️ **Wallet Edit Mode:**\nYou have previously registered your wallet. You now can send your exclusive **PRS** wallet address:",
+        "submit_new_mode": "Please send your exclusive **PERSEPOLIS (PRS)** token wallet address (starting with 0x):",
+        "wallet_saved": "✅ Your PRS wallet address has been successfully registered.",
+        "wallet_updated": "✅ Your wallet address has been successfully **edited and updated**.",
+        "wallet_limit_err": "⚠️ You have exhausted your edit quota.",
+        "status_box": (
+            "📊 *Your Account Information & Status:*\n\n"
+            "🆔 Your User ID: `{uid}`\n"
+            "👥 Referrals: `{refs} / {req}`\n"
+            "🎁 Total Earned Tokens: `{earned:,} PRS`\n"
+            "💳 Paid Tokens: `{paid:,} PRS`\n"
+            "💰 Remaining Balance: `{rem:,} PRS`\n"
+            "🏅 Your Rank: `{rank}`\n"
+            "👝 Current Wallet Address: `{wallet}`"
+        )
+    }
+}
+
+def get_msg(user_id_or_lang, key, *args):
+    lang = "fa"
+    if isinstance(user_id_or_lang, int):
+        user = users_col.find_one({"user_id": user_id_or_lang})
+        if user and user.get("lang"):
+            lang = user.get("lang")
+    elif isinstance(user_id_or_lang, str) and user_id_or_lang in ["fa", "en"]:
+        lang = user_id_or_lang
+    
+    text = LANG.get(lang, LANG["fa"]).get(key, LANG["fa"].get(key, ""))
+    if args:
+        try:
+            return text.format(*args)
+        except Exception:
+            return text
+    return text
+
+def get_main_reply_markup(user_id):
+    lang = "fa"
+    user = users_col.find_one({"user_id": user_id})
+    if user and user.get("lang"):
+        lang = user.get("lang")
+    
+    markup = ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.row(get_msg(lang, "main_kb_status"), get_msg(lang, "main_kb_ref"))
+    markup.row(get_msg(lang, "main_kb_daily"), get_msg(lang, "main_kb_wallet"))
+    markup.row(get_msg(lang, "main_kb_guide"), get_msg(lang, "main_kb_leaderboard"))
+    markup.row(get_msg(lang, "main_kb_refresh"), get_msg(lang, "main_kb_channel"))
+    markup.row(get_msg(lang, "main_kb_twitter"), get_msg(lang, "main_kb_instagram"))
+    return markup
+# ---------------------------------------------------------------------
+
 def is_admin(user_id):
     """بررسی اینکه آیا کاربر جزو ادمین‌ها است یا خیر"""
     return user_id in ADMIN_IDS
@@ -103,15 +333,6 @@ def check_membership(user_id):
         print(f"Error checking membership: {e}")
     return False
 
-def get_main_reply_markup():
-    markup = ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row("📊 وضعیت من و رتبه", "🔗 دریافت لینک دعوت")
-    markup.row("🎁 پاداش روزانه", "📝 ارسال / ویرایش آدرس ولت")
-    markup.row("📖 راهنمای ولت و توکن", "🏆 برترین شرکت‌کنندگان")
-    markup.row("🔄 به‌روزرسانی پنل کاربری", "📢 کانال تلگرام")
-    markup.row("🐦 توییتر (ایکس)", "📸 اینستاگرام")
-    return markup
-
 def get_admin_reply_markup():
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row("👝 مدیریت و تایید ولت‌ها", "📊 گزارش کلی توکن‌ها")
@@ -135,12 +356,12 @@ def register_user_after_verify(user_id, referrer_id):
             "referred_by": valid_referrer,
             "ref_count": 0,
             "submitted": 0,
-            "paid": 0,
             "verified": 1,
             "wallet": None,
             "last_daily": 0,
             "daily_count": 0,
-            "paid_amount": 0
+            "paid_amount": 0,
+            "lang": "fa"
         })
         
         if valid_referrer:
@@ -150,13 +371,17 @@ def register_user_after_verify(user_id, referrer_id):
                 current_refs = ref_user.get("ref_count", 1) if ref_user else 1
                 d_count = ref_user.get("daily_count", 0) if ref_user else 0
                 earned_now = calculate_total_tokens(current_refs, d_count)
-                bot.send_message(
-                    valid_referrer,
+                ref_lang = ref_user.get("lang", "fa") if ref_user else "fa"
+                
+                notif_text = (
                     f"🎉 *یک زیرمجموعه جدید با لینک شما وارد شد!*\n\n"
                     f"👥 تعداد کل دعوت‌های شما: `{current_refs}`\n"
-                    f"🎁 مجموع توکن کسب‌شده: `{earned_now}` PRS",
-                    parse_mode="Markdown"
+                    f"🎁 مجموع توکن کسب‌شده: `{earned_now}` PRS" if ref_lang == "fa" else
+                    f"🎉 *A new referral joined via your link!*\n\n"
+                    f"👥 Total referrals: `{current_refs}`\n"
+                    f"🎁 Total tokens earned: `{earned_now}` PRS"
                 )
+                bot.send_message(valid_referrer, notif_text, parse_mode="Markdown")
             except Exception:
                 pass
     else:
@@ -172,13 +397,17 @@ def register_user_after_verify(user_id, referrer_id):
                 current_refs = ref_user.get("ref_count", 1) if ref_user else 1
                 d_count = ref_user.get("daily_count", 0) if ref_user else 0
                 earned_now = calculate_total_tokens(current_refs, d_count)
-                bot.send_message(
-                    valid_referrer,
+                ref_lang = ref_user.get("lang", "fa") if ref_user else "fa"
+                
+                notif_text = (
                     f"🎉 *یک زیرمجموعه جدید با لینک شما وارد شد!*\n\n"
                     f"👥 تعداد کل دعوت‌های شما: `{current_refs}`\n"
-                    f"🎁 مجموع توکن کسب‌شده: `{earned_now}` PRS",
-                    parse_mode="Markdown"
+                    f"🎁 مجموع توکن کسب‌شده: `{earned_now}` PRS" if ref_lang == "fa" else
+                    f"🎉 *A new referral joined via your link!*\n\n"
+                    f"👥 Total referrals: `{current_refs}`\n"
+                    f"🎁 Total tokens earned: `{earned_now}` PRS"
                 )
+                bot.send_message(valid_referrer, notif_text, parse_mode="Markdown")
             except Exception:
                 pass
         else:
@@ -200,6 +429,19 @@ def get_ref_details(ref_count):
         extra_count = 0
     return base_used, extra_count
 
+def send_language_selection(chat_id, referrer_id):
+    markup = InlineKeyboardMarkup()
+    markup.row(
+        InlineKeyboardButton("🇮🇷 فارسی", callback_data=f"setlang_fa_{referrer_id}"),
+        InlineKeyboardButton("🇬🇧 English", callback_data=f"setlang_en_{referrer_id}")
+    )
+    bot.send_message(
+        chat_id,
+        "🌐 **لطفاً زبان خود را انتخاب کنید / Please select your language:**",
+        reply_markup=markup,
+        parse_mode="Markdown"
+    )
+
 def send_captcha(chat_id, user_id, referrer_id):
     num1 = random.randint(1, 10)
     num2 = random.randint(1, 10)
@@ -211,14 +453,8 @@ def send_captcha(chat_id, user_id, referrer_id):
         upsert=True
     )
 
-    bot.send_message(
-        chat_id,
-        f"🛡 *تایید هویت امنیتی (ضد ربات و فیک)* \n\n"
-        f"لطفاً حاصل جمع زیر را به عنوان پاسخ ارسال کنید:\n"
-        f"❓ {num1} + {num2} = ؟\n\n"
-        f"*(عدد پاسخ را در چت ارسال کنید)*",
-        parse_mode="Markdown"
-    )
+    text = get_msg(user_id, "captcha_title", num1, num2)
+    bot.send_message(chat_id, text, parse_mode="Markdown")
 
 def send_database_backup(target_chat_id):
     try:
@@ -319,7 +555,6 @@ def send_under_threshold_excel(chat_id):
 def send_welcome(message):
     user_id = message.from_user.id
     
-    # ادمین‌ها همیشه و تحت هر شرایطی مستقیم وارد پنل مدیریت می‌شوند
     if is_admin(user_id):
         bot.send_message(
             user_id, 
@@ -330,51 +565,47 @@ def send_welcome(message):
         return
 
     if is_bot_globally_disabled():
-        bot.send_message(message.chat.id, "🛑 ربات در حال حاضر توسط مدیریت موقتاً خاموش شده است. لطفاً بعداً مراجعه کنید.")
+        bot.send_message(message.chat.id, get_msg(user_id, "global_off"))
         return
 
     if is_airdrop_finished():
-        bot.send_message(user_id, "🛑 کل توکن های ایردارپ ( ۳۰۰ میلیون PRS) توسط شرکت کننده های این ایردراپ استخراج شد و این ربات غیر فعال شد به زودی تمام توکن ها بین کاربران توزیع خواهد شد.")
-        return
-
-    if message.text and message.text.startswith('/menu'):
-        if not check_membership(user_id):
-            ask_to_join(message.chat.id, 0)
-            return
-        show_main_menu(message.chat.id, user_id)
+        bot.send_message(user_id, get_msg(user_id, "airdrop_finished"))
         return
 
     args = message.text.split()
     referrer_id = int(args[1]) if len(args) > 1 and args[1].isdigit() else None
     
     if referrer_id == user_id:
-        bot.send_message(
-            message.chat.id, 
-            "⚠️ **شما نمی‌توانید روی لینک دعوت خودتان کلیک کنید!**\n\nلطفاً این لینک را برای دوستان خود ارسال کنید تا از طریق آن وارد ربات شوند.",
-            parse_mode="Markdown"
-        )
+        bot.send_message(message.chat.id, get_msg(user_id, "self_ref"), parse_mode="Markdown")
+        return
+
+    if message.text and message.text.startswith('/menu'):
+        if not check_membership(user_id):
+            ask_to_join(message.chat.id, 0, user_id)
+            return
+        show_main_menu(message.chat.id, user_id)
         return
 
     user_data = get_user_data(user_id)
     if user_data and user_data[3] >= 2:
         if not check_membership(user_id):
-            ask_to_join(message.chat.id, referrer_id if referrer_id else 0)
+            ask_to_join(message.chat.id, referrer_id if referrer_id else 0, user_id)
             return
         show_main_menu(message.chat.id, user_id)
         return
 
-    send_captcha(message.chat.id, user_id, referrer_id)
+    # برای کاربر جدید ابتدا انتخاب زبان نمایش داده می‌شود
+    send_language_selection(message.chat.id, referrer_id if referrer_id else 0)
 
-def ask_to_join(chat_id, referrer_id):
+def ask_to_join(chat_id, referrer_id, user_id_or_lang="fa"):
     markup = InlineKeyboardMarkup()
-    markup.row(InlineKeyboardButton("📢 عضویت در کانال رسمی", url=f"https://t.me/{CHANNEL_ID.lstrip('@')}"))
-    markup.row(InlineKeyboardButton("✅ عضو شدم، تایید کن", callback_data=f"check_join_{referrer_id}"))
+    markup.row(InlineKeyboardButton(get_msg(user_id_or_lang, "join_btn"), url=f"https://t.me/{CHANNEL_ID.lstrip('@')}"))
+    markup.row(InlineKeyboardButton(get_msg(user_id_or_lang, "joined_btn"), callback_data=f"check_join_{referrer_id}"))
     
+    text = get_msg(user_id_or_lang, "join_req", CHANNEL_ID)
     bot.send_message(
         chat_id,
-        f"⚠️ **لطفاً برای ادامه کار ابتدا در کانال ما عضو شوید:**\n\n"
-        f"▫️ {CHANNEL_ID}\n\n"
-        f"پس از عضویت، روی دکمه‌ی «عضو شدم، تایید کن» بزنید.",
+        text,
         reply_markup=markup,
         parse_mode="Markdown"
     )
@@ -393,7 +624,7 @@ def get_user_rank(user_id):
     for idx, (uid, _, _) in enumerate(scored_users, 1):
         if uid == user_id:
             return idx
-    return "محاسبه‌نشده"
+    return "N/A"
 
 @bot.message_handler(commands=['admin'])
 def admin_panel(message):
@@ -525,7 +756,7 @@ def send_detailed_report_file(chat_id):
         bot.send_message(chat_id, f"⚠️ هیچ کاربری در دیتابیس ثبت نشده است.", reply_markup=get_admin_reply_markup())
         return
 
-    csv_content = "User ID,Referred By,Referral Count,Submitted Status,Paid Status,Verified Status,Wallet,Last Daily Timestamp,Daily Bonus Count,Total Tokens,Paid Amount\n"
+    csv_content = "User ID,Referred By,Referral Count,Submitted Status,Paid Status,Verified Status,Wallet,Last Daily Timestamp,Daily Bonus Count,Total Tokens,Paid Amount,Language\n"
     for u in rows:
         uid = u.get("user_id")
         ref_by = u.get("referred_by", "None")
@@ -537,9 +768,10 @@ def send_detailed_report_file(chat_id):
         last_daily = u.get("last_daily", 0)
         d_count = u.get("daily_count", 0)
         paid_amt = u.get("paid_amount", 0)
+        lang = u.get("lang", "fa")
         
         total_tokens = calculate_total_tokens(ref_cnt, d_count)
-        csv_content += f"{uid},{ref_by},{ref_cnt},{submitted},{paid},{verified},{wlt},{last_daily},{d_count},{total_tokens},{paid_amt}\n"
+        csv_content += f"{uid},{ref_by},{ref_cnt},{submitted},{paid},{verified},{wlt},{last_daily},{d_count},{total_tokens},{paid_amt},{lang}\n"
 
     file_bytes = io.BytesIO(csv_content.encode('utf-8'))
     file_bytes.name = 'all_users_complete_database_report.csv'
@@ -561,7 +793,7 @@ def show_stats_direct(chat_id):
 
 def show_main_menu(chat_id, user_id, message_id=None, edit=False):
     if is_airdrop_finished():
-        bot.send_message(chat_id, "🛑 کل توکن های ایردارپ ( ۳۰۰ میلیون PRS) توسط شرکت کننده های این ایردراپ استخراج شد و این ربات غیر فعال شد به زودی تمام توکن ها بین کاربران توزیع خواهد شد.")
+        bot.send_message(chat_id, get_msg(user_id, "airdrop_finished"))
         return
 
     user_data = get_user_data(user_id)
@@ -574,38 +806,21 @@ def show_main_menu(chat_id, user_id, message_id=None, edit=False):
     
     markup = InlineKeyboardMarkup()
     markup.row(
-        InlineKeyboardButton("📢 کانال تلگرام", url=f"https://t.me/{CHANNEL_ID.lstrip('@')}"),
-        InlineKeyboardButton("🐦 توییتر (ایکس)", url=TWITTER_URL)
+        InlineKeyboardButton(get_msg(user_id, "btn_channel"), url=f"https://t.me/{CHANNEL_ID.lstrip('@')}"),
+        InlineKeyboardButton(get_msg(user_id, "btn_twitter"), url=TWITTER_URL)
     )
-    markup.row(InlineKeyboardButton("📸 اینستاگرام پرسپولیس", url=INSTAGRAM_URL))
+    markup.row(InlineKeyboardButton(get_msg(user_id, "btn_insta"), url=INSTAGRAM_URL))
     
-    markup.row(InlineKeyboardButton("🔗 دریافت لینک دعوت جذاب و اختصاصی", callback_data="get_ref_link"))
-    markup.row(InlineKeyboardButton("🎁 پاداش روزانه (100 PRS)", callback_data="daily_bonus"))
-    markup.row(InlineKeyboardButton("📖 راهنمای ولت و توکن PRS", callback_data="wallet_guide"))
-    markup.row(InlineKeyboardButton("🏆 برترین شرکت‌کنندگان (تاپ ۱۰)", callback_data="leaderboard"))
-    markup.row(InlineKeyboardButton("📊 وضعیت من و رتبه", callback_data="my_status"), InlineKeyboardButton("📝 ارسال / ویرایش ولت", callback_data="submit_info"))
-    markup.row(InlineKeyboardButton("🔄 به‌روزرسانی پنل کاربری", callback_data="refresh_menu"))
+    markup.row(InlineKeyboardButton(get_msg(user_id, "btn_ref"), callback_data="get_ref_link"))
+    markup.row(InlineKeyboardButton(get_msg(user_id, "btn_daily"), callback_data="daily_bonus"))
+    markup.row(InlineKeyboardButton(get_msg(user_id, "btn_guide"), callback_data="wallet_guide"))
+    markup.row(InlineKeyboardButton(get_msg(user_id, "btn_top"), callback_data="leaderboard"))
+    markup.row(InlineKeyboardButton(get_msg(user_id, "btn_status"), callback_data="my_status"), InlineKeyboardButton(get_msg(user_id, "btn_submit_w"), callback_data="submit_info"))
+    markup.row(InlineKeyboardButton(get_msg(user_id, "btn_refresh"), callback_data="refresh_menu"))
 
-    caption_text = (
-        f"🔴 *به ربات رسمی ایردراپ توکن هواداری پرسپولیس (PRS) خوش آمدید* 🏆\n\n"
-        f"⚡ **صدای مستقلِ یک جامعه‌؛ بدون مرز و قدرتمند!**\n\n"
-        f"توکن PRS فرصتی برای ساخت آینده‌ای نوین روی بلاک‌چین است. سهم خودت را از این موج بزرگ بگیر\n\n"
-        f"🦅 **ظرفیت محدود است؛ عقب نمان!**\n"
-        f"همین الان وارد شو و توکن‌هات رو دریافت کن.\n\n"
-        f"🎁 *سیستم پاداش‌دهی و ایردراپ:*\n"
-        f"▫️ پاداش پایه: `{BASE_REWARD} PRS` (پس از عضویت در کانال و دعوت `{REQUIRED_REFERRALS}` دوست)\n"
-        f"▫️ پاداش روزانه: `{DAILY_REWARD} PRS` (فعال‌سازی پس از تکمیل ۳ دعوت و هر ۲۴ ساعت یک‌بار)\n"
-        f"▫️ پاداش به ازای هر دعوت مازاد: `{EXTRA_REWARD} PRS`\n\n"
-        f"📊 *وضعیت حساب شما:*\n"
-        f"🆔 آیدی عددی شما: `{user_id}`\n"
-        f"👥 دعوت‌های شما: `{ref_count} / {REQUIRED_REFERRALS}`\n"
-        f"🏅 رتبه شما در بین کاربران: `{user_rank}`\n"
-        f"🎁 کل توکن کسب‌شده: `{total_earned:,} PRS`\n"
-        f"💳 توکن پرداخت شده: `{paid_amt:,} PRS`\n"
-        f"💰 موجودی باقی‌مانده: `{remaining_earned:,} PRS`"
-    )
+    caption_text = get_msg(user_id, "main_caption", base=BASE_REWARD, req=REQUIRED_REFERRALS, daily=DAILY_REWARD, extra=EXTRA_REWARD, uid=user_id, refs=ref_count, rank=user_rank, earned=total_earned, paid=paid_amt, rem=remaining_earned)
     
-    reply_markup_kb = get_main_reply_markup()
+    reply_markup_kb = get_main_reply_markup(user_id)
 
     if edit and message_id:
         try:
@@ -616,7 +831,7 @@ def show_main_menu(chat_id, user_id, message_id=None, edit=False):
                 parse_mode="Markdown",
                 reply_markup=markup
             )
-            bot.send_message(chat_id, "👇 منوی دسترسی سریع همیشه در پایین صفحه شما قرار دارد:", reply_markup=reply_markup_kb)
+            bot.send_message(chat_id, get_msg(user_id, "quick_menu_text"), reply_markup=reply_markup_kb)
             return
         except Exception:
             pass
@@ -633,7 +848,7 @@ def show_main_menu(chat_id, user_id, message_id=None, edit=False):
             print(f"Error sending main menu text: {e}")
 
     try:
-        bot.send_message(chat_id=chat_id, text="👇 منوی دسترسی سریع همیشه در پایین صفحه شما قرار دارد:", reply_markup=reply_markup_kb)
+        bot.send_message(chat_id=chat_id, text=get_msg(user_id, "quick_menu_text"), reply_markup=reply_markup_kb)
     except Exception as e:
         print(f"Error sending reply markup: {e}")
 
@@ -701,7 +916,6 @@ def handle_all_messages(message):
     persian_to_english = str.maketrans('۰۱۲۳۴۵۶۷۸۹', '0123456789')
     text = text.translate(persian_to_english)
     
-    # بررسی ادمین در بالاترین سطح پیام‌ها
     if is_admin(user_id):
         admin_state = settings_col.find_one({"key": "admin_state"})
         if admin_state:
@@ -888,12 +1102,11 @@ def handle_all_messages(message):
                 bot.send_message(chat_id, "⚠️ آیدی عددی وارد شده معتبر نیست.", reply_markup=get_admin_reply_markup())
             return
         
-        # اگر ادمین متنی فرستاد که جزو دکمه‌های بالا نبود، پنل ادمین را مجدداً یادآوری می‌کند
         bot.send_message(chat_id, "👑 دستور یا دکمه نامعتبر. از منوی زیر استفاده کنید:", reply_markup=get_admin_reply_markup())
         return
 
     if is_bot_globally_disabled():
-        bot.send_message(chat_id, "🛑 ربات در حال حاضر توسط مدیریت موقتاً خاموش شده است. لطفاً بعداً مراجعه کنید.")
+        bot.send_message(chat_id, get_msg(user_id, "global_off"))
         return
 
     captcha_data = captcha_col.find_one({"user_id": user_id})
@@ -908,7 +1121,7 @@ def handle_all_messages(message):
             captcha_col.delete_one({"user_id": user_id})
             
             if not check_membership(user_id):
-                ask_to_join(chat_id, referrer_id if referrer_id else 0)
+                ask_to_join(chat_id, referrer_id if referrer_id else 0, user_id)
                 return
 
             register_user_after_verify(user_id, referrer_id)
@@ -923,63 +1136,45 @@ def handle_all_messages(message):
                 {"$set": {"num1": new_n1, "num2": new_n2, "answer": new_correct_ans}}
             )
 
-            bot.send_message(
-                chat_id, 
-                f"❌ پاسخ اشتباه است!\n\n"
-                f"🛡 یک سوال امنیتی جدید برای شما ارسال شد:\n"
-                f"❓ لطفاً حاصل جمع {new_n1} + {new_n2} را بفرستید:"
-            )
+            wrong_text = get_msg(user_id, "captcha_wrong", new_n1, new_n2)
+            bot.send_message(chat_id, wrong_text)
         return
 
     if is_airdrop_finished():
-        bot.send_message(user_id, "🛑 کل توکن های ایردارپ ( ۳۰۰ میلیون PRS) توسط شرکت کننده های این ایردراپ استخراج شد و این ربات غیر فعال شد به زودی تمام توکن ها بین کاربران توزیع خواهد شد.")
+        bot.send_message(user_id, get_msg(user_id, "airdrop_finished"))
         return
 
     if not check_membership(user_id):
-        ask_to_join(chat_id, 0)
+        ask_to_join(chat_id, 0, user_id)
         return
 
-    if text == "📊 وضعیت من و رتبه":
+    # پشتیبانی از دکمه‌های ترجمه شده منوی اصلی
+    if text in [LANG["fa"]["main_kb_status"], LANG["en"]["main_kb_status"]]:
         user_data = get_user_data(user_id)
         ref_count = user_data[0] if user_data else 0
         d_count = user_data[5] if user_data and len(user_data) > 5 else 0
         total_earned = calculate_total_tokens(ref_count, d_count)
         paid_amt = user_data[7] if user_data and len(user_data) > 7 else 0
         remaining_earned = max(0, total_earned - paid_amt)
-        wallet = user_data[6] if user_data and len(user_data) > 6 and user_data[6] else "ثبت نشده"
+        wallet = user_data[6] if user_data and len(user_data) > 6 and user_data[6] else ("ثبت نشده" if get_msg(user_id, "lang")=="fa" else "Not registered")
         user_rank = get_user_rank(user_id)
         
-        status_msg = (
-            f"📊 *اطلاعات حساب و وضعیت شما:*\n\n"
-            f"🆔 آیدی عددی شما: `{user_id}`\n"
-            f"👥 تعداد دعوت‌ها: `{ref_count} / {REQUIRED_REFERRALS}`\n"
-            f"🎁 کل توکن کسب‌شده: `{total_earned:,} PRS`\n"
-            f"💳 توکن پرداخت شده: `{paid_amt:,} PRS`\n"
-            f"💰 موجودی باقی‌مانده: `{remaining_earned:,} PRS`\n"
-            f"🏅 رتبه شما در ایردراپ: `{user_rank}`\n"
-            f"👝 آدرس ولت فعلی: `{wallet}`"
-        )
+        status_msg = get_msg(user_id, "status_box", uid=user_id, refs=ref_count, req=REQUIRED_REFERRALS, earned=total_earned, paid=paid_amt, rem=remaining_earned, rank=user_rank, wallet=wallet)
         bot.send_message(chat_id, status_msg, parse_mode="Markdown")
         return
-    elif text == "🔗 دریافت لینک دعوت":
+    elif text in [LANG["fa"]["main_kb_ref"], LANG["en"]["main_kb_ref"]]:
         ref_link = f"https://t.me/{BOT_USERNAME}?start={user_id}"
-        link_text = (
-            f"🔥 بزرگترین ایردراپ توکن هواداری پرسپولیس (PRS) 🔥\n\n"
-            f"🏆 فرصت استثنایی برای دریافت توکن رایگان و ورود به اکوسیستم دیجیتال پرسپولیس!\n"
-            f"🎁 همین الان با لینک زیر وارد ربات شو و پاداش ورودت رو بگیر:\n\n"
-            f"{ref_link}\n\n"
-            f"این پیام رو برای دوستان خود ارسال کنید"
-        )
+        link_text = get_msg(user_id, "ref_text", link=ref_link)
         try:
             bot.send_photo(chat_id=chat_id, photo=BANNER_FILE_ID, caption=link_text)
         except Exception:
             bot.send_message(chat_id=chat_id, text=link_text)
         return
-    elif text == "🎁 پاداش روزانه":
+    elif text in [LANG["fa"]["main_kb_daily"], LANG["en"]["main_kb_daily"]]:
         user_data = get_user_data(user_id)
         ref_count = user_data[0] if user_data else 0
         if ref_count < REQUIRED_REFERRALS:
-            bot.send_message(chat_id, f"⚠️ پاداش روزانه قفل است!\nبرای باز شدن آن باید حداقل {REQUIRED_REFERRALS} دوست دعوت کنید.")
+            bot.send_message(chat_id, get_msg(user_id, "daily_locked", REQUIRED_REFERRALS))
             return
         current_time = int(time.time())
         last_daily = user_data[4] if user_data else 0
@@ -987,36 +1182,19 @@ def handle_all_messages(message):
             remaining = 86400 - (current_time - last_daily)
             hours = remaining // 3600
             minutes = (remaining % 3600) // 60
-            bot.send_message(chat_id, f"⏳ شما قبلاً پاداش امروز خود را دریافت کرده‌اید!\nلطفاً پس از {hours} ساعت و {minutes} دقیقه دیگر تلاش کنید.")
+            bot.send_message(chat_id, get_msg(user_id, "daily_already", hours, minutes))
         else:
             users_col.update_one(
                 {"user_id": user_id},
                 {"$set": {"last_daily": current_time}, "$inc": {"daily_count": 1}}
             )
-            bot.send_message(chat_id, f"🎁 تبریک! مبلغ {DAILY_REWARD} توکن PRS به عنوان پاداش روزانه به حساب شما اضافه شد.")
+            bot.send_message(chat_id, get_msg(user_id, "daily_success", DAILY_REWARD))
         return
-    elif text == "📖 راهنمای ولت و توکن":
-        guide_text = (
-            f"📖 *راهنمای کامل و گام‌به‌گام نصب کیف پول و اضافه کردن توکن پرسپولیس (PRS):*\n\n"
-            f"🔹 **مقدمه:** توکن هواداری پرسپولیس روی شبکه قدرتمند **BNB Smart Chain (BSC / BEP20)** راه‌اندازی شده است. برای دریافت و نگهداری آن، بهترین پیشنهاد استفاده از اپلیکیشن امن **Trust Wallet (تراست ولت)** است.\n\n"
-            f"📱 **مرحله اول: نصب و ساخت کیف پول**\n"
-            f"• برنامه Trust Wallet را از گوگل‌پلی یا اپ‌استور دانلود کنید.\n"
-            f"• یک کیف پول جدید بسازید و **۱۲ کلمه بازیابی (Seed Phrase)** خود را حتماً روی کاغذ یادداشت کنید و در جای امن نگه دارید.\n\n"
-            f"📋 **مرحله دوم: نحوه اضافه کردن توکن PRS (Custom Token)**\n"
-            f"چون این توکن جدید است، برای نمایش آن در تراست ولت باید مراحل زیر را انجام دهید:\n"
-            f"1. وارد تراست ولت شوید و در قسمت پایین سمت راست، روی آیکون ذره‌بین (Search) بزنید.\n"
-            f"2. آدرس قرارداد (Contract Address) توکن پرسپولیس را در کادر جستجو وارد کنید:\n"
-            f"`0x1f67eB3e7487b7D70C69264Ab907Dd074ef1d39f`\n"
-            f"3. **دقت کنید که نام کامل آن حتماً PERSEPOLIS باشد.**\n"
-            f"4. روی گزینه افزودن یا فعال‌سازی توکن بزنید تا به لیست کیف پول شما اضافه شود.\n\n"
-            f"📤 **مرحله سوم: ارسال آدرس ولت به ربات**\n"
-            f"• وارد توکن **PERSEPOLIS (PRS)** در کیف پول خود شوید و روی گزینه **Receive** (دریافت) بزنید.\n"
-            f"• آدرس اختصاصی ولت PRS خود (شروع شده با `0x`) را کپی کرده و در بخش **«ارسال / ویرایش آدرس ولت»** در همین ربات بفرستید.\n\n"
-            f"❓ اگر هر گونه سوالی داشتید، می‌توانید به پشتیبانی پیام دهید: @PRSsupportt"
-        )
+    elif text in [LANG["fa"]["main_kb_guide"], LANG["en"]["main_kb_guide"]]:
+        guide_text = get_msg(user_id, "wallet_guide_text")
         bot.send_message(chat_id, guide_text, parse_mode="Markdown")
         return
-    elif text == "🏆 برترین شرکت‌کنندگان":
+    elif text in [LANG["fa"]["main_kb_leaderboard"], LANG["en"]["main_kb_leaderboard"]]:
         all_users = list(users_col.find({}))
         ranked_list = []
         for u in all_users:
@@ -1029,50 +1207,49 @@ def handle_all_messages(message):
         ranked_list.sort(key=lambda x: (x[2], x[1]), reverse=True)
         top_10 = ranked_list[:10]
         
-        text = "🏆 *۱۰ شرکت‌کننده برتر ایردراپ (براساس مجموع توکن‌ها)*:\n\n"
+        text = get_msg(user_id, "top_title")
         for idx, (uid, r_cnt, total_t) in enumerate(top_10, 1):
-            text += f"{idx}. آیدی: `{uid}` — 🎁 توکن کل: *{total_t:,} PRS* (دعوت: {r_cnt})\n"
-        bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=get_main_reply_markup())
+            text += get_msg(user_id, "top_row", idx, uid=uid, total=total_t, refs=r_cnt)
+        bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=get_main_reply_markup(user_id))
         return
-    elif text == "🔄 به‌روزرسانی پنل کاربری":
+    elif text in [LANG["fa"]["main_kb_refresh"], LANG["en"]["main_kb_refresh"]]:
         show_main_menu(chat_id, user_id)
         return
-    elif text == "📝 ارسال / ویرایش آدرس ولت":
+    elif text in [LANG["fa"]["main_kb_wallet"], LANG["en"]["main_kb_wallet"]]:
         user_data = get_user_data(user_id)
         ref_count = user_data[0] if user_data else 0
         submitted = user_data[1] if user_data else 0
         
         errors = []
         if ref_count < REQUIRED_REFERRALS:
-            errors.append(f"❌ تعداد دعوت‌های شما ({ref_count} نفر) به حد نصاب نرسیده است. (حداقل مورد نیاز: {REQUIRED_REFERRALS} نفر)")
+            errors.append(get_msg(user_id, "submit_err_ref", ref_count, REQUIRED_REFERRALS))
         if submitted >= 2:
-            errors.append("⚠️ شما سهمیه ثبت‌نام و تنها ویرایش مجاز خود را استفاده کرده‌اید و دیگر امکان تغییر ولت وجود ندارد.")
+            errors.append(get_msg(user_id, "submit_err_limit"))
             
         if errors:
-            bot.send_message(chat_id, "⚠️ **امکان ثبت/ویرایش ولت وجود ندارد:**\n\n" + "\n".join(errors) + "\n\nلطفاً پس از رفع موانع دوباره تلاش کنید.", parse_mode="Markdown")
+            bot.send_message(chat_id, get_msg(user_id, "submit_errors", "\n".join(errors)), parse_mode="Markdown")
             return
         
         if submitted == 1:
-            bot.send_message(chat_id, "✏️ **حالت ویرایش ولت:**\nشما قبلاً ولت خود را ثبت کرده بودید. اکنون می‌توانید آدرس ولت اختصاصی **PRS** خود را ارسال کنید:")
+            bot.send_message(chat_id, get_msg(user_id, "submit_edit_mode"))
         else:
-            bot.send_message(chat_id, "لطفاً آدرس ولت اختصاصی توکن **PERSEPOLIS (PRS)** (شروع شده با 0x) خود را ارسال کنید:")
+            bot.send_message(chat_id, get_msg(user_id, "submit_new_mode"))
         return
-    elif text == "📢 کانال تلگرام":
-        bot.send_message(chat_id, f"📢 کانال رسمی: {CHANNEL_ID}")
+    elif text in [LANG["fa"]["main_kb_channel"], LANG["en"]["main_kb_channel"]]:
+        bot.send_message(chat_id, f"📢 Channel: {CHANNEL_ID}")
         return
-    elif text == "🐦 توییتر (ایکس)":
-        bot.send_message(chat_id, f"🐦 صفحه توییتر: {TWITTER_URL}")
+    elif text in [LANG["fa"]["main_kb_twitter"], LANG["en"]["main_kb_twitter"]]:
+        bot.send_message(chat_id, f"🐦 Twitter: {TWITTER_URL}")
         return
-    elif text == "📸 اینستاگرام":
-        bot.send_message(chat_id, f"📸 صفحه اینستاگرام: {INSTAGRAM_URL}")
+    elif text in [LANG["fa"]["main_kb_instagram"], LANG["en"]["main_kb_instagram"]]:
+        bot.send_message(chat_id, f"📸 Instagram: {INSTAGRAM_URL}")
         return
 
-    # بررسی اینکه آیا متن ارسالی یک آدرس ولت معتبر است یا خیر
     wallet_address = text.strip()
     if not re.match(r"^0x[a-fA-F0-9]{40}$", wallet_address):
         bot.send_message(
             chat_id,
-            "⚠️ لطفاً از پنل کاربری اقدام کنید.",
+            "⚠️ لطفاً از پنل کاربری اقدام کنید / Please use the user panel.",
             parse_mode="Markdown"
         )
         return
@@ -1081,15 +1258,15 @@ def handle_all_messages(message):
     submitted_status = user_doc.get("submitted", 0) if user_doc else 0
 
     if submitted_status >= 2:
-        bot.send_message(chat_id, "⚠️ شما سهمیه ویرایش خود را به اتمام رسانده‌اید.")
+        bot.send_message(chat_id, get_msg(user_id, "wallet_limit_err"))
         return
 
     save_submission(user_id, wallet_address, submitted_status)
     
     if submitted_status == 0:
-        bot.send_message(chat_id, "✅ آدرس ولت توکن PRS شما با موفقیت ثبت شد.")
+        bot.send_message(chat_id, get_msg(user_id, "wallet_saved"))
     else:
-        bot.send_message(chat_id, "✅ آدرس ولت شما با موفقیت **ویرایش و به‌روزرسانی شد**.")
+        bot.send_message(chat_id, get_msg(user_id, "wallet_updated"))
     
     show_main_menu(chat_id, user_id)
 
@@ -1098,7 +1275,6 @@ def handle_callbacks(call):
     user_id = call.from_user.id
     chat_id = call.message.chat.id
     
-    # ادمین‌ها در بخش دکمه‌های شیشه‌ای نیز دسترسی کامل دارند
     if is_admin(user_id):
         if call.data.startswith("admin_pay_"):
             parts = call.data.split("_")
@@ -1133,21 +1309,42 @@ def handle_callbacks(call):
             return
 
     if is_bot_globally_disabled() and not is_admin(user_id):
-        bot.answer_callback_query(call.id, "🛑 ربات در حال حاضر توسط مدیریت خاموش است.", show_alert=True)
+        bot.answer_callback_query(call.id, get_msg(user_id, "global_off"), show_alert=True)
         return
 
     if is_airdrop_finished() and not is_admin(user_id):
-        bot.answer_callback_query(call.id, "🛑 ایردراپ به اتمام رسید.", show_alert=True)
+        bot.answer_callback_query(call.id, get_msg(user_id, "airdrop_finished"), show_alert=True)
+        return
+
+    if call.data.startswith("setlang_"):
+        parts = call.data.split("_")
+        chosen_lang = parts[1]
+        referrer_id = int(parts[2])
+        
+        users_col.update_one(
+            {"user_id": user_id},
+            {"$set": {"lang": chosen_lang}},
+            upsert=True
+        )
+        
+        try:
+            bot.delete_message(chat_id, call.message.message_id)
+        except Exception:
+            pass
+            
+        send_captcha(chat_id, user_id, referrer_id)
         return
 
     if call.data.startswith("check_join_"):
         referrer_id = int(call.data.split("_")[2])
         
         if not check_membership(user_id):
-            bot.answer_callback_query(call.id, "❌ شما هنوز در کانال عضو نشده‌اید!", show_alert=True)
+            no_join_msg = "❌ شما هنوز در کانال عضو نشده‌اید!" if get_msg(user_id, "lang")=="fa" else "❌ You have not joined the channel yet!"
+            bot.answer_callback_query(call.id, no_join_msg, show_alert=True)
             return
 
-        bot.answer_callback_query(call.id, "✅ عضویت شما تایید شد!")
+        ok_join_msg = "✅ عضویت شما تایید شد!" if get_msg(user_id, "lang")=="fa" else "✅ Membership verified!"
+        bot.answer_callback_query(call.id, ok_join_msg)
         register_user_after_verify(user_id, referrer_id if referrer_id != 0 else None)
         
         try:
@@ -1161,7 +1358,7 @@ def handle_callbacks(call):
     if call.data == "refresh_menu":
         if not check_membership(user_id):
             bot.answer_callback_query(call.id, "❌ لطفاً ابتدا در کانال عضو شوید!", show_alert=True)
-            ask_to_join(chat_id, 0)
+            ask_to_join(chat_id, 0, user_id)
             return
         bot.answer_callback_query(call.id, "🔄 پنل به‌روز شد.")
         show_main_menu(chat_id, user_id, message_id=call.message.message_id, edit=True)
@@ -1173,14 +1370,7 @@ def handle_callbacks(call):
             return
         bot.answer_callback_query(call.id)
         ref_link = f"https://t.me/{BOT_USERNAME}?start={user_id}"
-        
-        link_text = (
-            f"🔥 بزرگترین ایردراپ توکن هواداری پرسپولیس (PRS) 🔥\n\n"
-            f"🏆 فرصت استثنایی برای دریافت توکن رایگان و ورود به اکوسیستم دیجیتال پرسپولیس!\n"
-            f"🎁 همین الان با لینک زیر وارد ربات شو و پاداش ورودت رو بگیر:\n\n"
-            f"{ref_link}\n\n"
-            f"این پیام رو برای دوستان خود ارسال کنید"
-        )
+        link_text = get_msg(user_id, "ref_text", link=ref_link)
         try:
             bot.send_photo(chat_id=chat_id, photo=BANNER_FILE_ID, caption=link_text)
         except Exception:
@@ -1193,44 +1383,27 @@ def handle_callbacks(call):
         ref_count = user_data[0] if user_data else 0
         
         if ref_count < REQUIRED_REFERRALS:
-            bot.answer_callback_query(call.id, f"⚠️ پاداش روزانه قفل است!", show_alert=True)
+            bot.answer_callback_query(call.id, "⚠️ پاداش روزانه قفل است!", show_alert=True)
             return
             
         current_time = int(time.time())
         last_daily = user_data[4] if user_data else 0
         
         if current_time - last_daily < 86400:
-            bot.answer_callback_query(call.id, f"⏳ شما قبلاً پاداش امروز خود را دریافت کرده‌اید!", show_alert=True)
+            bot.answer_callback_query(call.id, "⏳ شما قبلاً پاداش امروز خود را دریافت کرده‌اید!", show_alert=True)
         else:
             users_col.update_one(
                 {"user_id": user_id},
                 {"$set": {"last_daily": current_time}, "$inc": {"daily_count": 1}}
             )
-            bot.answer_callback_query(call.id, f"🎁 تبریک! پاداش روزانه اضافه شد.", show_alert=True)
+            bot.answer_callback_query(call.id, "🎁 تبریک! پاداش روزانه اضافه شد.", show_alert=True)
             show_main_menu(chat_id, user_id, message_id=call.message.message_id, edit=True)
     elif call.data == "wallet_guide":
         if not check_membership(user_id):
             bot.answer_callback_query(call.id, "❌ ابتدا در کانال عضو شوید!", show_alert=True)
             return
         bot.answer_callback_query(call.id)
-        guide_text = (
-            f"📖 *راهنمای کامل و گام‌به‌گام نصب کیف پول و اضافه کردن توکن پرسپولیس (PRS):*\n\n"
-            f"🔹 **مقدمه:** توکن هواداری پرسپولیس روی شبکه قدرتمند **BNB Smart Chain (BSC / BEP20)** راه‌اندازی شده است. برای دریافت و نگهداری آن، بهترین پیشنهاد استفاده از اپلیکیشن امن **Trust Wallet (تراست ولت)** است.\n\n"
-            f"📱 **مرحله اول: نصب و ساخت کیف پول**\n"
-            f"• برنامه Trust Wallet را از گوگل‌پلی یا اپ‌استور دانلود کنید.\n"
-            f"• یک کیف پول جدید بسازید و **۱۲ کلمه بازیابی (Seed Phrase)** خود را حتماً روی کاغذ یادداشت کنید و در جای امن نگه دارید.\n\n"
-            f"📋 **مرحله دوم: نحوه اضافه کردن توکن PRS (Custom Token)**\n"
-            f"چون این توکن جدید است، برای نمایش آن در تراست ولت باید مراحل زیر را انجام دهید:\n"
-            f"1. وارد تراست ولت شوید و در قسمت پایین سمت راست، روی آیکون ذره‌بین (Search) بزنید.\n"
-            f"2. آدرس قرارداد (Contract Address) توکن پرسپولیس را در کادر جستجو وارد کنید:\n"
-            f"`0x1f67eB3e7487b7D70C69264Ab907Dd074ef1d39f`\n"
-            f"3. **دقت کنید که نام کامل آن حتماً PERSEPOLIS باشد.**\n"
-            f"4. روی گزینه افزودن یا فعال‌سازی توکن بزنید تا به لیست کیف پول شما اضافه شود.\n\n"
-            f"📤 **مرحله سوم: ارسال آدرس ولت به ربات**\n"
-            f"• وارد توکن **PERSEPOLIS (PRS)** در کیف پول خود شوید و روی گزینه **Receive** (دریافت) بزنید.\n"
-            f"• آدرس اختصاصی ولت PRS خود (شروع شده با `0x`) را کپی کرده و در بخش **«ارسال / ویرایش آدرس ولت»** در همین ربات بفرستید.\n\n"
-            f"❓ اگر هر گونه سوالی داشتید، می‌توانید به پشتیبانی پیام دهید: @PRSsupportt"
-        )
+        guide_text = get_msg(user_id, "wallet_guide_text")
         bot.send_message(chat_id, guide_text, parse_mode="Markdown")
     elif call.data == "leaderboard":
         if not check_membership(user_id):
@@ -1249,9 +1422,9 @@ def handle_callbacks(call):
         ranked_list.sort(key=lambda x: (x[2], x[1]), reverse=True)
         top_10 = ranked_list[:10]
         
-        text = "🏆 *۱۰ شرکت‌کننده برتر ایردراپ*:\n\n"
+        text = get_msg(user_id, "top_title")
         for idx, (uid, r_cnt, total_t) in enumerate(top_10, 1):
-            text += f"{idx}. آیدی: `{uid}` — 🎁 توکن کل: *{total_t:,} PRS* (دعوت: {r_cnt})\n"
+            text += get_msg(user_id, "top_row", idx, uid=uid, total=total_t, refs=r_cnt)
         bot.send_message(chat_id, text, parse_mode="Markdown")
     elif call.data == "my_status":
         if not check_membership(user_id):
@@ -1263,19 +1436,10 @@ def handle_callbacks(call):
         total_earned = calculate_total_tokens(ref_count, d_count)
         paid_amt = user_data[7] if user_data and len(user_data) > 7 else 0
         remaining_earned = max(0, total_earned - paid_amt)
-        wallet = user_data[6] if user_data and len(user_data) > 6 and user_data[6] else "ثبت نشده"
+        wallet = user_data[6] if user_data and len(user_data) > 6 and user_data[6] else ("ثبت نشده" if get_msg(user_id, "lang")=="fa" else "Not registered")
         user_rank = get_user_rank(user_id)
         
-        status_msg = (
-            f"📊 *اطلاعات حساب و وضعیت شما:*\n\n"
-            f"🆔 آیدی عددی شما: `{user_id}`\n"
-            f"👥 تعداد دعوت‌ها: `{ref_count} / {REQUIRED_REFERRALS}`\n"
-            f"🎁 کل توکن کسب‌شده: `{total_earned:,} PRS`\n"
-            f"💳 توکن پرداخت شده: `{paid_amt:,} PRS`\n"
-            f"💰 موجودی باقی‌مانده: `{remaining_earned:,} PRS`\n"
-            f"🏅 رتبه شما در ایردراپ: `{user_rank}`\n"
-            f"👝 آدرس ولت فعلی: `{wallet}`"
-        )
+        status_msg = get_msg(user_id, "status_box", uid=user_id, refs=ref_count, req=REQUIRED_REFERRALS, earned=total_earned, paid=paid_amt, rem=remaining_earned, rank=user_rank, wallet=wallet)
         bot.answer_callback_query(call.id)
         bot.send_message(chat_id, status_msg, parse_mode="Markdown")
     elif call.data == "submit_info":
@@ -1288,27 +1452,27 @@ def handle_callbacks(call):
 
         errors = []
         if ref_count < REQUIRED_REFERRALS:
-            errors.append(f"❌ تعداد دعوت‌های شما ({ref_count} نفر) به حد نصاب نرسیده است.")
+            errors.append(get_msg(user_id, "submit_err_ref", ref_count, REQUIRED_REFERRALS))
         if submitted >= 2:
-            errors.append("⚠️ شما سهمیه ثبت‌نام و تنها ویرایش مجاز خود را استفاده کرده‌اید.")
+            errors.append(get_msg(user_id, "submit_err_limit"))
 
         if errors:
             bot.answer_callback_query(call.id, "⚠️ شرایط لازم را ندارید!", show_alert=True)
             bot.send_message(
                 chat_id,
-                "⚠️ **امکان ثبت/ویرایش ولت وجود ندارد:**\n\n" + "\n".join(errors),
+                get_msg(user_id, "submit_errors", "\n".join(errors)),
                 parse_mode="Markdown"
             )
             return
 
         bot.answer_callback_query(call.id)
         if submitted == 1:
-            bot.send_message(chat_id, "✏️ **حالت ویرایش ولت:** آدرس ولت اختصاصی PRS خود را ارسال کنید:")
+            bot.send_message(chat_id, get_msg(user_id, "submit_edit_mode"))
         else:
-            bot.send_message(chat_id, "لطفاً آدرس ولت اختصاصی توکن **PERSEPOLIS (PRS)** خود را ارسال کنید:")
+            bot.send_message(chat_id, get_msg(user_id, "submit_new_mode"))
 
 if __name__ == "__main__":
-    print("Bot is starting with MongoDB...")
+    print("Bot is starting with MongoDB & Dual-Language Support...")
     bot.delete_webhook(drop_pending_updates=True)
     time.sleep(2)
 
