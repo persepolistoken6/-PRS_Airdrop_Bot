@@ -23,16 +23,15 @@ mongo_client = MongoClient(MONGO_URL)
 db = mongo_client["persepolis_db"]
 users_col = db.users
 captcha_col = db.captcha
-settings_col = db.bot_settings  # کالکشن جدید برای ذخیره تنظیمات ربات (مانند وضعیت روشن/خاموش)
+settings_col = db.bot_settings
 
 BOT_USERNAME = "PRS_Airdrop_Bot"
 CHANNEL_ID = "@persepolisToken6"
 TWITTER_URL = "https://x.com/PersepolisPRS"
 INSTAGRAM_URL = "https://www.instagram.com/persepolistoken6?igsh=eHBwbzdtd2ZoaWI5"
 
-# لیست ادمین‌های ربات (ادمین اول و ادمین دوم با دسترسی‌های کاملاً برابر)
 ADMIN_IDS = [6661478622, 84460885]
-ADMIN_CHAT_ID = 6661478622  # ادمین اصلی برای ارسال گزارشات خودکار (مثل بک‌آپ روزانه)
+ADMIN_CHAT_ID = 6661478622
 
 REQUIRED_REFERRALS = 3
 
@@ -243,7 +242,7 @@ LANG = {
     }
 }
 
-def get_msg(user_id_or_lang, key, *args):
+def get_msg(user_id_or_lang, key, *args, **kwargs):
     lang = "fa"
     if isinstance(user_id_or_lang, int):
         user = users_col.find_one({"user_id": user_id_or_lang})
@@ -253,9 +252,9 @@ def get_msg(user_id_or_lang, key, *args):
         lang = user_id_or_lang
     
     text = LANG.get(lang, LANG["fa"]).get(key, LANG["fa"].get(key, ""))
-    if args:
+    if args or kwargs:
         try:
-            return text.format(*args)
+            return text.format(*args, **kwargs)
         except Exception:
             return text
     return text
@@ -273,7 +272,6 @@ def get_main_reply_markup(user_id):
     markup.row(get_msg(lang, "main_kb_refresh"), get_msg(lang, "main_kb_channel"))
     markup.row(get_msg(lang, "main_kb_twitter"), get_msg(lang, "main_kb_instagram"))
     return markup
-# ---------------------------------------------------------------------
 
 def is_admin(user_id):
     return user_id in ADMIN_IDS
@@ -1106,7 +1104,6 @@ def handle_all_messages(message):
         bot.send_message(chat_id, get_msg(user_id, "global_off"))
         return
 
-    # ۱. اولویت اول: بررسی کپچا
     captcha_data = captcha_col.find_one({"user_id": user_id})
     if captcha_data:
         n1 = captcha_data["num1"]
@@ -1145,7 +1142,6 @@ def handle_all_messages(message):
         ask_to_join(chat_id, 0, user_id)
         return
 
-    # ۲. بررسی دکمه‌های منوی اصلی (فارسی و انگلیسی)
     if text in [LANG["fa"]["main_kb_status"], LANG["en"]["main_kb_status"]]:
         user_data = get_user_data(user_id)
         ref_count = user_data[0] if user_data else 0
@@ -1242,7 +1238,6 @@ def handle_all_messages(message):
         bot.send_message(chat_id, f"📸 Instagram: {INSTAGRAM_URL}")
         return
 
-    # ۳. بررسی اینکه آیا متن ارسالی یک آدرس ولت معتبر است یا خیر
     wallet_address = text.strip()
     if re.match(r"^0x[a-fA-F0-9]{40}$", wallet_address):
         user_doc = users_col.find_one({"user_id": user_id})
@@ -1262,7 +1257,6 @@ def handle_all_messages(message):
         show_main_menu(chat_id, user_id)
         return
 
-    # ۴. اگر متن هیچ‌کدام نبود (متن متفرقه یا نامعتبر)
     bot.send_message(
         chat_id,
         "⚠️ لطفاً از پنل کاربری اقدام کنید / Please use the user panel.",
