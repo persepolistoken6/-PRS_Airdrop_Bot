@@ -75,6 +75,8 @@ LANG = {
         "btn_status": "📊 وضعیت من و رتبه",
         "btn_submit_w": "📝 ارسال / ویرایش ولت",
         "btn_refresh": "🔄 به‌روزرسانی پنل کاربری",
+        "btn_lang": "🌐 تغییر زبان / Change Language",
+        "lang_changed": "✅ زبان ربات با موفقیت به فارسی تغییر یافت.",
         "quick_menu_text": "👇 منوی دسترسی سریع همیشه در پایین صفحه شما قرار دارد:",
         "main_caption": (
             "🔴 *به ربات رسمی ایردراپ توکن هواداری پرسپولیس (PRS) خوش آمدید* 🏆\n\n"
@@ -172,6 +174,8 @@ LANG = {
         "btn_status": "📊 My Status & Rank",
         "btn_submit_w": "📝 Submit / Edit Wallet",
         "btn_refresh": "🔄 Refresh User Panel",
+        "btn_lang": "🌐 تغییر زبان / Change Language",
+        "lang_changed": "✅ Bot language successfully changed to English.",
         "quick_menu_text": "👇 Quick access menu is always at the bottom of your screen:",
         "main_caption": (
             "🔴 *Welcome to Official Persepolis Fan Token (PRS) Airdrop Bot* 🏆\n\n"
@@ -811,6 +815,7 @@ def show_main_menu(chat_id, user_id, message_id=None, edit=False):
     markup.row(InlineKeyboardButton(get_msg(user_id, "btn_guide"), callback_data="wallet_guide"))
     markup.row(InlineKeyboardButton(get_msg(user_id, "btn_top"), callback_data="leaderboard"))
     markup.row(InlineKeyboardButton(get_msg(user_id, "btn_status"), callback_data="my_status"), InlineKeyboardButton(get_msg(user_id, "btn_submit_w"), callback_data="submit_info"))
+    markup.row(InlineKeyboardButton(get_msg(user_id, "btn_lang"), callback_data="toggle_language"))
     markup.row(InlineKeyboardButton(get_msg(user_id, "btn_refresh"), callback_data="refresh_menu"))
 
     caption_text = get_msg(user_id, "main_caption", base=BASE_REWARD, req=REQUIRED_REFERRALS, daily=DAILY_REWARD, extra=EXTRA_REWARD, uid=user_id, refs=ref_count, rank=user_rank, earned=total_earned, paid=paid_amt, rem=remaining_earned)
@@ -1326,6 +1331,22 @@ def handle_callbacks(call):
             pass
             
         send_captcha(chat_id, user_id, referrer_id)
+        return
+
+    if call.data == "toggle_language":
+        user = users_col.find_one({"user_id": user_id})
+        current_lang = user.get("lang", "fa") if user else "fa"
+        new_lang = "en" if current_lang == "fa" else "fa"
+        
+        users_col.update_one(
+            {"user_id": user_id},
+            {"$set": {"lang": new_lang}},
+            upsert=True
+        )
+        
+        success_msg = "✅ زبان ربات با موفقیت به فارسی تغییر یافت." if new_lang == "fa" else "✅ Bot language successfully changed to English."
+        bot.answer_callback_query(call.id, success_msg, show_alert=True)
+        show_main_menu(chat_id, user_id, message_id=call.message.message_id, edit=True)
         return
 
     if call.data.startswith("check_join_"):
