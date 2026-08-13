@@ -721,9 +721,17 @@ def send_paginated_wallets(message, offset=0, edit=False):
         bot.send_message(message.chat.id, text, reply_markup=markup, parse_mode="Markdown")
 
 def send_status_excel_report(chat_id, status_filter):
-    rows = list(users_col.find({"submitted": {"$gt": 0}, "paid": status_filter}).sort("ref_count", -1))
+    # اصلاح کوئری برای گزارش‌گیری دقیق وضعیت پرداخت‌شده یا در انتظار پرداخت
+    if status_filter == 1:
+        rows = list(users_col.find({"submitted": {"$gt": 0}, "paid": 1}).sort("ref_count", -1))
+        status_name = "پرداخت‌شده"
+        file_name = 'paid_users.csv'
+    else:
+        # در انتظار پرداخت یعنی فرم داده ولی فیلد paid آن 0 یا تعریف نشده است
+        rows = list(users_col.find({"submitted": {"$gt": 0}, "$or": [{"paid": 0}, {"paid": {"$exists": False}}]}).sort("ref_count", -1))
+        status_name = "در انتظار پرداخت"
+        file_name = 'pending_users.csv'
 
-    status_name = "پرداخت‌شده" if status_filter == 1 else "در انتظار پرداخت"
     if not rows:
         bot.send_message(chat_id, f"⚠️ هیچ کاربری در وضعیت «{status_name}» وجود ندارد.", reply_markup=get_admin_reply_markup())
         return
@@ -742,7 +750,6 @@ def send_status_excel_report(chat_id, status_filter):
         csv_content += f"{uid},{wlt},{ref_cnt},{d_count},{total_tokens},{paid_amt},{st_text}\n"
 
     file_bytes = io.BytesIO(csv_content.encode('utf-8-sig'))
-    file_name = 'paid_users.csv' if status_filter == 1 else 'pending_users.csv'
     file_bytes.name = file_name
     
     caption_text = f"📁 فایل گزارش کاربران **{status_name}** (فرمت سازگار با اکسل/CSV)"
