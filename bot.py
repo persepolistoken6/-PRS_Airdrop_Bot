@@ -510,7 +510,7 @@ def send_eligible_no_wallet_excel(chat_id):
         total_tokens = calculate_total_tokens(ref_cnt, d_count)
         csv_content += f"{uid},{ref_cnt},{d_count},{total_tokens},Not Registered\n"
 
-    file_bytes = io.BytesIO(csv_content.encode('utf-8'))
+    file_bytes = io.BytesIO(csv_content.encode('utf-8-sig'))
     file_bytes.name = 'eligible_no_wallet_users.csv'
     
     bot.send_document(
@@ -540,7 +540,7 @@ def send_under_threshold_excel(chat_id):
         
         csv_content += f"{uid},{ref_cnt},{d_count},{total_tokens},{wallet_status},{sub_status}\n"
 
-    file_bytes = io.BytesIO(csv_content.encode('utf-8'))
+    file_bytes = io.BytesIO(csv_content.encode('utf-8-sig'))
     file_bytes.name = 'under_threshold_users.csv'
     
     bot.send_document(
@@ -741,7 +741,7 @@ def send_status_excel_report(chat_id, status_filter):
         st_text = "Paid" if paid == 1 else "Pending"
         csv_content += f"{uid},{wlt},{ref_cnt},{d_count},{total_tokens},{paid_amt},{st_text}\n"
 
-    file_bytes = io.BytesIO(csv_content.encode('utf-8'))
+    file_bytes = io.BytesIO(csv_content.encode('utf-8-sig'))
     file_name = 'paid_users.csv' if status_filter == 1 else 'pending_users.csv'
     file_bytes.name = file_name
     
@@ -772,7 +772,7 @@ def send_detailed_report_file(chat_id):
         total_tokens = calculate_total_tokens(ref_cnt, d_count)
         csv_content += f"{uid},{ref_by},{ref_cnt},{submitted},{paid},{verified},{wlt},{last_daily},{d_count},{total_tokens},{paid_amt},{lang}\n"
 
-    file_bytes = io.BytesIO(csv_content.encode('utf-8'))
+    file_bytes = io.BytesIO(csv_content.encode('utf-8-sig'))
     file_bytes.name = 'all_users_complete_database_report.csv'
     
     bot.send_document(
