@@ -922,6 +922,22 @@ def show_main_menu(chat_id, user_id, message_id=None, edit=False):
     remaining_earned = max(0, total_earned - paid_amt)
     user_rank = get_user_rank(user_id)
     
+    # --- محاسبه وضعیت تایمر برای دکمه پاداش روزانه ---
+    daily_btn_text = get_msg(user_id, "btn_daily")
+    if user_data:
+        last_daily = user_data[4] if len(user_data) > 4 else 0
+        current_time = int(time.time())
+        if ref_count < REQUIRED_REFERRALS:
+            daily_btn_text = f"🔒 {daily_btn_text}" # در صورت نرسیدن به حد نصاب
+        elif current_time - last_daily < 86400:
+            rem = 86400 - (current_time - last_daily)
+            h = rem // 3600
+            m = (rem % 3600) // 60
+            daily_btn_text = f"⏳ {h:02d}:{m:02d} | {daily_btn_text}" # نمایش تایمر
+        else:
+            daily_btn_text = f"✅ {daily_btn_text}" # آماده دریافت
+    # ----------------------------------------
+    
     markup = InlineKeyboardMarkup()
     markup.row(
         InlineKeyboardButton(get_msg(user_id, "btn_channel"), url=f"https://t.me/{CHANNEL_ID.lstrip('@')}"),
@@ -930,7 +946,10 @@ def show_main_menu(chat_id, user_id, message_id=None, edit=False):
     markup.row(InlineKeyboardButton(get_msg(user_id, "btn_insta"), url=INSTAGRAM_URL))
     
     markup.row(InlineKeyboardButton(get_msg(user_id, "btn_ref"), callback_data="get_ref_link"))
-    markup.row(InlineKeyboardButton(get_msg(user_id, "btn_daily"), callback_data="daily_bonus"))
+    
+    # جایگذاری دکمه جدید با قابلیت تایمر
+    markup.row(InlineKeyboardButton(daily_btn_text, callback_data="daily_bonus"))
+    
     markup.row(InlineKeyboardButton(get_msg(user_id, "btn_guide"), callback_data="wallet_guide"))
     markup.row(InlineKeyboardButton(get_msg(user_id, "btn_top"), callback_data="leaderboard"))
     markup.row(InlineKeyboardButton(get_msg(user_id, "btn_status"), callback_data="my_status"), InlineKeyboardButton(get_msg(user_id, "btn_submit_w"), callback_data="submit_info"))
