@@ -36,9 +36,9 @@ ADMIN_CHAT_ID = 6661478622
 
 REQUIRED_REFERRALS = 3
 
-BASE_REWARD = 1000
-EXTRA_REWARD = 1000
-DAILY_REWARD = 100
+BASE_REWARD = 2000
+EXTRA_REWARD = 5000
+DAILY_REWARD = 1000
 MAX_TOTAL_TOKENS_LIMIT = 300_000_000
 
 BANNER_FILE_ID = "AgACAgQAAxkBAAMfamINNXWkFr-wk1ONFWAEHF2z-vGAAsgNaxtnhwABU-cbUHZe_7c6AQADAgADeQADPQQ"
@@ -70,7 +70,7 @@ LANG = {
         "btn_twitter": "🐦 توییتر (ایکس)",
         "btn_insta": "📸 اینستاگرام پرسپولیس",
         "btn_ref": "🔗 دریافت لینک دعوت جذاب و اختصاصی",
-        "btn_daily": "🎁 پاداش روزانه (100 PRS)",
+        "btn_daily": "🎁 پاداش روزانه (1000 PRS)",
         "btn_guide": "📖 راهنمای ولت و توکن PRS",
         "btn_top": "🏆 برترین شرکت‌کنندگان (تاپ ۱۰)",
         "btn_status": "📊 وضعیت من و رتبه",
@@ -171,7 +171,7 @@ LANG = {
         "btn_twitter": "🐦 Twitter (X)",
         "btn_insta": "📸 Persepolis Instagram",
         "btn_ref": "🔗 Get Exclusive Referral Link",
-        "btn_daily": "🎁 Daily Bonus (100 PRS)",
+        "btn_daily": "🎁 Daily Bonus (1000 PRS)",
         "btn_guide": "📖 PRS Wallet & Token Guide",
         "btn_top": "🏆 Top Participants (Top 10)",
         "btn_status": "📊 My Status & Rank",
