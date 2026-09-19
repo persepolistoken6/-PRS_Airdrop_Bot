@@ -1,4 +1,5 @@
 import io
+import csv
 import os
 import random
 import time
@@ -94,6 +95,7 @@ LANG = {
             "👥 دعوت‌های شما: `{refs} / {req}`\n"
             "🏅 رتبه شما در بین کاربران: `{rank}`\n"
             "🎉 پاداش‌های همگانی دریافتی: `{bonus:,} PRS`\n"
+            "🎯 پاداش‌های دستی مدیریت: `{manual_bonus:,} PRS`\n"
             "🎁 کل توکن کسب‌شده: `{earned:,} PRS`\n"
             "💳 توکن پرداخت شده: `{paid:,} PRS`\n"
             "💰 موجودی باقی‌مانده: `{rem:,} PRS`"
@@ -141,6 +143,7 @@ LANG = {
             "🆔 آیدی عددی شما: `{uid}`\n"
             "👥 تعداد دعوت‌ها: `{refs} / {req}`\n"
             "🎉 پاداش‌های همگانی دریافتی: `{bonus:,} PRS`\n"
+            "🎯 پاداش‌های دستی مدیریت: `{manual_bonus:,} PRS`\n"
             "🎁 کل توکن کسب‌شده: `{earned:,} PRS`\n"
             "💳 توکن پرداخت شده: `{paid:,} PRS`\n"
             "💰 موجودی باقی‌مانده: `{rem:,} PRS`\n"
@@ -195,6 +198,7 @@ LANG = {
             "👥 Your Referrals: `{refs} / {req}`\n"
             "🏅 Your Rank: `{rank}`\n"
             "🎉 Global Rewards Received: `{bonus:,} PRS`\n"
+            "🎯 Manual Admin Rewards: `{manual_bonus:,} PRS`\n"
             "🎁 Total Earned Tokens: `{earned:,} PRS`\n"
             "💳 Paid Tokens: `{paid:,} PRS`\n"
             "💰 Remaining Balance: `{rem:,} PRS`"
@@ -242,6 +246,7 @@ LANG = {
             "🆔 Your User ID: `{uid}`\n"
             "👥 Referrals: `{refs} / {req}`\n"
             "🎉 Global Rewards Received: `{bonus:,} PRS`\n"
+            "🎯 Manual Admin Rewards: `{manual_bonus:,} PRS`\n"
             "🎁 Total Earned Tokens: `{earned:,} PRS`\n"
             "💳 Paid Tokens: `{paid:,} PRS`\n"
             "💰 Remaining Balance: `{rem:,} PRS`\n"
@@ -304,7 +309,8 @@ def get_user_data(user_id):
         user.get("daily_count", 0),
         user.get("wallet", None),
         user.get("paid_amount", 0),
-        user.get("bonus_tokens", 0)
+        user.get("bonus_tokens", 0),
+        user.get("manual_bonus_tokens", 0)
     )
 
 def calculate_tokens(ref_count):
@@ -313,18 +319,23 @@ def calculate_tokens(ref_count):
     extra = ref_count - REQUIRED_REFERRALS
     return BASE_REWARD + (extra * EXTRA_REWARD)
 
-def calculate_total_tokens(ref_count, daily_count, bonus_tokens=0):
+def calculate_total_tokens(ref_count, daily_count, bonus_tokens=0, manual_bonus_tokens=0):
     base_ref_tokens = calculate_tokens(ref_count)
     daily_tokens = daily_count * DAILY_REWARD
-    return base_ref_tokens + daily_tokens + bonus_tokens
+    return base_ref_tokens + daily_tokens + bonus_tokens + manual_bonus_tokens
 
 def get_global_total_distributed_tokens():
-    all_users = users_col.find({}, {"ref_count": 1, "daily_count": 1, "bonus_tokens": 1})
+    all_users = users_col.find({}, {"ref_count": 1, "daily_count": 1, "bonus_tokens": 1, "manual_bonus_tokens": 1})
     total = 0
     for u in all_users:
         r_cnt = u.get("ref_count", 0)
         d_cnt = u.get("daily_count", 0)
-        total += calculate_total_tokens(r_cnt, d_cnt, u.get("bonus_tokens", 0))
+        total += calculate_total_tokens(
+            r_cnt,
+            d_cnt,
+            u.get("bonus_tokens", 0),
+            u.get("manual_bonus_tokens", 0)
+        )
     return total
 
 def is_airdrop_finished():
@@ -416,8 +427,10 @@ def execute_global_bonus(admin_chat_id, operation_id, amount):
                         f"🎁 مبلغ `{amount:,} PRS` به موجودی حساب شما اضافه شد."
                     )
                 bot.send_message(user["user_id"], notification, parse_mode="Markdown")
+                update_user_delivery_status(user["user_id"], True)
                 sent_count += 1
-            except Exception:
+            except Exception as e:
+                update_user_delivery_status(user["user_id"], False, e)
                 failed_count += 1
 
             if (idx + 1) % 25 == 0:
@@ -433,6 +446,324 @@ def execute_global_bonus(admin_chat_id, operation_id, amount):
         )
 
     threading.Thread(target=notify_bonus_receivers, daemon=True).start()
+
+def is_valid_wallet(wallet):
+    return bool(isinstance(wallet, str) and re.fullmatch(r"0x[a-fA-F0-9]{40}", wallet.strip()))
+
+def get_eligible_no_wallet_users():
+    candidates = users_col.find(
+        {"ref_count": {"$gte": REQUIRED_REFERRALS}},
+        {"user_id": 1, "ref_count": 1, "wallet": 1, "submitted": 1}
+    )
+    return [u for u in candidates if not is_valid_wallet(u.get("wallet"))]
+
+def is_blocked_api_error(error):
+    error_text = str(error).lower()
+    return "bot was blocked by the user" in error_text
+
+def update_user_delivery_status(user_id, success, error=None):
+    checked_at = int(time.time())
+    if success:
+        users_col.update_one(
+            {"user_id": user_id},
+            {
+                "$set": {
+                    "bot_blocked": False,
+                    "bot_status_checked_at": checked_at,
+                    "last_delivery_success_at": checked_at
+                },
+                "$unset": {"last_delivery_error": ""}
+            }
+        )
+        return False
+
+    error_text = str(error)[:500] if error else "Unknown Telegram delivery error"
+    blocked = is_blocked_api_error(error_text)
+    update_fields = {
+        "bot_status_checked_at": checked_at,
+        "last_delivery_error": error_text
+    }
+    if blocked:
+        update_fields["bot_blocked"] = True
+        update_fields["bot_blocked_at"] = checked_at
+
+    users_col.update_one({"user_id": user_id}, {"$set": update_fields})
+    return blocked
+
+def execute_manual_bonus(admin_chat_id, target_uid, operation_id, amount):
+    user = users_col.find_one({"user_id": target_uid})
+    if not user:
+        bot.send_message(
+            admin_chat_id,
+            "❌ کاربر موردنظر دیگر در دیتابیس وجود ندارد.",
+            reply_markup=get_admin_reply_markup()
+        )
+        return
+
+    current_total = get_global_total_distributed_tokens()
+    remaining_capacity = max(0, MAX_TOTAL_TOKENS_LIMIT - current_total)
+    if amount > remaining_capacity:
+        bot.send_message(
+            admin_chat_id,
+            f"❌ پاداش ثبت نشد؛ مبلغ از ظرفیت باقی‌مانده ایردراپ بیشتر است.\n\n"
+            f"📌 ظرفیت باقی‌مانده: `{remaining_capacity:,} PRS`",
+            reply_markup=get_admin_reply_markup(),
+            parse_mode="Markdown"
+        )
+        return
+
+    event_time = int(time.time())
+    result = users_col.update_one(
+        {
+            "user_id": target_uid,
+            "manual_bonus_operation_ids": {"$ne": operation_id}
+        },
+        {
+            "$inc": {"manual_bonus_tokens": amount},
+            "$set": {"paid": 0},
+            "$addToSet": {"manual_bonus_operation_ids": operation_id},
+            "$push": {
+                "manual_bonus_history": {
+                    "operation_id": operation_id,
+                    "amount": amount,
+                    "created_at": event_time,
+                    "created_by": admin_chat_id
+                }
+            }
+        }
+    )
+
+    if result.modified_count != 1:
+        bot.send_message(
+            admin_chat_id,
+            "⚠️ این عملیات قبلاً ثبت شده یا امکان به‌روزرسانی کاربر وجود نداشت.",
+            reply_markup=get_admin_reply_markup()
+        )
+        return
+
+    updated_user = users_col.find_one(
+        {"user_id": target_uid},
+        {"lang": 1, "manual_bonus_tokens": 1}
+    ) or {}
+    manual_total = updated_user.get("manual_bonus_tokens", amount)
+    notification_sent = True
+
+    try:
+        if updated_user.get("lang", "fa") == "en":
+            notification = (
+                f"🎉 *You received a manual PRS reward from management!*\n\n"
+                f"🎁 Reward amount: `{amount:,} PRS`\n"
+                f"🎯 Total manual rewards: `{manual_total:,} PRS`\n"
+                f"🆔 Operation ID: `{operation_id}`\n\n"
+                f"This reward is registered in your account balance."
+            )
+        else:
+            notification = (
+                f"🎉 *از طرف مدیریت PRS پاداش دستی دریافت کردید!*\n\n"
+                f"🎁 مبلغ پاداش: `{amount:,} PRS`\n"
+                f"🎯 مجموع پاداش‌های دستی شما: `{manual_total:,} PRS`\n"
+                f"🆔 شناسه عملیات: `{operation_id}`\n\n"
+                f"این پاداش در موجودی حساب شما ثبت شده است."
+            )
+        bot.send_message(target_uid, notification, parse_mode="Markdown")
+        update_user_delivery_status(target_uid, True)
+    except Exception as e:
+        notification_sent = False
+        update_user_delivery_status(target_uid, False, e)
+
+    delivery_text = "✅ پیام تأیید نیز برای کاربر ارسال شد." if notification_sent else "⚠️ پاداش ثبت شد، اما پیام تأیید به کاربر تحویل نشد."
+    bot.send_message(
+        admin_chat_id,
+        f"✅ *پاداش دستی با موفقیت ثبت شد.*\n\n"
+        f"👤 آیدی کاربر: `{target_uid}`\n"
+        f"🎁 مبلغ پاداش: `{amount:,} PRS`\n"
+        f"🎯 مجموع پاداش دستی کاربر: `{manual_total:,} PRS`\n"
+        f"🆔 شناسه عملیات: `{operation_id}`\n\n"
+        f"{delivery_text}",
+        reply_markup=get_admin_reply_markup(),
+        parse_mode="Markdown"
+    )
+
+def send_manual_bonus_report(chat_id):
+    users = list(users_col.find(
+        {"manual_bonus_history.0": {"$exists": True}},
+        {
+            "user_id": 1,
+            "wallet": 1,
+            "manual_bonus_tokens": 1,
+            "manual_bonus_history": 1
+        }
+    ).sort("user_id", 1))
+
+    if not users:
+        bot.send_message(
+            chat_id,
+            "⚠️ هنوز هیچ پاداش دستی برای کاربران ثبت نشده است.",
+            reply_markup=get_admin_reply_markup()
+        )
+        return
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "User ID", "Wallet", "Reward Amount", "User Manual Bonus Total",
+        "Operation ID", "Created At (UTC)", "Created By Admin"
+    ])
+
+    event_count = 0
+    total_amount = 0
+    for user in users:
+        for event in user.get("manual_bonus_history", []):
+            amount = int(event.get("amount", 0) or 0)
+            created_at = int(event.get("created_at", 0) or 0)
+            created_text = (
+                datetime.utcfromtimestamp(created_at).strftime("%Y-%m-%d %H:%M:%S UTC")
+                if created_at else ""
+            )
+            writer.writerow([
+                user.get("user_id", ""),
+                user.get("wallet") or "Not Registered",
+                amount,
+                user.get("manual_bonus_tokens", 0),
+                event.get("operation_id", ""),
+                created_text,
+                event.get("created_by", "")
+            ])
+            event_count += 1
+            total_amount += amount
+
+    file_bytes = io.BytesIO(output.getvalue().encode("utf-8-sig"))
+    file_bytes.name = "manual_bonus_report.csv"
+    bot.send_document(
+        chat_id,
+        file_bytes,
+        caption=(
+            f"📊 **گزارش کامل پاداش‌های دستی**\n\n"
+            f"👥 کاربران دریافت‌کننده: `{len(users):,}` نفر\n"
+            f"🧾 تعداد عملیات: `{event_count:,}`\n"
+            f"🎁 مجموع پاداش دستی: `{total_amount:,} PRS`"
+        ),
+        reply_markup=get_admin_reply_markup(),
+        parse_mode="Markdown"
+    )
+
+def send_blocked_users_csv(chat_id, blocked_users, checked_count, unknown_count):
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["User ID", "Blocked At (UTC)", "Last Check (UTC)", "Telegram Error"])
+
+    for user in blocked_users:
+        blocked_at = int(user.get("bot_blocked_at", 0) or 0)
+        checked_at = int(user.get("bot_status_checked_at", 0) or 0)
+        writer.writerow([
+            user.get("user_id", ""),
+            datetime.utcfromtimestamp(blocked_at).strftime("%Y-%m-%d %H:%M:%S UTC") if blocked_at else "",
+            datetime.utcfromtimestamp(checked_at).strftime("%Y-%m-%d %H:%M:%S UTC") if checked_at else "",
+            user.get("last_delivery_error", "")
+        ])
+
+    file_bytes = io.BytesIO(output.getvalue().encode("utf-8-sig"))
+    file_bytes.name = "blocked_bot_users.csv"
+    bot.send_document(
+        chat_id,
+        file_bytes,
+        caption=(
+            f"🚫 **گزارش بررسی کاربران بلاک‌کننده ربات**\n\n"
+            f"👤 تعداد بررسی‌شده: `{checked_count:,}` نفر\n"
+            f"🚫 بلاک قطعی: `{len(blocked_users):,}` نفر\n"
+            f"⚠️ خطاهای نامشخص: `{unknown_count:,}` مورد"
+        ),
+        reply_markup=get_admin_reply_markup(),
+        parse_mode="Markdown"
+    )
+
+def start_blocked_users_scan(chat_id):
+    all_users = list(users_col.find({}, {"user_id": 1}))
+    if not all_users:
+        bot.send_message(chat_id, "⚠️ هیچ کاربری برای بررسی وجود ندارد.", reply_markup=get_admin_reply_markup())
+        return
+
+    bot.send_message(
+        chat_id,
+        f"🔎 بررسی بی‌صدای وضعیت `{len(all_users):,}` کاربر آغاز شد. پس از پایان، فایل خروجی ارسال می‌شود.",
+        reply_markup=get_admin_reply_markup(),
+        parse_mode="Markdown"
+    )
+
+    def run_scan():
+        unknown_count = 0
+        blocked_ids = []
+        for idx, user in enumerate(all_users):
+            uid = user.get("user_id")
+            if not uid:
+                continue
+            try:
+                bot.send_chat_action(uid, "typing")
+                update_user_delivery_status(uid, True)
+            except Exception as e:
+                if update_user_delivery_status(uid, False, e):
+                    blocked_ids.append(uid)
+                else:
+                    unknown_count += 1
+
+            if (idx + 1) % 20 == 0:
+                time.sleep(1)
+
+        blocked_users = list(users_col.find(
+            {"user_id": {"$in": blocked_ids}},
+            {"user_id": 1, "bot_blocked_at": 1, "bot_status_checked_at": 1, "last_delivery_error": 1}
+        ).sort("user_id", 1)) if blocked_ids else []
+        send_blocked_users_csv(chat_id, blocked_users, len(all_users), unknown_count)
+
+    threading.Thread(target=run_scan, daemon=True).start()
+
+def start_no_wallet_broadcast(chat_id, text):
+    recipients = get_eligible_no_wallet_users()
+    if not recipients:
+        bot.send_message(
+            chat_id,
+            "⚠️ هیچ کاربری با حداقل ۳ دعوت و بدون ولت معتبر یافت نشد.",
+            reply_markup=get_admin_reply_markup()
+        )
+        return
+
+    bot.send_message(
+        chat_id,
+        f"🚀 ارسال پیام به `{len(recipients):,}` کاربر واجد شرایطِ بدون ولت آغاز شد...",
+        reply_markup=get_admin_reply_markup(),
+        parse_mode="Markdown"
+    )
+
+    def run_broadcast():
+        success_count = 0
+        failed_count = 0
+        blocked_count = 0
+        for idx, user in enumerate(recipients):
+            uid = user.get("user_id")
+            try:
+                bot.send_message(uid, text)
+                update_user_delivery_status(uid, True)
+                success_count += 1
+            except Exception as e:
+                failed_count += 1
+                if update_user_delivery_status(uid, False, e):
+                    blocked_count += 1
+
+            if (idx + 1) % 25 == 0:
+                time.sleep(1)
+
+        bot.send_message(
+            chat_id,
+            f"📨 **گزارش ارسال پیام به واجدین بی‌ولت:**\n\n"
+            f"👥 مخاطبان: `{len(recipients):,}` نفر\n"
+            f"✅ ارسال موفق: `{success_count:,}` نفر\n"
+            f"❌ ارسال ناموفق: `{failed_count:,}` نفر\n"
+            f"🚫 بلاک قطعی ربات: `{blocked_count:,}` نفر",
+            reply_markup=get_admin_reply_markup(),
+            parse_mode="Markdown"
+        )
+
+    threading.Thread(target=run_broadcast, daemon=True).start()
 
 def check_membership(user_id):
     try:
@@ -452,6 +783,8 @@ def get_admin_reply_markup():
     markup.row("📥 اکسل کاربران زیر حد نصاب (<3 دعوت)", "📊 گزارش تفکیکی کامل (فایل)")
     markup.row("📥 دریافت فوری بک‌آپ (JSON)", "📈 آمار کلی ربات")
     markup.row("🎁 پاداش همگانی واجدین شرایط")
+    markup.row("🎯 پاداش دستی به کاربر", "📊 اکسل پاداش‌های دستی")
+    markup.row("🚫 بررسی و خروجی بلاک‌کنندگان", "📣 پیام به واجدین بی‌ولت")
     markup.row("🔄 به‌روزرسانی پنل ادمین", "📢 ارسال همگانی پیام")
     markup.row("✉️ ارسال پیام شخصی به کاربر", "🔴 خاموش کردن ربات")
     markup.row("🟢 روشن کردن ربات", "🔙 خروج از حالت ادمین / منوی اصلی")
@@ -472,6 +805,7 @@ def register_user_after_verify(user_id, referrer_id):
             "last_daily": 0,
             "daily_count": 0,
             "paid_amount": 0,
+            "manual_bonus_tokens": 0,
             "lang": "fa"
         })
         
@@ -481,7 +815,12 @@ def register_user_after_verify(user_id, referrer_id):
                 ref_user = users_col.find_one({"user_id": valid_referrer})
                 current_refs = ref_user.get("ref_count", 1) if ref_user else 1
                 d_count = ref_user.get("daily_count", 0) if ref_user else 0
-                earned_now = calculate_total_tokens(current_refs, d_count, ref_user.get("bonus_tokens", 0) if ref_user else 0)
+                earned_now = calculate_total_tokens(
+                    current_refs,
+                    d_count,
+                    ref_user.get("bonus_tokens", 0) if ref_user else 0,
+                    ref_user.get("manual_bonus_tokens", 0) if ref_user else 0
+                )
                 ref_lang = ref_user.get("lang", "fa") if ref_user else "fa"
                 
                 notif_text = (
@@ -507,7 +846,12 @@ def register_user_after_verify(user_id, referrer_id):
                 ref_user = users_col.find_one({"user_id": valid_referrer})
                 current_refs = ref_user.get("ref_count", 1) if ref_user else 1
                 d_count = ref_user.get("daily_count", 0) if ref_user else 0
-                earned_now = calculate_total_tokens(current_refs, d_count, ref_user.get("bonus_tokens", 0) if ref_user else 0)
+                earned_now = calculate_total_tokens(
+                    current_refs,
+                    d_count,
+                    ref_user.get("bonus_tokens", 0) if ref_user else 0,
+                    ref_user.get("manual_bonus_tokens", 0) if ref_user else 0
+                )
                 ref_lang = ref_user.get("lang", "fa") if ref_user else "fa"
                 
                 notif_text = (
@@ -618,7 +962,9 @@ def send_eligible_no_wallet_excel(chat_id):
         uid = u.get("user_id")
         ref_cnt = u.get("ref_count", 0)
         d_count = u.get("daily_count", 0)
-        total_tokens = calculate_total_tokens(ref_cnt, d_count, u.get("bonus_tokens", 0))
+        total_tokens = calculate_total_tokens(
+            ref_cnt, d_count, u.get("bonus_tokens", 0), u.get("manual_bonus_tokens", 0)
+        )
         csv_content += f"{uid},{ref_cnt},{d_count},{total_tokens},Not Registered\n"
 
     file_bytes = io.BytesIO(csv_content.encode('utf-8-sig'))
@@ -644,7 +990,9 @@ def send_under_threshold_excel(chat_id):
         uid = u.get("user_id")
         ref_cnt = u.get("ref_count", 0)
         d_count = u.get("daily_count", 0)
-        total_tokens = calculate_total_tokens(ref_cnt, d_count, u.get("bonus_tokens", 0))
+        total_tokens = calculate_total_tokens(
+            ref_cnt, d_count, u.get("bonus_tokens", 0), u.get("manual_bonus_tokens", 0)
+        )
         wlt = u.get("wallet")
         wallet_status = f"Registered ({wlt})" if wlt else "Not Registered"
         sub_status = u.get("submitted", 0)
@@ -727,7 +1075,9 @@ def get_user_rank(user_id):
         uid = u.get("user_id")
         r_cnt = u.get("ref_count", 0)
         d_cnt = u.get("daily_count", 0)
-        total = calculate_total_tokens(r_cnt, d_cnt, u.get("bonus_tokens", 0))
+        total = calculate_total_tokens(
+            r_cnt, d_cnt, u.get("bonus_tokens", 0), u.get("manual_bonus_tokens", 0)
+        )
         scored_users.append((uid, total, r_cnt))
     
     scored_users.sort(key=lambda x: (x[1], x[2]), reverse=True)
@@ -748,7 +1098,10 @@ def admin_panel(message):
     )
 
 def show_token_summary_direct(chat_id):
-    rows = list(users_col.find({"submitted": {"$gt": 0}}, {"ref_count": 1, "daily_count": 1, "bonus_tokens": 1, "paid_amount": 1}))
+    rows = list(users_col.find(
+        {"submitted": {"$gt": 0}},
+        {"ref_count": 1, "daily_count": 1, "bonus_tokens": 1, "manual_bonus_tokens": 1, "paid_amount": 1}
+    ))
 
     total_all_tokens = get_global_total_distributed_tokens()
     paid_tokens = 0
@@ -757,7 +1110,9 @@ def show_token_summary_direct(chat_id):
     for u in rows:
         r_cnt = u.get("ref_count", 0)
         d_cnt = u.get("daily_count", 0)
-        t_tokens = calculate_total_tokens(r_cnt, d_cnt, u.get("bonus_tokens", 0))
+        t_tokens = calculate_total_tokens(
+            r_cnt, d_cnt, u.get("bonus_tokens", 0), u.get("manual_bonus_tokens", 0)
+        )
         paid_amount = min(max(0, u.get("paid_amount", 0)), t_tokens)
         paid_tokens += paid_amount
         unpaid_tokens += max(0, t_tokens - paid_amount)
@@ -795,8 +1150,11 @@ def send_paginated_wallets(message, offset=0, edit=False):
         paid = u.get("paid", 0)
         d_count = u.get("daily_count", 0)
         paid_amt = u.get("paid_amount", 0)
+        manual_bonus = u.get("manual_bonus_tokens", 0)
         
-        total_tokens = calculate_total_tokens(ref_cnt, d_count, u.get("bonus_tokens", 0))
+        total_tokens = calculate_total_tokens(
+            ref_cnt, d_count, u.get("bonus_tokens", 0), u.get("manual_bonus_tokens", 0)
+        )
         remaining_tokens = max(0, total_tokens - paid_amt)
         base_used, extra_count = get_ref_details(ref_cnt)
         status_str = "✅ پرداخت‌شده" if paid == 1 else "⏳ در انتظار پرداخت"
@@ -804,6 +1162,7 @@ def send_paginated_wallets(message, offset=0, edit=False):
         text += f"📌 آیدی عددی: `{uid}`\n" \
                 f"👝 ولت: `{wlt}`\n" \
                 f"👥 دعوت ثابت: {base_used} | مازاد: {extra_count} (کل: {ref_cnt})\n" \
+                f"🎯 پاداش دستی مدیریت: `{manual_bonus:,} PRS`\n" \
                 f"🎁 کل توکن: `{total_tokens:,}` | پرداخت‌شده: `{paid_amt:,}` | باقی‌مانده: `{remaining_tokens:,}` PRS\n" \
                 f"وضعیت: *{status_str}*\n" \
                 f"----------------------------------\n"
@@ -845,7 +1204,7 @@ def send_status_excel_report(chat_id, status_filter):
         bot.send_message(chat_id, f"⚠️ هیچ کاربری در وضعیت «{status_name}» وجود ندارد.", reply_markup=get_admin_reply_markup())
         return
 
-    csv_content = "User ID,Wallet,Referrals,Daily Bonus Count,Global Bonus Tokens,Total Tokens,Paid Amount,Status\n"
+    csv_content = "User ID,Wallet,Referrals,Daily Bonus Count,Global Bonus Tokens,Manual Bonus Tokens,Total Tokens,Paid Amount,Status\n"
     for u in rows:
         uid = u.get("user_id")
         ref_cnt = u.get("ref_count", 0)
@@ -855,9 +1214,12 @@ def send_status_excel_report(chat_id, status_filter):
         paid_amt = u.get("paid_amount", 0)
         
         bonus_tokens = u.get("bonus_tokens", 0)
-        total_tokens = calculate_total_tokens(ref_cnt, d_count, bonus_tokens)
+        manual_bonus_tokens = u.get("manual_bonus_tokens", 0)
+        total_tokens = calculate_total_tokens(
+            ref_cnt, d_count, bonus_tokens, manual_bonus_tokens
+        )
         st_text = "Paid" if paid == 1 else "Pending"
-        csv_content += f"{uid},{wlt},{ref_cnt},{d_count},{bonus_tokens},{total_tokens},{paid_amt},{st_text}\n"
+        csv_content += f"{uid},{wlt},{ref_cnt},{d_count},{bonus_tokens},{manual_bonus_tokens},{total_tokens},{paid_amt},{st_text}\n"
 
     file_bytes = io.BytesIO(csv_content.encode('utf-8-sig'))
     file_bytes.name = file_name
@@ -872,7 +1234,7 @@ def send_detailed_report_file(chat_id):
         bot.send_message(chat_id, f"⚠️ هیچ کاربری در دیتابیس ثبت نشده است.", reply_markup=get_admin_reply_markup())
         return
 
-    csv_content = "User ID,Referred By,Referral Count,Submitted Status,Paid Status,Verified Status,Wallet,Last Daily Timestamp,Daily Bonus Count,Global Bonus Tokens,Total Tokens,Paid Amount,Language\n"
+    csv_content = "User ID,Referred By,Referral Count,Submitted Status,Paid Status,Verified Status,Wallet,Last Daily Timestamp,Daily Bonus Count,Global Bonus Tokens,Manual Bonus Tokens,Total Tokens,Paid Amount,Language\n"
     for u in rows:
         uid = u.get("user_id")
         ref_by = u.get("referred_by", "None")
@@ -887,8 +1249,11 @@ def send_detailed_report_file(chat_id):
         lang = u.get("lang", "fa")
         
         bonus_tokens = u.get("bonus_tokens", 0)
-        total_tokens = calculate_total_tokens(ref_cnt, d_count, bonus_tokens)
-        csv_content += f"{uid},{ref_by},{ref_cnt},{submitted},{paid},{verified},{wlt},{last_daily},{d_count},{bonus_tokens},{total_tokens},{paid_amt},{lang}\n"
+        manual_bonus_tokens = u.get("manual_bonus_tokens", 0)
+        total_tokens = calculate_total_tokens(
+            ref_cnt, d_count, bonus_tokens, manual_bonus_tokens
+        )
+        csv_content += f"{uid},{ref_by},{ref_cnt},{submitted},{paid},{verified},{wlt},{last_daily},{d_count},{bonus_tokens},{manual_bonus_tokens},{total_tokens},{paid_amt},{lang}\n"
 
     file_bytes = io.BytesIO(csv_content.encode('utf-8-sig'))
     file_bytes.name = 'all_users_complete_database_report.csv'
@@ -917,11 +1282,12 @@ def show_main_menu(chat_id, user_id, message_id=None, edit=False):
     ref_count = user_data[0] if user_data else 0
     d_count = user_data[5] if user_data and len(user_data) > 5 else 0
     bonus_tokens = user_data[8] if user_data and len(user_data) > 8 else 0
-    total_earned = calculate_total_tokens(ref_count, d_count, bonus_tokens)
+    manual_bonus_tokens = user_data[9] if user_data and len(user_data) > 9 else 0
+    total_earned = calculate_total_tokens(ref_count, d_count, bonus_tokens, manual_bonus_tokens)
     paid_amt = user_data[7] if user_data and len(user_data) > 7 else 0
     remaining_earned = max(0, total_earned - paid_amt)
     user_rank = get_user_rank(user_id)
-    
+
     # --- محاسبه وضعیت تایمر برای دکمه پاداش روزانه ---
     daily_btn_text = get_msg(user_id, "btn_daily")
     if user_data:
@@ -946,17 +1312,30 @@ def show_main_menu(chat_id, user_id, message_id=None, edit=False):
     markup.row(InlineKeyboardButton(get_msg(user_id, "btn_insta"), url=INSTAGRAM_URL))
     
     markup.row(InlineKeyboardButton(get_msg(user_id, "btn_ref"), callback_data="get_ref_link"))
-    
     # جایگذاری دکمه جدید با قابلیت تایمر
     markup.row(InlineKeyboardButton(daily_btn_text, callback_data="daily_bonus"))
-    
     markup.row(InlineKeyboardButton(get_msg(user_id, "btn_guide"), callback_data="wallet_guide"))
     markup.row(InlineKeyboardButton(get_msg(user_id, "btn_top"), callback_data="leaderboard"))
     markup.row(InlineKeyboardButton(get_msg(user_id, "btn_status"), callback_data="my_status"), InlineKeyboardButton(get_msg(user_id, "btn_submit_w"), callback_data="submit_info"))
     markup.row(InlineKeyboardButton(get_msg(user_id, "btn_lang"), callback_data="toggle_language"))
     markup.row(InlineKeyboardButton(get_msg(user_id, "btn_refresh"), callback_data="refresh_menu"))
 
-    caption_text = get_msg(user_id, "main_caption", base=BASE_REWARD, req=REQUIRED_REFERRALS, daily=DAILY_REWARD, extra=EXTRA_REWARD, uid=user_id, refs=ref_count, rank=user_rank, bonus=bonus_tokens, earned=total_earned, paid=paid_amt, rem=remaining_earned)
+    caption_text = get_msg(
+        user_id,
+        "main_caption",
+        base=BASE_REWARD,
+        req=REQUIRED_REFERRALS,
+        daily=DAILY_REWARD,
+        extra=EXTRA_REWARD,
+        uid=user_id,
+        refs=ref_count,
+        rank=user_rank,
+        bonus=bonus_tokens,
+        manual_bonus=manual_bonus_tokens,
+        earned=total_earned,
+        paid=paid_amt,
+        rem=remaining_earned
+    )
     
     reply_markup_kb = get_main_reply_markup(user_id)
 
@@ -1026,7 +1405,9 @@ def handle_admin_documents(message):
                 if usr:
                     r_cnt = usr.get("ref_count", 0)
                     d_cnt = usr.get("daily_count", 0)
-                    tot = calculate_total_tokens(r_cnt, d_cnt, usr.get("bonus_tokens", 0))
+                    tot = calculate_total_tokens(
+                        r_cnt, d_cnt, usr.get("bonus_tokens", 0), usr.get("manual_bonus_tokens", 0)
+                    )
                     users_col.update_one({"user_id": target_id}, {"$set": {"paid": 1, "paid_amount": tot}})
                     updated_count += 1
                 else:
@@ -1073,8 +1454,10 @@ def handle_all_messages(message):
                     for idx, u in enumerate(all_users):
                         try:
                             bot.send_message(u["user_id"], text)
+                            update_user_delivery_status(u["user_id"], True)
                             success_count += 1
-                        except Exception:
+                        except Exception as e:
+                            update_user_delivery_status(u["user_id"], False, e)
                             fail_count += 1
                         
                         if (idx + 1) % 30 == 0:
@@ -1106,8 +1489,10 @@ def handle_all_messages(message):
                 
                 try:
                     bot.send_message(target_uid, f"📩 **پیام از طرف مدیریت ربات:**\n\n{text}", parse_mode="Markdown")
+                    update_user_delivery_status(target_uid, True)
                     bot.send_message(chat_id, f"✅ پیام شخصی با موفقیت به کاربر `{target_uid}` ارسال شد.", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
                 except Exception as e:
+                    update_user_delivery_status(target_uid, False, e)
                     bot.send_message(chat_id, f"❌ خطا در ارسال پیام به کاربر:\n`{e}`", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
                 return
 
@@ -1138,6 +1523,121 @@ def handle_all_messages(message):
                 settings_col.delete_one({"key": "admin_state"})
                 users_col.update_one({"user_id": target_uid}, {"$set": {"wallet": text, "submitted": 1}})
                 bot.send_message(chat_id, f"✅ ولت کاربر `{target_uid}` با موفقیت به مقدار جدید تغییر یافت:\n`{text}`", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
+                return
+
+            elif state_val == "waiting_manual_bonus_user_id":
+                if text == "❌ انصراف":
+                    settings_col.delete_one({"key": "admin_state"})
+                    bot.send_message(chat_id, "❌ عملیات پاداش دستی لغو شد.", reply_markup=get_admin_reply_markup())
+                    return
+
+                if not text.isdigit():
+                    bot.send_message(chat_id, "⚠️ لطفاً آیدی عددی معتبر کاربر را وارد کنید:")
+                    return
+
+                target_uid = int(text)
+                target_user = users_col.find_one({"user_id": target_uid})
+                if not target_user:
+                    bot.send_message(chat_id, "❌ کاربری با این آیدی در دیتابیس یافت نشد. آیدی دیگری وارد کنید:")
+                    return
+
+                settings_col.update_one(
+                    {"key": "admin_state"},
+                    {"$set": {
+                        "state": "waiting_manual_bonus_amount",
+                        "admin_id": user_id,
+                        "target_uid": target_uid
+                    }},
+                    upsert=True
+                )
+                bot.send_message(
+                    chat_id,
+                    f"👤 *کاربر پیدا شد*\n\n"
+                    f"🆔 آیدی: `{target_uid}`\n"
+                    f"👥 تعداد دعوت: `{target_user.get('ref_count', 0)}`\n"
+                    f"👝 ولت: `{target_user.get('wallet') or 'ثبت نشده'}`\n"
+                    f"🎯 پاداش دستی فعلی: `{target_user.get('manual_bonus_tokens', 0):,} PRS`\n\n"
+                    f"حالا مقدار پاداش دلخواه را فقط به‌صورت عدد صحیح ارسال کنید:",
+                    reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).row("❌ انصراف"),
+                    parse_mode="Markdown"
+                )
+                return
+
+            elif state_val == "waiting_manual_bonus_amount":
+                if text == "❌ انصراف":
+                    settings_col.delete_one({"key": "admin_state"})
+                    bot.send_message(chat_id, "❌ عملیات پاداش دستی لغو شد.", reply_markup=get_admin_reply_markup())
+                    return
+
+                if not text.isdigit() or int(text) <= 0:
+                    bot.send_message(chat_id, "⚠️ مقدار پاداش باید یک عدد صحیح بزرگ‌تر از صفر باشد:")
+                    return
+
+                amount = int(text)
+                target_uid = admin_state.get("target_uid")
+                target_user = users_col.find_one({"user_id": target_uid})
+                if not target_user:
+                    settings_col.delete_one({"key": "admin_state"})
+                    bot.send_message(chat_id, "❌ کاربر موردنظر دیگر در دیتابیس وجود ندارد.", reply_markup=get_admin_reply_markup())
+                    return
+
+                remaining_capacity = max(0, MAX_TOTAL_TOKENS_LIMIT - get_global_total_distributed_tokens())
+                if amount > remaining_capacity:
+                    bot.send_message(
+                        chat_id,
+                        f"❌ مبلغ واردشده از ظرفیت باقی‌مانده ایردراپ بیشتر است.\n\n"
+                        f"📌 ظرفیت باقی‌مانده: `{remaining_capacity:,} PRS`\n\n"
+                        f"مقدار کمتری وارد کنید یا دکمه انصراف را بزنید.",
+                        parse_mode="Markdown"
+                    )
+                    return
+
+                operation_id = uuid4().hex[:12]
+                settings_col.update_one(
+                    {"key": "admin_state"},
+                    {"$set": {
+                        "state": "waiting_manual_bonus_confirmation",
+                        "admin_id": user_id,
+                        "target_uid": target_uid,
+                        "operation_id": operation_id,
+                        "amount": amount
+                    }},
+                    upsert=True
+                )
+
+                confirm_markup = InlineKeyboardMarkup()
+                confirm_markup.row(
+                    InlineKeyboardButton("✅ تأیید پاداش دستی", callback_data=f"admin_manual_bonus_confirm_{operation_id}"),
+                    InlineKeyboardButton("❌ لغو عملیات", callback_data=f"admin_manual_bonus_cancel_{operation_id}")
+                )
+                bot.send_message(
+                    chat_id,
+                    f"⚠️ *تأیید نهایی پاداش دستی*\n\n"
+                    f"👤 آیدی کاربر: `{target_uid}`\n"
+                    f"👝 ولت: `{target_user.get('wallet') or 'ثبت نشده'}`\n"
+                    f"🎁 مبلغ پاداش: `{amount:,} PRS`\n"
+                    f"📌 ظرفیت باقی‌مانده پس از ثبت: `{remaining_capacity - amount:,} PRS`\n\n"
+                    f"پس از تأیید، پاداش در موجودی کاربر ثبت و برای او پیام ارسال می‌شود.",
+                    reply_markup=confirm_markup,
+                    parse_mode="Markdown"
+                )
+                return
+
+            elif state_val == "waiting_manual_bonus_confirmation":
+                bot.send_message(chat_id, "⚠️ لطفاً از دکمه‌های تأیید یا لغو عملیات پاداش دستی استفاده کنید.")
+                return
+
+            elif state_val == "waiting_no_wallet_broadcast":
+                settings_col.delete_one({"key": "admin_state"})
+                if text == "❌ انصراف":
+                    bot.send_message(chat_id, "❌ ارسال پیام به واجدین بی‌ولت لغو شد.", reply_markup=get_admin_reply_markup())
+                    return
+
+                if not text:
+                    bot.send_message(chat_id, "⚠️ متن پیام خالی است؛ عملیات لغو شد.", reply_markup=get_admin_reply_markup())
+                    return
+
+                start_no_wallet_broadcast(chat_id, text)
                 return
 
             elif state_val == "waiting_global_bonus_amount":
@@ -1246,6 +1746,47 @@ def handle_all_messages(message):
                 parse_mode="Markdown"
             )
             return
+        elif text == "🎯 پاداش دستی به کاربر":
+            settings_col.replace_one(
+                {"key": "admin_state"},
+                {"key": "admin_state", "state": "waiting_manual_bonus_user_id", "admin_id": user_id},
+                upsert=True
+            )
+            bot.send_message(
+                chat_id,
+                "🎯 لطفاً آیدی عددی کاربری را که می‌خواهید به او پاداش دستی بدهید ارسال کنید:",
+                reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).row("❌ انصراف")
+            )
+            return
+        elif text == "📊 اکسل پاداش‌های دستی":
+            send_manual_bonus_report(chat_id)
+            return
+        elif text == "🚫 بررسی و خروجی بلاک‌کنندگان":
+            start_blocked_users_scan(chat_id)
+            return
+        elif text == "📣 پیام به واجدین بی‌ولت":
+            recipients_count = len(get_eligible_no_wallet_users())
+            if recipients_count == 0:
+                bot.send_message(
+                    chat_id,
+                    "⚠️ هیچ کاربری با حداقل ۳ دعوت و بدون ولت معتبر یافت نشد.",
+                    reply_markup=get_admin_reply_markup()
+                )
+                return
+            settings_col.replace_one(
+                {"key": "admin_state"},
+                {"key": "admin_state", "state": "waiting_no_wallet_broadcast", "admin_id": user_id},
+                upsert=True
+            )
+            bot.send_message(
+                chat_id,
+                f"📣 پیام بعدی فقط برای کاربران دارای حداقل ۳ دعوت و بدون ولت معتبر ارسال می‌شود.\n\n"
+                f"👥 تعداد فعلی مخاطبان: `{recipients_count:,}` نفر\n\n"
+                f"حالا متن پیام را ارسال کنید:",
+                reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).row("❌ انصراف"),
+                parse_mode="Markdown"
+            )
+            return
         elif text == "👝 مدیریت و تایید ولت‌ها":
             send_paginated_wallets(message, offset=0)
             return
@@ -1302,7 +1843,8 @@ def handle_all_messages(message):
                 paid = r.get("paid", 0)
                 paid_amt = r.get("paid_amount", 0)
                 bonus_tokens = r.get("bonus_tokens", 0)
-                total_tokens = calculate_total_tokens(ref_cnt, d_cnt, bonus_tokens)
+                manual_bonus_tokens = r.get("manual_bonus_tokens", 0)
+                total_tokens = calculate_total_tokens(ref_cnt, d_cnt, bonus_tokens, manual_bonus_tokens)
                 base_used, extra_count = get_ref_details(ref_cnt)
                 
                 paid_status_str = "✅ پرداخت‌شده" if paid == 1 else "⏳ در انتظار پرداخت"
@@ -1310,7 +1852,8 @@ def handle_all_messages(message):
                 res += (
                     f"👤 آیدی عددی: `{uid}`\n"
                     f"👥 کل رفال: {ref_cnt} (ثابت: {base_used} | مازاد: {extra_count})\n"
-                    f"🎁 پاداش همگانی: {bonus_tokens:,} | توکن کل: {total_tokens:,} | پرداخت شده: {paid_amt:,} PRS\n"
+                    f"🎁 پاداش همگانی: {bonus_tokens:,} | پاداش دستی: {manual_bonus_tokens:,} PRS\n"
+                    f"🪙 توکن کل: {total_tokens:,} | پرداخت شده: {paid_amt:,} PRS\n"
                     f"👝 ولت: `{wlt}`\n"
                     f"📌 ثبت فرم: `{submitted}` | وضعیت: *{paid_status_str}*\n"
                     f"---\n"
@@ -1377,13 +1920,18 @@ def handle_all_messages(message):
         ref_count = user_data[0] if user_data else 0
         d_count = user_data[5] if user_data and len(user_data) > 5 else 0
         bonus_tokens = user_data[8] if user_data and len(user_data) > 8 else 0
-        total_earned = calculate_total_tokens(ref_count, d_count, bonus_tokens)
+        manual_bonus_tokens = user_data[9] if user_data and len(user_data) > 9 else 0
+        total_earned = calculate_total_tokens(ref_count, d_count, bonus_tokens, manual_bonus_tokens)
         paid_amt = user_data[7] if user_data and len(user_data) > 7 else 0
         remaining_earned = max(0, total_earned - paid_amt)
         wallet = user_data[6] if user_data and len(user_data) > 6 and user_data[6] else ("ثبت نشده" if get_msg(user_id, "lang")=="fa" else "Not registered")
         user_rank = get_user_rank(user_id)
         
-        status_msg = get_msg(user_id, "status_box", uid=user_id, refs=ref_count, req=REQUIRED_REFERRALS, bonus=bonus_tokens, earned=total_earned, paid=paid_amt, rem=remaining_earned, rank=user_rank, wallet=wallet)
+        status_msg = get_msg(
+            user_id, "status_box", uid=user_id, refs=ref_count, req=REQUIRED_REFERRALS,
+            bonus=bonus_tokens, manual_bonus=manual_bonus_tokens, earned=total_earned,
+            paid=paid_amt, rem=remaining_earned, rank=user_rank, wallet=wallet
+        )
         bot.send_message(chat_id, status_msg, parse_mode="Markdown")
         return
     elif text in [LANG["fa"]["main_kb_ref"], LANG["en"]["main_kb_ref"]]:
@@ -1425,7 +1973,9 @@ def handle_all_messages(message):
             uid = u.get("user_id")
             r_cnt = u.get("ref_count", 0)
             d_cnt = u.get("daily_count", 0)
-            total_t = calculate_total_tokens(r_cnt, d_cnt, u.get("bonus_tokens", 0))
+            total_t = calculate_total_tokens(
+                r_cnt, d_cnt, u.get("bonus_tokens", 0), u.get("manual_bonus_tokens", 0)
+            )
             ranked_list.append((uid, r_cnt, total_t))
         
         ranked_list.sort(key=lambda x: (x[2], x[1]), reverse=True)
@@ -1472,7 +2022,21 @@ def handle_all_messages(message):
     wallet_address = text.strip()
     if re.match(r"^0x[a-fA-F0-9]{40}$", wallet_address):
         user_doc = users_col.find_one({"user_id": user_id})
+        ref_count = user_doc.get("ref_count", 0) if user_doc else 0
         submitted_status = user_doc.get("submitted", 0) if user_doc else 0
+
+        # کنترل نهایی در لحظه ذخیره تا ارسال مستقیم آدرس نتواند شرط دعوت را دور بزند
+        if ref_count < REQUIRED_REFERRALS:
+            bot.send_message(
+                chat_id,
+                get_msg(
+                    user_id,
+                    "submit_errors",
+                    get_msg(user_id, "submit_err_ref", ref_count, REQUIRED_REFERRALS)
+                ),
+                parse_mode="Markdown"
+            )
+            return
 
         if submitted_status >= 2:
             bot.send_message(chat_id, get_msg(user_id, "wallet_limit_err"))
@@ -1500,6 +2064,51 @@ def handle_callbacks(call):
     chat_id = call.message.chat.id
     
     if is_admin(user_id):
+        if call.data.startswith("admin_manual_bonus_confirm_"):
+            operation_id = call.data.replace("admin_manual_bonus_confirm_", "", 1)
+            pending = settings_col.find_one_and_delete({
+                "key": "admin_state",
+                "state": "waiting_manual_bonus_confirmation",
+                "admin_id": user_id,
+                "operation_id": operation_id
+            })
+            if not pending:
+                bot.answer_callback_query(call.id, "⚠️ این عملیات قبلاً انجام یا لغو شده است.", show_alert=True)
+                return
+
+            amount = pending.get("amount", 0)
+            target_uid = pending.get("target_uid")
+            if not isinstance(amount, int) or amount <= 0 or not isinstance(target_uid, int):
+                bot.answer_callback_query(call.id, "❌ اطلاعات پاداش دستی نامعتبر است.", show_alert=True)
+                return
+
+            bot.answer_callback_query(call.id, "✅ ثبت پاداش دستی آغاز شد.", show_alert=True)
+            try:
+                bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
+            except Exception:
+                pass
+            execute_manual_bonus(chat_id, target_uid, operation_id, amount)
+            return
+
+        if call.data.startswith("admin_manual_bonus_cancel_"):
+            operation_id = call.data.replace("admin_manual_bonus_cancel_", "", 1)
+            pending = settings_col.find_one_and_delete({
+                "key": "admin_state",
+                "state": "waiting_manual_bonus_confirmation",
+                "admin_id": user_id,
+                "operation_id": operation_id
+            })
+            if pending:
+                bot.answer_callback_query(call.id, "❌ عملیات پاداش دستی لغو شد.", show_alert=True)
+                try:
+                    bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
+                except Exception:
+                    pass
+                bot.send_message(chat_id, "❌ عملیات پاداش دستی لغو شد.", reply_markup=get_admin_reply_markup())
+            else:
+                bot.answer_callback_query(call.id, "⚠️ این عملیات قبلاً انجام یا لغو شده است.", show_alert=True)
+            return
+
         if call.data.startswith("admin_bonus_confirm_"):
             operation_id = call.data.replace("admin_bonus_confirm_", "", 1)
             pending = settings_col.find_one_and_delete({
@@ -1553,7 +2162,9 @@ def handle_callbacks(call):
             if usr:
                 r_cnt = usr.get("ref_count", 0)
                 d_cnt = usr.get("daily_count", 0)
-                tot_tokens = calculate_total_tokens(r_cnt, d_cnt, usr.get("bonus_tokens", 0))
+                tot_tokens = calculate_total_tokens(
+                    r_cnt, d_cnt, usr.get("bonus_tokens", 0), usr.get("manual_bonus_tokens", 0)
+                )
                 
                 if action == "yes":
                     users_col.update_one({"user_id": target_uid}, {"$set": {"paid": 1, "paid_amount": tot_tokens}})
@@ -1700,7 +2311,9 @@ def handle_callbacks(call):
             uid = u.get("user_id")
             r_cnt = u.get("ref_count", 0)
             d_cnt = u.get("daily_count", 0)
-            total_t = calculate_total_tokens(r_cnt, d_cnt, u.get("bonus_tokens", 0))
+            total_t = calculate_total_tokens(
+                r_cnt, d_cnt, u.get("bonus_tokens", 0), u.get("manual_bonus_tokens", 0)
+            )
             ranked_list.append((uid, r_cnt, total_t))
         
         ranked_list.sort(key=lambda x: (x[2], x[1]), reverse=True)
@@ -1718,13 +2331,18 @@ def handle_callbacks(call):
         ref_count = user_data[0] if user_data else 0
         d_count = user_data[5] if user_data and len(user_data) > 5 else 0
         bonus_tokens = user_data[8] if user_data and len(user_data) > 8 else 0
-        total_earned = calculate_total_tokens(ref_count, d_count, bonus_tokens)
+        manual_bonus_tokens = user_data[9] if user_data and len(user_data) > 9 else 0
+        total_earned = calculate_total_tokens(ref_count, d_count, bonus_tokens, manual_bonus_tokens)
         paid_amt = user_data[7] if user_data and len(user_data) > 7 else 0
         remaining_earned = max(0, total_earned - paid_amt)
         wallet = user_data[6] if user_data and len(user_data) > 6 and user_data[6] else ("ثبت نشده" if get_msg(user_id, "lang")=="fa" else "Not registered")
         user_rank = get_user_rank(user_id)
         
-        status_msg = get_msg(user_id, "status_box", uid=user_id, refs=ref_count, req=REQUIRED_REFERRALS, bonus=bonus_tokens, earned=total_earned, paid=paid_amt, rem=remaining_earned, rank=user_rank, wallet=wallet)
+        status_msg = get_msg(
+            user_id, "status_box", uid=user_id, refs=ref_count, req=REQUIRED_REFERRALS,
+            bonus=bonus_tokens, manual_bonus=manual_bonus_tokens, earned=total_earned,
+            paid=paid_amt, rem=remaining_earned, rank=user_rank, wallet=wallet
+        )
         bot.answer_callback_query(call.id)
         bot.send_message(chat_id, status_msg, parse_mode="Markdown")
     elif call.data == "submit_info":
