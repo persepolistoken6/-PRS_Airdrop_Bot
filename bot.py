@@ -67,6 +67,7 @@ LANG = {
         "main_kb_channel": "📢 کانال تلگرام",
         "main_kb_twitter": "🐦 توییتر (ایکس)",
         "main_kb_instagram": "📸 اینستاگرام",
+        "main_kb_social": "🎟 ثبت آیدی شبکه‌های اجتماعی",
         "btn_channel": "📢 کانال تلگرام",
         "btn_twitter": "🐦 توییتر (ایکس)",
         "btn_insta": "📸 اینستاگرام پرسپولیس",
@@ -76,6 +77,7 @@ LANG = {
         "btn_top": "🏆 برترین شرکت‌کنندگان (تاپ ۱۰)",
         "btn_status": "📊 وضعیت من و رتبه",
         "btn_submit_w": "📝 ارسال / ویرایش ولت",
+        "btn_social": "🎟 ثبت آیدی برای قرعه‌کشی",
         "btn_refresh": "🔄 به‌روزرسانی پنل کاربری",
         "btn_lang": "🌐 تغییر زبان / Change Language",
         "lang_changed": "✅ زبان ربات با موفقیت به فارسی تغییر یافت.",
@@ -138,6 +140,30 @@ LANG = {
         "wallet_saved": "✅ آدرس ولت توکن PRS شما با موفقیت ثبت شد.",
         "wallet_updated": "✅ آدرس ولت شما با موفقیت **ویرایش و به‌روزرسانی شد**.",
         "wallet_limit_err": "⚠️ شما سهمیه ویرایش خود را به اتمام رسانده‌اید.",
+        "social_start": (
+            "🎟 *ثبت آیدی شبکه‌های اجتماعی برای قرعه‌کشی*\n\n"
+            "🐦 آیدی فعلی Twitter/X: `{twitter}`\n"
+            "📸 آیدی فعلی Instagram: `{instagram}`\n\n"
+            "ابتدا آیدی Twitter/X خود را ارسال کنید. می‌توانید `@username` یا لینک پروفایل را بفرستید.\n\n"
+            "تا زمانی که هر دو آیدی را کامل نکنید، اطلاعات قبلی شما تغییر نمی‌کند."
+        ),
+        "social_instagram_prompt": (
+            "✅ آیدی Twitter/X دریافت شد: `{twitter}`\n\n"
+            "حالا آیدی Instagram خود را به‌صورت `@username` یا لینک پروفایل ارسال کنید:"
+        ),
+        "social_invalid_twitter": "❌ آیدی Twitter/X معتبر نیست. لطفاً فقط `@username` یا لینک صحیح پروفایل را ارسال کنید:",
+        "social_invalid_instagram": "❌ آیدی Instagram معتبر نیست. لطفاً فقط `@username` یا لینک صحیح پروفایل را ارسال کنید:",
+        "social_duplicate_twitter": "⚠️ این آیدی Twitter/X قبلاً توسط کاربر دیگری ثبت شده است. آیدی دیگری ارسال کنید:",
+        "social_duplicate_instagram": "⚠️ این آیدی Instagram قبلاً توسط کاربر دیگری ثبت شده است. آیدی دیگری ارسال کنید:",
+        "social_saved": (
+            "✅ *آیدی‌های شما با موفقیت برای قرعه‌کشی ثبت شد.*\n\n"
+            "🐦 Twitter/X: `{twitter}`\n"
+            "📸 Instagram: `{instagram}`\n\n"
+            "برای ویرایش، دوباره گزینه ثبت آیدی شبکه‌های اجتماعی را انتخاب کنید."
+        ),
+        "social_cancelled": "❌ ثبت آیدی شبکه‌های اجتماعی لغو شد و اطلاعات قبلی شما تغییر نکرد.",
+        "social_cancel_btn": "❌ انصراف",
+        "social_not_registered": "ثبت نشده",
         "status_box": (
             "📊 *اطلاعات حساب و وضعیت شما:*\n\n"
             "🆔 آیدی عددی شما: `{uid}`\n"
@@ -148,7 +174,9 @@ LANG = {
             "💳 توکن پرداخت شده: `{paid:,} PRS`\n"
             "💰 موجودی باقی‌مانده: `{rem:,} PRS`\n"
             "🏅 رتبه شما در ایردراپ: `{rank}`\n"
-            "👝 آدرس ولت فعلی: `{wallet}`"
+            "👝 آدرس ولت فعلی: `{wallet}`\n"
+            "🐦 آیدی Twitter/X: `{twitter}`\n"
+            "📸 آیدی Instagram: `{instagram}`"
         )
     },
     "en": {
@@ -170,6 +198,7 @@ LANG = {
         "main_kb_channel": "📢 Telegram Channel",
         "main_kb_twitter": "🐦 Twitter (X)",
         "main_kb_instagram": "📸 Instagram",
+        "main_kb_social": "🎟 Register Social IDs",
         "btn_channel": "📢 Telegram Channel",
         "btn_twitter": "🐦 Twitter (X)",
         "btn_insta": "📸 Persepolis Instagram",
@@ -179,6 +208,7 @@ LANG = {
         "btn_top": "🏆 Top Participants (Top 10)",
         "btn_status": "📊 My Status & Rank",
         "btn_submit_w": "📝 Submit / Edit Wallet",
+        "btn_social": "🎟 Register IDs for Lottery",
         "btn_refresh": "🔄 Refresh User Panel",
         "btn_lang": "🌐 تغییر زبان / Change Language",
         "lang_changed": "✅ Bot language successfully changed to English.",
@@ -241,6 +271,30 @@ LANG = {
         "wallet_saved": "✅ Your PRS wallet address has been successfully registered.",
         "wallet_updated": "✅ Your wallet address has been successfully **edited and updated**.",
         "wallet_limit_err": "⚠️ You have exhausted your edit quota.",
+        "social_start": (
+            "🎟 *Register Social Media IDs for the Lottery*\n\n"
+            "🐦 Current Twitter/X ID: `{twitter}`\n"
+            "📸 Current Instagram ID: `{instagram}`\n\n"
+            "First, send your Twitter/X ID. You can send `@username` or your profile link.\n\n"
+            "Your previous information will not change until both IDs are completed."
+        ),
+        "social_instagram_prompt": (
+            "✅ Twitter/X ID received: `{twitter}`\n\n"
+            "Now send your Instagram ID as `@username` or a profile link:"
+        ),
+        "social_invalid_twitter": "❌ Invalid Twitter/X ID. Please send only `@username` or a valid profile link:",
+        "social_invalid_instagram": "❌ Invalid Instagram ID. Please send only `@username` or a valid profile link:",
+        "social_duplicate_twitter": "⚠️ This Twitter/X ID is already registered by another user. Please send another ID:",
+        "social_duplicate_instagram": "⚠️ This Instagram ID is already registered by another user. Please send another ID:",
+        "social_saved": (
+            "✅ *Your social media IDs were successfully registered for the lottery.*\n\n"
+            "🐦 Twitter/X: `{twitter}`\n"
+            "📸 Instagram: `{instagram}`\n\n"
+            "To edit them, select the social ID registration option again."
+        ),
+        "social_cancelled": "❌ Social media ID registration was cancelled. Your previous information was not changed.",
+        "social_cancel_btn": "❌ Cancel",
+        "social_not_registered": "Not registered",
         "status_box": (
             "📊 *Your Account Information & Status:*\n\n"
             "🆔 Your User ID: `{uid}`\n"
@@ -251,7 +305,9 @@ LANG = {
             "💳 Paid Tokens: `{paid:,} PRS`\n"
             "💰 Remaining Balance: `{rem:,} PRS`\n"
             "🏅 Your Rank: `{rank}`\n"
-            "👝 Current Wallet Address: `{wallet}`"
+            "👝 Current Wallet Address: `{wallet}`\n"
+            "🐦 Twitter/X ID: `{twitter}`\n"
+            "📸 Instagram ID: `{instagram}`"
         )
     }
 }
@@ -283,6 +339,7 @@ def get_main_reply_markup(user_id):
     markup.row(get_msg(lang, "main_kb_status"), get_msg(lang, "main_kb_ref"))
     markup.row(get_msg(lang, "main_kb_daily"), get_msg(lang, "main_kb_wallet"))
     markup.row(get_msg(lang, "main_kb_guide"), get_msg(lang, "main_kb_leaderboard"))
+    markup.row(get_msg(lang, "main_kb_social"))
     markup.row(get_msg(lang, "main_kb_refresh"), get_msg(lang, "main_kb_channel"))
     markup.row(get_msg(lang, "main_kb_twitter"), get_msg(lang, "main_kb_instagram"))
     return markup
@@ -310,7 +367,9 @@ def get_user_data(user_id):
         user.get("wallet", None),
         user.get("paid_amount", 0),
         user.get("bonus_tokens", 0),
-        user.get("manual_bonus_tokens", 0)
+        user.get("manual_bonus_tokens", 0),
+        user.get("twitter_id", None),
+        user.get("instagram_id", None)
     )
 
 def calculate_tokens(ref_count):
@@ -785,6 +844,7 @@ def get_admin_reply_markup():
     markup.row("🎁 پاداش همگانی واجدین شرایط")
     markup.row("🎯 پاداش دستی به کاربر", "📊 اکسل پاداش‌های دستی")
     markup.row("🚫 بررسی و خروجی بلاک‌کنندگان", "📣 پیام به واجدین بی‌ولت")
+    markup.row("🎟 گزارش آیدی‌های قرعه‌کشی")
     markup.row("🔄 به‌روزرسانی پنل ادمین", "📢 ارسال همگانی پیام")
     markup.row("✉️ ارسال پیام شخصی به کاربر", "🔴 خاموش کردن ربات")
     markup.row("🟢 روشن کردن ربات", "🔙 خروج از حالت ادمین / منوی اصلی")
@@ -874,6 +934,191 @@ def save_submission(user_id, wallet, current_submitted_status):
         {"user_id": user_id},
         {"$set": {"submitted": new_status, "wallet": wallet}}
     )
+
+def normalize_social_handle(value, platform):
+    value = (value or "").strip()
+    if not value or len(value) > 200:
+        return None
+
+    if platform == "twitter":
+        url_match = re.fullmatch(
+            r"(?:https?://)?(?:www\.)?(?:x\.com|twitter\.com)/([A-Za-z0-9_]{1,15})(?:[/?#].*)?",
+            value,
+            flags=re.IGNORECASE
+        )
+        username = url_match.group(1) if url_match else value.lstrip("@")
+        if not re.fullmatch(r"[A-Za-z0-9_]{1,15}", username):
+            return None
+    elif platform == "instagram":
+        url_match = re.fullmatch(
+            r"(?:https?://)?(?:www\.)?instagram\.com/([A-Za-z0-9._]{1,30})(?:[/?#].*)?",
+            value,
+            flags=re.IGNORECASE
+        )
+        username = url_match.group(1) if url_match else value.lstrip("@")
+        if (
+            not re.fullmatch(r"[A-Za-z0-9._]{1,30}", username)
+            or username.startswith(".")
+            or username.endswith(".")
+            or ".." in username
+        ):
+            return None
+    else:
+        return None
+
+    return f"@{username}", username.lower()
+
+def get_social_cancel_markup(user_id):
+    markup = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    markup.row(get_msg(user_id, "social_cancel_btn"))
+    return markup
+
+def start_social_registration(chat_id, user_id):
+    user = users_col.find_one({"user_id": user_id}) or {}
+    not_registered = get_msg(user_id, "social_not_registered")
+    current_twitter = user.get("twitter_id") or not_registered
+    current_instagram = user.get("instagram_id") or not_registered
+
+    users_col.update_one(
+        {"user_id": user_id},
+        {
+            "$set": {"social_input_state": "waiting_twitter"},
+            "$unset": {
+                "pending_twitter_id": "",
+                "pending_twitter_id_normalized": ""
+            }
+        }
+    )
+    bot.send_message(
+        chat_id,
+        get_msg(
+            user_id,
+            "social_start",
+            twitter=current_twitter,
+            instagram=current_instagram
+        ),
+        reply_markup=get_social_cancel_markup(user_id),
+        parse_mode="Markdown"
+    )
+
+def handle_social_registration_input(message, text):
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    user = users_col.find_one({"user_id": user_id})
+    if not user:
+        return False
+
+    state = user.get("social_input_state")
+    if state not in ["waiting_twitter", "waiting_instagram"]:
+        return False
+
+    cancel_texts = {
+        LANG["fa"]["social_cancel_btn"],
+        LANG["en"]["social_cancel_btn"]
+    }
+    if text in cancel_texts:
+        users_col.update_one(
+            {"user_id": user_id},
+            {"$unset": {
+                "social_input_state": "",
+                "pending_twitter_id": "",
+                "pending_twitter_id_normalized": ""
+            }}
+        )
+        bot.send_message(
+            chat_id,
+            get_msg(user_id, "social_cancelled"),
+            reply_markup=get_main_reply_markup(user_id)
+        )
+        return True
+
+    if state == "waiting_twitter":
+        normalized_result = normalize_social_handle(text, "twitter")
+        if not normalized_result:
+            bot.send_message(chat_id, get_msg(user_id, "social_invalid_twitter"))
+            return True
+
+        display_id, normalized_id = normalized_result
+        duplicate = users_col.find_one({
+            "twitter_id_normalized": normalized_id,
+            "user_id": {"$ne": user_id}
+        }, {"user_id": 1})
+        if duplicate:
+            bot.send_message(chat_id, get_msg(user_id, "social_duplicate_twitter"))
+            return True
+
+        users_col.update_one(
+            {"user_id": user_id},
+            {"$set": {
+                "social_input_state": "waiting_instagram",
+                "pending_twitter_id": display_id,
+                "pending_twitter_id_normalized": normalized_id
+            }}
+        )
+        bot.send_message(
+            chat_id,
+            get_msg(user_id, "social_instagram_prompt", twitter=display_id),
+            reply_markup=get_social_cancel_markup(user_id),
+            parse_mode="Markdown"
+        )
+        return True
+
+    normalized_result = normalize_social_handle(text, "instagram")
+    if not normalized_result:
+        bot.send_message(chat_id, get_msg(user_id, "social_invalid_instagram"))
+        return True
+
+    display_id, normalized_id = normalized_result
+    duplicate = users_col.find_one({
+        "instagram_id_normalized": normalized_id,
+        "user_id": {"$ne": user_id}
+    }, {"user_id": 1})
+    if duplicate:
+        bot.send_message(chat_id, get_msg(user_id, "social_duplicate_instagram"))
+        return True
+
+    pending_twitter = user.get("pending_twitter_id")
+    pending_twitter_normalized = user.get("pending_twitter_id_normalized")
+    if not pending_twitter or not pending_twitter_normalized:
+        start_social_registration(chat_id, user_id)
+        return True
+
+    event_time = int(time.time())
+    update_fields = {
+        "twitter_id": pending_twitter,
+        "twitter_id_normalized": pending_twitter_normalized,
+        "instagram_id": display_id,
+        "instagram_id_normalized": normalized_id,
+        "social_registered": True,
+        "social_updated_at": event_time,
+        "telegram_username": f"@{message.from_user.username}" if message.from_user.username else ""
+    }
+    if not user.get("social_registered_at"):
+        update_fields["social_registered_at"] = event_time
+
+    users_col.update_one(
+        {"user_id": user_id},
+        {
+            "$set": update_fields,
+            "$unset": {
+                "social_input_state": "",
+                "pending_twitter_id": "",
+                "pending_twitter_id_normalized": ""
+            }
+        }
+    )
+    bot.send_message(
+        chat_id,
+        get_msg(
+            user_id,
+            "social_saved",
+            twitter=pending_twitter,
+            instagram=display_id
+        ),
+        reply_markup=get_main_reply_markup(user_id),
+        parse_mode="Markdown"
+    )
+    return True
 
 def get_ref_details(ref_count):
     if ref_count >= REQUIRED_REFERRALS:
@@ -1227,6 +1472,88 @@ def send_status_excel_report(chat_id, status_filter):
     caption_text = f"📁 فایل گزارش کاربران **{status_name}** (فرمت سازگار با اکسل/CSV)"
     bot.send_document(chat_id, file_bytes, caption=caption_text, reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
 
+def send_social_lottery_report(chat_id):
+    rows = list(users_col.find({
+        "social_registered": True,
+        "twitter_id": {"$regex": r"^@"},
+        "instagram_id": {"$regex": r"^@"}
+    }).sort("social_updated_at", -1))
+
+    if not rows:
+        bot.send_message(
+            chat_id,
+            "⚠️ هنوز هیچ کاربری هر دو آیدی Twitter/X و Instagram را ثبت نکرده است.",
+            reply_markup=get_admin_reply_markup()
+        )
+        return
+
+    output = io.StringIO(newline="")
+    writer = csv.writer(output)
+    writer.writerow([
+        "Lottery Number",
+        "User ID",
+        "Telegram Username",
+        "Twitter/X ID",
+        "Instagram ID",
+        "Referrals",
+        "Wallet",
+        "Wallet Registered",
+        "Verified",
+        "Social Registered At UTC",
+        "Social Updated At UTC"
+    ])
+
+    complete_airdrop_count = 0
+    for lottery_number, user in enumerate(rows, 1):
+        wallet = user.get("wallet") or ""
+        wallet_valid = bool(re.fullmatch(r"0x[a-fA-F0-9]{40}", wallet))
+        if user.get("ref_count", 0) >= REQUIRED_REFERRALS and wallet_valid:
+            complete_airdrop_count += 1
+
+        registered_at = int(user.get("social_registered_at", 0) or 0)
+        updated_at = int(user.get("social_updated_at", 0) or 0)
+        writer.writerow([
+            lottery_number,
+            user.get("user_id"),
+            user.get("telegram_username", ""),
+            user.get("twitter_id", ""),
+            user.get("instagram_id", ""),
+            user.get("ref_count", 0),
+            wallet,
+            "Yes" if wallet_valid else "No",
+            user.get("verified", 0),
+            datetime.utcfromtimestamp(registered_at).strftime("%Y-%m-%d %H:%M:%S") if registered_at else "",
+            datetime.utcfromtimestamp(updated_at).strftime("%Y-%m-%d %H:%M:%S") if updated_at else ""
+        ])
+
+    preview_lines = []
+    for index, user in enumerate(rows[:10], 1):
+        preview_lines.append(
+            f"{index}. `{user.get('user_id')}` | `{user.get('twitter_id')}` | `{user.get('instagram_id')}`"
+        )
+    preview_text = "\n".join(preview_lines)
+    if len(rows) > 10:
+        preview_text += f"\n... و {len(rows) - 10:,} کاربر دیگر در فایل"
+
+    bot.send_message(
+        chat_id,
+        f"🎟 *گزارش شرکت‌کنندگان قرعه‌کشی شبکه‌های اجتماعی*\n\n"
+        f"👥 دارای هر دو آیدی: `{len(rows):,}` نفر\n"
+        f"✅ دارای ۳ دعوت و ولت معتبر: `{complete_airdrop_count:,}` نفر\n\n"
+        f"{preview_text}",
+        reply_markup=get_admin_reply_markup(),
+        parse_mode="Markdown"
+    )
+
+    file_bytes = io.BytesIO(output.getvalue().encode("utf-8-sig"))
+    file_bytes.name = "social_lottery_participants.csv"
+    bot.send_document(
+        chat_id,
+        file_bytes,
+        caption="📁 فایل کامل کاربران دارای هر دو آیدی Twitter/X و Instagram برای قرعه‌کشی",
+        reply_markup=get_admin_reply_markup()
+    )
+
 def send_detailed_report_file(chat_id):
     rows = list(users_col.find({}).sort([("paid", 1), ("ref_count", -1)]))
 
@@ -1234,7 +1561,7 @@ def send_detailed_report_file(chat_id):
         bot.send_message(chat_id, f"⚠️ هیچ کاربری در دیتابیس ثبت نشده است.", reply_markup=get_admin_reply_markup())
         return
 
-    csv_content = "User ID,Referred By,Referral Count,Submitted Status,Paid Status,Verified Status,Wallet,Last Daily Timestamp,Daily Bonus Count,Global Bonus Tokens,Manual Bonus Tokens,Total Tokens,Paid Amount,Language\n"
+    csv_content = "User ID,Referred By,Referral Count,Submitted Status,Paid Status,Verified Status,Wallet,Twitter X ID,Instagram ID,Social Registered At,Social Updated At,Last Daily Timestamp,Daily Bonus Count,Global Bonus Tokens,Manual Bonus Tokens,Total Tokens,Paid Amount,Language\n"
     for u in rows:
         uid = u.get("user_id")
         ref_by = u.get("referred_by", "None")
@@ -1243,6 +1570,10 @@ def send_detailed_report_file(chat_id):
         paid = u.get("paid", 0)
         verified = u.get("verified", 0)
         wlt = str(u.get("wallet", "None")).replace(',', '_')
+        twitter_id = u.get("twitter_id", "")
+        instagram_id = u.get("instagram_id", "")
+        social_registered_at = u.get("social_registered_at", 0)
+        social_updated_at = u.get("social_updated_at", 0)
         last_daily = u.get("last_daily", 0)
         d_count = u.get("daily_count", 0)
         paid_amt = u.get("paid_amount", 0)
@@ -1253,7 +1584,7 @@ def send_detailed_report_file(chat_id):
         total_tokens = calculate_total_tokens(
             ref_cnt, d_count, bonus_tokens, manual_bonus_tokens
         )
-        csv_content += f"{uid},{ref_by},{ref_cnt},{submitted},{paid},{verified},{wlt},{last_daily},{d_count},{bonus_tokens},{manual_bonus_tokens},{total_tokens},{paid_amt},{lang}\n"
+        csv_content += f"{uid},{ref_by},{ref_cnt},{submitted},{paid},{verified},{wlt},{twitter_id},{instagram_id},{social_registered_at},{social_updated_at},{last_daily},{d_count},{bonus_tokens},{manual_bonus_tokens},{total_tokens},{paid_amt},{lang}\n"
 
     file_bytes = io.BytesIO(csv_content.encode('utf-8-sig'))
     file_bytes.name = 'all_users_complete_database_report.csv'
@@ -1317,6 +1648,7 @@ def show_main_menu(chat_id, user_id, message_id=None, edit=False):
     markup.row(InlineKeyboardButton(get_msg(user_id, "btn_guide"), callback_data="wallet_guide"))
     markup.row(InlineKeyboardButton(get_msg(user_id, "btn_top"), callback_data="leaderboard"))
     markup.row(InlineKeyboardButton(get_msg(user_id, "btn_status"), callback_data="my_status"), InlineKeyboardButton(get_msg(user_id, "btn_submit_w"), callback_data="submit_info"))
+    markup.row(InlineKeyboardButton(get_msg(user_id, "btn_social"), callback_data="social_accounts"))
     markup.row(InlineKeyboardButton(get_msg(user_id, "btn_lang"), callback_data="toggle_language"))
     markup.row(InlineKeyboardButton(get_msg(user_id, "btn_refresh"), callback_data="refresh_menu"))
 
@@ -1764,6 +2096,9 @@ def handle_all_messages(message):
         elif text == "🚫 بررسی و خروجی بلاک‌کنندگان":
             start_blocked_users_scan(chat_id)
             return
+        elif text == "🎟 گزارش آیدی‌های قرعه‌کشی":
+            send_social_lottery_report(chat_id)
+            return
         elif text == "📣 پیام به واجدین بی‌ولت":
             recipients_count = len(get_eligible_no_wallet_users())
             if recipients_count == 0:
@@ -1844,6 +2179,8 @@ def handle_all_messages(message):
                 paid_amt = r.get("paid_amount", 0)
                 bonus_tokens = r.get("bonus_tokens", 0)
                 manual_bonus_tokens = r.get("manual_bonus_tokens", 0)
+                twitter_id = r.get("twitter_id") or "ثبت نشده"
+                instagram_id = r.get("instagram_id") or "ثبت نشده"
                 total_tokens = calculate_total_tokens(ref_cnt, d_cnt, bonus_tokens, manual_bonus_tokens)
                 base_used, extra_count = get_ref_details(ref_cnt)
                 
@@ -1855,6 +2192,8 @@ def handle_all_messages(message):
                     f"🎁 پاداش همگانی: {bonus_tokens:,} | پاداش دستی: {manual_bonus_tokens:,} PRS\n"
                     f"🪙 توکن کل: {total_tokens:,} | پرداخت شده: {paid_amt:,} PRS\n"
                     f"👝 ولت: `{wlt}`\n"
+                    f"🐦 Twitter/X: `{twitter_id}`\n"
+                    f"📸 Instagram: `{instagram_id}`\n"
                     f"📌 ثبت فرم: `{submitted}` | وضعیت: *{paid_status_str}*\n"
                     f"---\n"
                 )
@@ -1915,6 +2254,9 @@ def handle_all_messages(message):
         ask_to_join(chat_id, 0, user_id)
         return
 
+    if handle_social_registration_input(message, text):
+        return
+
     if text in [LANG["fa"]["main_kb_status"], LANG["en"]["main_kb_status"]]:
         user_data = get_user_data(user_id)
         ref_count = user_data[0] if user_data else 0
@@ -1925,12 +2267,16 @@ def handle_all_messages(message):
         paid_amt = user_data[7] if user_data and len(user_data) > 7 else 0
         remaining_earned = max(0, total_earned - paid_amt)
         wallet = user_data[6] if user_data and len(user_data) > 6 and user_data[6] else ("ثبت نشده" if get_msg(user_id, "lang")=="fa" else "Not registered")
+        social_not_registered = get_msg(user_id, "social_not_registered")
+        twitter_id = user_data[10] if user_data and len(user_data) > 10 and user_data[10] else social_not_registered
+        instagram_id = user_data[11] if user_data and len(user_data) > 11 and user_data[11] else social_not_registered
         user_rank = get_user_rank(user_id)
         
         status_msg = get_msg(
             user_id, "status_box", uid=user_id, refs=ref_count, req=REQUIRED_REFERRALS,
             bonus=bonus_tokens, manual_bonus=manual_bonus_tokens, earned=total_earned,
-            paid=paid_amt, rem=remaining_earned, rank=user_rank, wallet=wallet
+            paid=paid_amt, rem=remaining_earned, rank=user_rank, wallet=wallet,
+            twitter=twitter_id, instagram=instagram_id
         )
         bot.send_message(chat_id, status_msg, parse_mode="Markdown")
         return
@@ -1985,6 +2331,9 @@ def handle_all_messages(message):
         for idx, (uid, r_cnt, total_t) in enumerate(top_10, 1):
             text_lb += get_msg(user_id, "top_row", idx, uid=uid, total=total_t, refs=r_cnt)
         bot.send_message(chat_id, text_lb, parse_mode="Markdown", reply_markup=get_main_reply_markup(user_id))
+        return
+    elif text in [LANG["fa"]["main_kb_social"], LANG["en"]["main_kb_social"]]:
+        start_social_registration(chat_id, user_id)
         return
     elif text in [LANG["fa"]["main_kb_refresh"], LANG["en"]["main_kb_refresh"]]:
         show_main_menu(chat_id, user_id)
@@ -2323,6 +2672,12 @@ def handle_callbacks(call):
         for idx, (uid, r_cnt, total_t) in enumerate(top_10, 1):
             text_lb += get_msg(user_id, "top_row", idx, uid=uid, total=total_t, refs=r_cnt)
         bot.send_message(chat_id, text_lb, parse_mode="Markdown")
+    elif call.data == "social_accounts":
+        if not check_membership(user_id):
+            bot.answer_callback_query(call.id, "❌ ابتدا در کانال عضو شوید!", show_alert=True)
+            return
+        bot.answer_callback_query(call.id)
+        start_social_registration(chat_id, user_id)
     elif call.data == "my_status":
         if not check_membership(user_id):
             bot.answer_callback_query(call.id, "❌ ابتدا در کانال عضو شوید!", show_alert=True)
@@ -2336,12 +2691,16 @@ def handle_callbacks(call):
         paid_amt = user_data[7] if user_data and len(user_data) > 7 else 0
         remaining_earned = max(0, total_earned - paid_amt)
         wallet = user_data[6] if user_data and len(user_data) > 6 and user_data[6] else ("ثبت نشده" if get_msg(user_id, "lang")=="fa" else "Not registered")
+        social_not_registered = get_msg(user_id, "social_not_registered")
+        twitter_id = user_data[10] if user_data and len(user_data) > 10 and user_data[10] else social_not_registered
+        instagram_id = user_data[11] if user_data and len(user_data) > 11 and user_data[11] else social_not_registered
         user_rank = get_user_rank(user_id)
         
         status_msg = get_msg(
             user_id, "status_box", uid=user_id, refs=ref_count, req=REQUIRED_REFERRALS,
             bonus=bonus_tokens, manual_bonus=manual_bonus_tokens, earned=total_earned,
-            paid=paid_amt, rem=remaining_earned, rank=user_rank, wallet=wallet
+            paid=paid_amt, rem=remaining_earned, rank=user_rank, wallet=wallet,
+            twitter=twitter_id, instagram=instagram_id
         )
         bot.answer_callback_query(call.id)
         bot.send_message(chat_id, status_msg, parse_mode="Markdown")
