@@ -29,6 +29,8 @@ settings_col = db.bot_settings
 
 BOT_USERNAME = "PRS_Airdrop_Bot"
 CHANNEL_ID = "@persepolisToken6"
+SECOND_CHANNEL_ID = "@lombo_pubg_yt"
+REQUIRED_CHANNEL_IDS = (CHANNEL_ID, SECOND_CHANNEL_ID)
 TWITTER_URL = "https://x.com/PersepolisPRS"
 INSTAGRAM_URL = "https://www.instagram.com/persepolistoken6?igsh=eHBwbzdtd2ZoaWI5"
 
@@ -52,8 +54,9 @@ LANG = {
         "global_off": "🛑 ربات در حال حاضر توسط مدیریت موقتاً خاموش شده است. لطفاً بعداً مراجعه کنید.",
         "airdrop_finished": "🛑 کل توکن های ایردارپ ( ۳۰۰ میلیون PRS) توسط شرکت کننده های این ایردراپ استخراج شد و این ربات غیر فعال شد به زودی تمام توکن ها بین کاربران توزیع خواهد شد.",
         "self_ref": "⚠️ **شما نمی‌توانید روی لینک دعوت خودتان کلیک کنید!**\n\nلطفاً این لینک را برای دوستان خود ارسال کنید تا از طریق آن وارد ربات شوند.",
-        "join_req": "⚠️ **لطفاً برای ادامه کار ابتدا در کانال ما عضو شوید:**\n\n▫️ {}\n\nپس از عضویت، روی دکمه‌ی «عضو شدم، تایید کن» بزنید.",
+        "join_req": "⚠️ **لطفاً برای ادامه کار ابتدا در هر دو کانال زیر عضو شوید:**\n\n▫️ {}\n▫️ {}\n\nپس از عضویت در هر دو کانال، روی دکمه‌ی «عضو شدم، تایید کن» بزنید.",
         "join_btn": "📢 عضویت در کانال رسمی",
+        "join_second_btn": "📢 عضویت در کانال دوم",
         "joined_btn": "✅ عضو شدم، تایید کن",
         "captcha_title": "🛡 *تایید هویت امنیتی (ضد ربات و فیک)* \n\nلطفاً حاصل جمع زیر را به عنوان پاسخ ارسال کنید:\n❓ {} + {} = ؟\n\n*(عدد پاسخ را در چت ارسال کنید)*",
         "captcha_wrong": "❌ پاسخ اشتباه است!\n\n🛡 یک سوال امنیتی جدید برای شما ارسال شد:\n❓ لطفاً حاصل جمع {} + {} را بفرستید:",
@@ -183,8 +186,9 @@ LANG = {
         "global_off": "🛑 The bot is currently turned off by management. Please try again later.",
         "airdrop_finished": "🛑 All airdrop tokens (300M PRS) have been claimed and this bot is now inactive. Tokens will be distributed soon.",
         "self_ref": "⚠️ **You cannot click on your own referral link!**\n\nPlease send this link to your friends so they can join via it.",
-        "join_req": "⚠️ **Please join our official channel first to continue:**\n\n▫️ {}\n\nAfter joining, click the 'I have joined, verify' button.",
+        "join_req": "⚠️ **Please join both required channels first to continue:**\n\n▫️ {}\n▫️ {}\n\nAfter joining both channels, click the 'I have joined, verify' button.",
         "join_btn": "📢 Join Official Channel",
+        "join_second_btn": "📢 Join Second Channel",
         "joined_btn": "✅ I joined, verify",
         "captcha_title": "🛡 *Security Verification (Anti-bot)* \n\nPlease send the sum of the following numbers as your answer:\n❓ {} + {} = ?\n\n*(Send the answer number in chat)*",
         "captcha_wrong": "❌ Wrong answer!\n\n🛡 A new security question has been sent:\n❓ Please send the sum of {} + {}:",
@@ -825,13 +829,15 @@ def start_no_wallet_broadcast(chat_id, text):
     threading.Thread(target=run_broadcast, daemon=True).start()
 
 def check_membership(user_id):
-    try:
-        member = bot.get_chat_member(CHANNEL_ID, user_id)
-        if member.status in ['member', 'administrator', 'creator']:
-            return True
-    except Exception as e:
-        print(f"Error checking membership: {e}")
-    return False
+    for channel_id in REQUIRED_CHANNEL_IDS:
+        try:
+            member = bot.get_chat_member(channel_id, user_id)
+            if member.status not in ['member', 'administrator', 'creator']:
+                return False
+        except Exception as e:
+            print(f"Error checking membership in {channel_id}: {e}")
+            return False
+    return True
 
 def get_admin_reply_markup():
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
@@ -1303,9 +1309,10 @@ def send_welcome(message):
 def ask_to_join(chat_id, referrer_id, user_id_or_lang="fa"):
     markup = InlineKeyboardMarkup()
     markup.row(InlineKeyboardButton(get_msg(user_id_or_lang, "join_btn"), url=f"https://t.me/{CHANNEL_ID.lstrip('@')}"))
+    markup.row(InlineKeyboardButton(get_msg(user_id_or_lang, "join_second_btn"), url=f"https://t.me/{SECOND_CHANNEL_ID.lstrip('@')}"))
     markup.row(InlineKeyboardButton(get_msg(user_id_or_lang, "joined_btn"), callback_data=f"check_join_{referrer_id}"))
     
-    text = get_msg(user_id_or_lang, "join_req", CHANNEL_ID)
+    text = get_msg(user_id_or_lang, "join_req", CHANNEL_ID, SECOND_CHANNEL_ID)
     bot.send_message(
         chat_id,
         text,
