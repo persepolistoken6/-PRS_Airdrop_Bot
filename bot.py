@@ -37,12 +37,60 @@ ADMIN_CHAT_ID = 6661478622
 
 REQUIRED_REFERRALS = 3
 
+# شرایط مستقل چالش جدید (بدون تغییر در حد نصاب ایردراپ اصلی)
+CHALLENGE_REQUIRED_REFERRALS = 10
+CHALLENGE_QUIZ_MAX_ATTEMPTS = 2
+CHALLENGE_QUIZ_PASS_SCORE = 3
+
+# برای ارسال مستقیم فایل، PDF را کنار bot.py قرار دهید یا FILE_ID تلگرام را
+# در متغیر محیطی WHITEPAPER_FILE_ID ثبت کنید. لینک نیز قابل تنظیم است.
+WHITEPAPER_FILE_ID = os.getenv("WHITEPAPER_FILE_ID", "").strip()
+WHITEPAPER_URL = os.getenv("WHITEPAPER_URL", "https://www.prstoken.com").strip()
+WHITEPAPER_LOCAL_PATH = os.getenv(
+    "WHITEPAPER_LOCAL_PATH",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "PRS_Whitepaper_v1.2_FA_EN-3.pdf")
+)
+
 BASE_REWARD = 2000
 EXTRA_REWARD = 5000
 DAILY_REWARD = 1000
 MAX_TOTAL_TOKENS_LIMIT = 300_000_000
 
 BANNER_FILE_ID = "AgACAgQAAxkBAAMfamINNXWkFr-wk1ONFWAEHF2z-vGAAsgNaxtnhwABU-cbUHZe_7c6AQADAgADeQADPQQ"
+
+CHALLENGE_QUIZ = [
+    {
+        "fa": "توکن PRS روی کدام شبکه ساخته شده است؟",
+        "en": "On which network is the PRS token built?",
+        "options_fa": ["Ethereum", "BNB Smart Chain (BSC)", "TON", "Solana"],
+        "options_en": ["Ethereum", "BNB Smart Chain (BSC)", "TON", "Solana"],
+        "correct": 1
+    },
+    {
+        "fa": "چه تعداد توکن PRS برای ایردراپ و چه تعداد برای استخر نقدینگی در نظر گرفته شده است؟",
+        "en": "How many PRS tokens are allocated to the airdrop and the liquidity pool?",
+        "options_fa": [
+            "۳۰۰ میلیون برای ایردراپ و ۱ میلیارد برای استخر نقدینگی",
+            "۱ میلیارد برای ایردراپ و ۳۰۰ میلیون برای استخر نقدینگی",
+            "۶۰۰ میلیون برای ایردراپ و ۱ میلیارد برای استخر نقدینگی",
+            "۳۰۰ میلیون برای ایردراپ و ۶۰۰ میلیون برای استخر نقدینگی"
+        ],
+        "options_en": [
+            "300M for airdrop and 1B for liquidity",
+            "1B for airdrop and 300M for liquidity",
+            "600M for airdrop and 1B for liquidity",
+            "300M for airdrop and 600M for liquidity"
+        ],
+        "correct": 0
+    },
+    {
+        "fa": "مجموع عرضه کل توکن‌های PRS چقدر است؟",
+        "en": "What is the total supply of PRS tokens?",
+        "options_fa": ["۳۰۰ میلیون", "۱ میلیارد", "۳ میلیارد", "۶ میلیارد"],
+        "options_en": ["300 million", "1 billion", "3 billion", "6 billion"],
+        "correct": 3
+    }
+]
 
 bot = TeleBot(TOKEN, threaded=True)
 
@@ -68,6 +116,7 @@ LANG = {
         "main_kb_twitter": "🐦 توییتر (ایکس)",
         "main_kb_instagram": "📸 اینستاگرام",
         "main_kb_social": "🎟 ثبت آیدی شبکه‌های اجتماعی",
+        "main_kb_challenge_quiz": "📝 آزمون چالش PRS",
         "btn_channel": "📢 کانال تلگرام",
         "btn_twitter": "🐦 توییتر (ایکس)",
         "btn_insta": "📸 اینستاگرام پرسپولیس",
@@ -78,6 +127,7 @@ LANG = {
         "btn_status": "📊 وضعیت من و رتبه",
         "btn_submit_w": "📝 ارسال / ویرایش ولت",
         "btn_social": "🎟 ثبت آیدی برای قرعه‌کشی",
+        "btn_challenge_quiz": "📝 آزمون چالش PRS",
         "btn_refresh": "🔄 به‌روزرسانی پنل کاربری",
         "btn_lang": "🌐 تغییر زبان / Change Language",
         "lang_changed": "✅ زبان ربات با موفقیت به فارسی تغییر یافت.",
@@ -164,6 +214,33 @@ LANG = {
         "social_cancelled": "❌ ثبت آیدی شبکه‌های اجتماعی لغو شد و اطلاعات قبلی شما تغییر نکرد.",
         "social_cancel_btn": "❌ انصراف",
         "social_not_registered": "ثبت نشده",
+        "challenge_intro": (
+            "📝 *آزمون چالش PRS*\n\n"
+            "ابتدا وایت‌پیپر رسمی را مطالعه کنید و سپس به ۳ سؤال پاسخ دهید. "
+            "برای قبولی باید پاسخ هر سه سؤال صحیح باشد.\n\n"
+            "🎯 شرط دعوت این چالش: حداقل `{required_refs}` دعوت موفق\n"
+            "🔁 حداکثر دفعات شرکت: `{max_attempts}` بار\n"
+            "⏳ فرصت باقی‌مانده شما: `{remaining_attempts}` بار\n\n"
+            "پس از آمادگی، دکمه شروع آزمون را بزنید."
+        ),
+        "challenge_start_btn": "▶️ شروع آزمون",
+        "challenge_whitepaper_btn": "📘 مشاهده وایت‌پیپر رسمی",
+        "challenge_whitepaper_caption": "📘 وایت‌پیپر رسمی پروژه PRS؛ پیش از شروع آزمون آن را مطالعه کنید.",
+        "challenge_passed_before": "✅ شما قبلاً آزمون چالش PRS را با موفقیت گذرانده‌اید.",
+        "challenge_no_attempts": "❌ هر دو فرصت شما برای شرکت در آزمون استفاده شده و امکان تلاش مجدد وجود ندارد.",
+        "challenge_question": "📝 *سؤال {number} از {total}*\n\n{question}",
+        "challenge_result_passed": (
+            "🎉 *تبریک! آزمون را با موفقیت گذراندید.*\n\n"
+            "✅ امتیاز شما: `{score}` از `{total}`\n"
+            "آزمون به‌عنوان یکی از شرایط چالش در حساب شما ثبت شد."
+        ),
+        "challenge_result_failed": (
+            "❌ این بار حد نصاب آزمون را کسب نکردید.\n\n"
+            "📊 امتیاز شما: `{score}` از `{total}`\n"
+            "⏳ فرصت باقی‌مانده: `{remaining_attempts}` بار"
+        ),
+        "challenge_retry_btn": "🔄 تلاش دوباره",
+        "challenge_stale_answer": "⚠️ این پاسخ مربوط به سؤال فعال شما نیست. آزمون را از منو ادامه دهید.",
         "status_box": (
             "📊 *اطلاعات حساب و وضعیت شما:*\n\n"
             "🆔 آیدی عددی شما: `{uid}`\n"
@@ -199,6 +276,7 @@ LANG = {
         "main_kb_twitter": "🐦 Twitter (X)",
         "main_kb_instagram": "📸 Instagram",
         "main_kb_social": "🎟 Register Social IDs",
+        "main_kb_challenge_quiz": "📝 PRS Challenge Quiz",
         "btn_channel": "📢 Telegram Channel",
         "btn_twitter": "🐦 Twitter (X)",
         "btn_insta": "📸 Persepolis Instagram",
@@ -209,6 +287,7 @@ LANG = {
         "btn_status": "📊 My Status & Rank",
         "btn_submit_w": "📝 Submit / Edit Wallet",
         "btn_social": "🎟 Register IDs for Lottery",
+        "btn_challenge_quiz": "📝 PRS Challenge Quiz",
         "btn_refresh": "🔄 Refresh User Panel",
         "btn_lang": "🌐 تغییر زبان / Change Language",
         "lang_changed": "✅ Bot language successfully changed to English.",
@@ -295,6 +374,33 @@ LANG = {
         "social_cancelled": "❌ Social media ID registration was cancelled. Your previous information was not changed.",
         "social_cancel_btn": "❌ Cancel",
         "social_not_registered": "Not registered",
+        "challenge_intro": (
+            "📝 *PRS Challenge Quiz*\n\n"
+            "Read the official whitepaper first, then answer 3 questions. "
+            "All three answers must be correct to pass.\n\n"
+            "🎯 Referral requirement: at least `{required_refs}` successful referrals\n"
+            "🔁 Maximum attempts: `{max_attempts}`\n"
+            "⏳ Your remaining attempts: `{remaining_attempts}`\n\n"
+            "When you are ready, press Start Quiz."
+        ),
+        "challenge_start_btn": "▶️ Start Quiz",
+        "challenge_whitepaper_btn": "📘 View Official Whitepaper",
+        "challenge_whitepaper_caption": "📘 Official PRS whitepaper; please read it before starting the quiz.",
+        "challenge_passed_before": "✅ You have already passed the PRS challenge quiz.",
+        "challenge_no_attempts": "❌ You have used both quiz attempts and cannot try again.",
+        "challenge_question": "📝 *Question {number} of {total}*\n\n{question}",
+        "challenge_result_passed": (
+            "🎉 *Congratulations! You passed the quiz.*\n\n"
+            "✅ Your score: `{score}` out of `{total}`\n"
+            "The quiz has been recorded as one of your completed challenge requirements."
+        ),
+        "challenge_result_failed": (
+            "❌ You did not pass the quiz this time.\n\n"
+            "📊 Your score: `{score}` out of `{total}`\n"
+            "⏳ Remaining attempts: `{remaining_attempts}`"
+        ),
+        "challenge_retry_btn": "🔄 Try Again",
+        "challenge_stale_answer": "⚠️ This answer is not for your active question. Continue the quiz from the menu.",
         "status_box": (
             "📊 *Your Account Information & Status:*\n\n"
             "🆔 Your User ID: `{uid}`\n"
@@ -340,6 +446,7 @@ def get_main_reply_markup(user_id):
     markup.row(get_msg(lang, "main_kb_daily"), get_msg(lang, "main_kb_wallet"))
     markup.row(get_msg(lang, "main_kb_guide"), get_msg(lang, "main_kb_leaderboard"))
     markup.row(get_msg(lang, "main_kb_social"))
+    markup.row(get_msg(lang, "main_kb_challenge_quiz"))
     markup.row(get_msg(lang, "main_kb_refresh"), get_msg(lang, "main_kb_channel"))
     markup.row(get_msg(lang, "main_kb_twitter"), get_msg(lang, "main_kb_instagram"))
     return markup
@@ -845,6 +952,7 @@ def get_admin_reply_markup():
     markup.row("🎯 پاداش دستی به کاربر", "📊 اکسل پاداش‌های دستی")
     markup.row("🚫 بررسی و خروجی بلاک‌کنندگان", "📣 پیام به واجدین بی‌ولت")
     markup.row("🎟 گزارش آیدی‌های قرعه‌کشی")
+    markup.row("🏆 واجدین شرایط مسابقه")
     markup.row("🔄 به‌روزرسانی پنل ادمین", "📢 ارسال همگانی پیام")
     markup.row("✉️ ارسال پیام شخصی به کاربر", "🔴 خاموش کردن ربات")
     markup.row("🟢 روشن کردن ربات", "🔙 خروج از حالت ادمین / منوی اصلی")
@@ -866,6 +974,8 @@ def register_user_after_verify(user_id, referrer_id):
             "daily_count": 0,
             "paid_amount": 0,
             "manual_bonus_tokens": 0,
+            "challenge_quiz_attempts": 0,
+            "challenge_quiz_passed": False,
             "lang": "fa"
         })
         
@@ -1119,6 +1229,293 @@ def handle_social_registration_input(message, text):
         parse_mode="Markdown"
     )
     return True
+
+def get_user_language(user_id):
+    user = users_col.find_one({"user_id": user_id}, {"lang": 1}) or {}
+    return "en" if user.get("lang") == "en" else "fa"
+
+def send_challenge_intro(chat_id, user_id):
+    user = users_col.find_one({"user_id": user_id}) or {}
+    attempts = int(user.get("challenge_quiz_attempts", 0) or 0)
+
+    if user.get("challenge_quiz_passed") is True:
+        bot.send_message(chat_id, get_msg(user_id, "challenge_passed_before"))
+        return
+
+    if attempts >= CHALLENGE_QUIZ_MAX_ATTEMPTS:
+        bot.send_message(chat_id, get_msg(user_id, "challenge_no_attempts"))
+        return
+
+    # فایل وایت‌پیپر قبل از شروع آزمون برای کاربر ارسال می‌شود.
+    try:
+        if WHITEPAPER_FILE_ID:
+            bot.send_document(
+                chat_id,
+                WHITEPAPER_FILE_ID,
+                caption=get_msg(user_id, "challenge_whitepaper_caption")
+            )
+        elif os.path.isfile(WHITEPAPER_LOCAL_PATH):
+            with open(WHITEPAPER_LOCAL_PATH, "rb") as whitepaper_file:
+                bot.send_document(
+                    chat_id,
+                    whitepaper_file,
+                    caption=get_msg(user_id, "challenge_whitepaper_caption")
+                )
+    except Exception as e:
+        print(f"Whitepaper delivery error: {e}")
+
+    markup = InlineKeyboardMarkup()
+    if WHITEPAPER_URL:
+        markup.row(InlineKeyboardButton(
+            get_msg(user_id, "challenge_whitepaper_btn"),
+            url=WHITEPAPER_URL
+        ))
+    markup.row(InlineKeyboardButton(
+        get_msg(user_id, "challenge_start_btn"),
+        callback_data="challenge_begin"
+    ))
+
+    bot.send_message(
+        chat_id,
+        get_msg(
+            user_id,
+            "challenge_intro",
+            required_refs=CHALLENGE_REQUIRED_REFERRALS,
+            max_attempts=CHALLENGE_QUIZ_MAX_ATTEMPTS,
+            remaining_attempts=CHALLENGE_QUIZ_MAX_ATTEMPTS - attempts
+        ),
+        reply_markup=markup,
+        parse_mode="Markdown"
+    )
+
+def send_challenge_question(chat_id, user_id):
+    user = users_col.find_one({"user_id": user_id}) or {}
+    if user.get("challenge_quiz_state") != "in_progress":
+        send_challenge_intro(chat_id, user_id)
+        return
+
+    attempt_id = str(user.get("challenge_quiz_attempt_id", ""))
+    question_index = int(user.get("challenge_quiz_question", 0) or 0)
+    if not attempt_id or not 0 <= question_index < len(CHALLENGE_QUIZ):
+        send_challenge_intro(chat_id, user_id)
+        return
+
+    lang = get_user_language(user_id)
+    question = CHALLENGE_QUIZ[question_index]
+    options = question["options_en"] if lang == "en" else question["options_fa"]
+
+    markup = InlineKeyboardMarkup()
+    for option_index, option_text in enumerate(options):
+        markup.row(InlineKeyboardButton(
+            option_text,
+            callback_data=f"challenge_answer_{attempt_id}_{question_index}_{option_index}"
+        ))
+
+    bot.send_message(
+        chat_id,
+        get_msg(
+            user_id,
+            "challenge_question",
+            number=question_index + 1,
+            total=len(CHALLENGE_QUIZ),
+            question=question[lang]
+        ),
+        reply_markup=markup,
+        parse_mode="Markdown"
+    )
+
+def start_challenge_quiz(chat_id, user_id):
+    user = users_col.find_one({"user_id": user_id}) or {}
+    attempts = int(user.get("challenge_quiz_attempts", 0) or 0)
+
+    if user.get("challenge_quiz_passed") is True:
+        bot.send_message(chat_id, get_msg(user_id, "challenge_passed_before"))
+        return
+
+    if attempts >= CHALLENGE_QUIZ_MAX_ATTEMPTS:
+        bot.send_message(chat_id, get_msg(user_id, "challenge_no_attempts"))
+        return
+
+    if (
+        user.get("challenge_quiz_state") == "in_progress"
+        and user.get("challenge_quiz_attempt_id")
+        and 0 <= int(user.get("challenge_quiz_question", 0) or 0) < len(CHALLENGE_QUIZ)
+    ):
+        send_challenge_question(chat_id, user_id)
+        return
+
+    attempt_id = uuid4().hex[:8]
+    attempt_filter = {
+        "user_id": user_id,
+        "challenge_quiz_passed": {"$ne": True}
+    }
+    if "challenge_quiz_attempts" in user:
+        attempt_filter["challenge_quiz_attempts"] = attempts
+    else:
+        attempt_filter["challenge_quiz_attempts"] = {"$exists": False}
+
+    result = users_col.update_one(
+        attempt_filter,
+        {"$set": {
+            "challenge_quiz_attempts": attempts,
+            "challenge_quiz_state": "in_progress",
+            "challenge_quiz_attempt_id": attempt_id,
+            "challenge_quiz_question": 0,
+            "challenge_quiz_answers": [],
+            "challenge_quiz_score": 0,
+            "challenge_quiz_started_at": int(time.time())
+        }}
+    )
+    if result.modified_count != 1:
+        send_challenge_intro(chat_id, user_id)
+        return
+
+    send_challenge_question(chat_id, user_id)
+
+def handle_challenge_answer(call):
+    match = re.fullmatch(r"challenge_answer_([0-9a-f]{8})_(\d+)_(\d+)", call.data)
+    if not match:
+        bot.answer_callback_query(call.id, "Invalid quiz answer.", show_alert=True)
+        return
+
+    user_id = call.from_user.id
+    chat_id = call.message.chat.id
+    attempt_id = match.group(1)
+    question_index = int(match.group(2))
+    option_index = int(match.group(3))
+
+    user = users_col.find_one({"user_id": user_id}) or {}
+    if (
+        user.get("challenge_quiz_state") != "in_progress"
+        or user.get("challenge_quiz_attempt_id") != attempt_id
+        or int(user.get("challenge_quiz_question", -1)) != question_index
+        or not 0 <= question_index < len(CHALLENGE_QUIZ)
+        or not 0 <= option_index < len(CHALLENGE_QUIZ[question_index]["options_fa"])
+    ):
+        bot.answer_callback_query(
+            call.id,
+            get_msg(user_id, "challenge_stale_answer"),
+            show_alert=True
+        )
+        return
+
+    is_correct = option_index == CHALLENGE_QUIZ[question_index]["correct"]
+    answer_filter = {
+        "user_id": user_id,
+        "challenge_quiz_state": "in_progress",
+        "challenge_quiz_attempt_id": attempt_id,
+        "challenge_quiz_question": question_index
+    }
+
+    if question_index < len(CHALLENGE_QUIZ) - 1:
+        result = users_col.update_one(
+            answer_filter,
+            {
+                "$push": {"challenge_quiz_answers": option_index},
+                "$inc": {"challenge_quiz_score": 1 if is_correct else 0},
+                "$set": {"challenge_quiz_question": question_index + 1}
+            }
+        )
+        if result.modified_count != 1:
+            bot.answer_callback_query(
+                call.id,
+                get_msg(user_id, "challenge_stale_answer"),
+                show_alert=True
+            )
+            return
+
+        bot.answer_callback_query(call.id)
+        try:
+            bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
+        except Exception:
+            pass
+        send_challenge_question(chat_id, user_id)
+        return
+
+    final_score = int(user.get("challenge_quiz_score", 0) or 0) + (1 if is_correct else 0)
+    completed_attempts = int(user.get("challenge_quiz_attempts", 0) or 0) + 1
+    passed = final_score >= CHALLENGE_QUIZ_PASS_SCORE
+    completed_at = int(time.time())
+    final_answers = list(user.get("challenge_quiz_answers", [])) + [option_index]
+    history_record = {
+        "attempt": completed_attempts,
+        "score": final_score,
+        "passed": passed,
+        "answers": final_answers,
+        "completed_at": completed_at
+    }
+    final_fields = {
+        "challenge_quiz_state": "completed",
+        "challenge_quiz_question": len(CHALLENGE_QUIZ),
+        "challenge_quiz_last_score": final_score,
+        "challenge_quiz_last_completed_at": completed_at,
+        "challenge_quiz_passed": passed
+    }
+    if passed:
+        final_fields["challenge_quiz_passed_at"] = completed_at
+
+    result = users_col.update_one(
+        answer_filter,
+        {
+            "$push": {
+                "challenge_quiz_answers": option_index,
+                "challenge_quiz_history": history_record
+            },
+            "$inc": {
+                "challenge_quiz_score": 1 if is_correct else 0,
+                "challenge_quiz_attempts": 1
+            },
+            "$set": final_fields
+        }
+    )
+    if result.modified_count != 1:
+        bot.answer_callback_query(
+            call.id,
+            get_msg(user_id, "challenge_stale_answer"),
+            show_alert=True
+        )
+        return
+
+    bot.answer_callback_query(call.id)
+    try:
+        bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
+    except Exception:
+        pass
+
+    if passed:
+        bot.send_message(
+            chat_id,
+            get_msg(
+                user_id,
+                "challenge_result_passed",
+                score=final_score,
+                total=len(CHALLENGE_QUIZ)
+            ),
+            reply_markup=get_main_reply_markup(user_id),
+            parse_mode="Markdown"
+        )
+        return
+
+    remaining_attempts = max(0, CHALLENGE_QUIZ_MAX_ATTEMPTS - completed_attempts)
+    retry_markup = None
+    if remaining_attempts > 0:
+        retry_markup = InlineKeyboardMarkup()
+        retry_markup.row(InlineKeyboardButton(
+            get_msg(user_id, "challenge_retry_btn"),
+            callback_data="challenge_begin"
+        ))
+    bot.send_message(
+        chat_id,
+        get_msg(
+            user_id,
+            "challenge_result_failed",
+            score=final_score,
+            total=len(CHALLENGE_QUIZ),
+            remaining_attempts=remaining_attempts
+        ),
+        reply_markup=retry_markup or get_main_reply_markup(user_id),
+        parse_mode="Markdown"
+    )
 
 def get_ref_details(ref_count):
     if ref_count >= REQUIRED_REFERRALS:
@@ -1554,6 +1951,114 @@ def send_social_lottery_report(chat_id):
         reply_markup=get_admin_reply_markup()
     )
 
+def send_challenge_eligible_report(chat_id):
+    candidates = list(users_col.find({
+        "ref_count": {"$gte": CHALLENGE_REQUIRED_REFERRALS}
+    }).sort("ref_count", -1))
+
+    wallet_ready_count = 0
+    instagram_ready_count = 0
+    quiz_passed_count = 0
+    eligible_users = []
+
+    for user in candidates:
+        wallet_valid = is_valid_wallet(user.get("wallet"))
+        instagram_valid = bool(re.fullmatch(
+            r"@[A-Za-z0-9._]{1,30}",
+            str(user.get("instagram_id") or "")
+        ))
+        quiz_passed = user.get("challenge_quiz_passed") is True
+
+        if wallet_valid:
+            wallet_ready_count += 1
+        if instagram_valid:
+            instagram_ready_count += 1
+        if quiz_passed:
+            quiz_passed_count += 1
+        if wallet_valid and instagram_valid and quiz_passed:
+            eligible_users.append(user)
+
+    summary = (
+        f"🏆 *گزارش واجدین شرایط مسابقه*\n\n"
+        f"👥 حداقل {CHALLENGE_REQUIRED_REFERRALS} دعوت موفق: `{len(candidates):,}` نفر\n"
+        f"👝 دارای ولت معتبر: `{wallet_ready_count:,}` نفر\n"
+        f"📸 دارای آیدی Instagram: `{instagram_ready_count:,}` نفر\n"
+        f"📝 قبول‌شده در آزمون: `{quiz_passed_count:,}` نفر\n"
+        f"✅ تکمیل تمام شرایط قابل بررسی توسط ربات: `{len(eligible_users):,}` نفر\n\n"
+        f"⚠️ فالوکردن صفحه و لایک و کامنت پست Instagram باید مانند قبل به‌صورت دستی بررسی شود."
+    )
+
+    if not eligible_users:
+        bot.send_message(
+            chat_id,
+            summary + "\n\nدر حال حاضر کاربری در فهرست نهایی بررسی ربات قرار ندارد.",
+            reply_markup=get_admin_reply_markup(),
+            parse_mode="Markdown"
+        )
+        return
+
+    preview_lines = []
+    for index, user in enumerate(eligible_users[:10], 1):
+        preview_lines.append(
+            f"{index}. `{user.get('user_id')}` | "
+            f"دعوت: `{user.get('ref_count', 0)}` | "
+            f"Instagram: `{user.get('instagram_id', '')}`"
+        )
+    preview_text = "\n".join(preview_lines)
+    if len(eligible_users) > 10:
+        preview_text += f"\n... و {len(eligible_users) - 10:,} کاربر دیگر در فایل"
+
+    bot.send_message(
+        chat_id,
+        summary + f"\n\n{preview_text}",
+        reply_markup=get_admin_reply_markup(),
+        parse_mode="Markdown"
+    )
+
+    output = io.StringIO(newline="")
+    writer = csv.writer(output)
+    writer.writerow([
+        "Challenge Number",
+        "User ID",
+        "Telegram Username",
+        "Instagram ID",
+        "Referrals",
+        "Wallet",
+        "Quiz Passed",
+        "Quiz Score",
+        "Quiz Attempts",
+        "Quiz Passed At UTC",
+        "Instagram Follow Like Comment"
+    ])
+
+    for challenge_number, user in enumerate(eligible_users, 1):
+        passed_at = int(user.get("challenge_quiz_passed_at", 0) or 0)
+        writer.writerow([
+            challenge_number,
+            user.get("user_id", ""),
+            user.get("telegram_username", ""),
+            user.get("instagram_id", ""),
+            user.get("ref_count", 0),
+            user.get("wallet", ""),
+            "Yes",
+            user.get("challenge_quiz_last_score", 0),
+            user.get("challenge_quiz_attempts", 0),
+            datetime.utcfromtimestamp(passed_at).strftime("%Y-%m-%d %H:%M:%S") if passed_at else "",
+            "Manual verification required"
+        ])
+
+    file_bytes = io.BytesIO(output.getvalue().encode("utf-8-sig"))
+    file_bytes.name = "challenge_eligible_users.csv"
+    bot.send_document(
+        chat_id,
+        file_bytes,
+        caption=(
+            "📁 فهرست کاربران دارای ۱۰ دعوت، ولت معتبر، آیدی Instagram و قبولی آزمون؛ "
+            "برای تأیید نهایی فعالیت Instagram بررسی دستی انجام شود."
+        ),
+        reply_markup=get_admin_reply_markup()
+    )
+
 def send_detailed_report_file(chat_id):
     rows = list(users_col.find({}).sort([("paid", 1), ("ref_count", -1)]))
 
@@ -1649,6 +2154,7 @@ def show_main_menu(chat_id, user_id, message_id=None, edit=False):
     markup.row(InlineKeyboardButton(get_msg(user_id, "btn_top"), callback_data="leaderboard"))
     markup.row(InlineKeyboardButton(get_msg(user_id, "btn_status"), callback_data="my_status"), InlineKeyboardButton(get_msg(user_id, "btn_submit_w"), callback_data="submit_info"))
     markup.row(InlineKeyboardButton(get_msg(user_id, "btn_social"), callback_data="social_accounts"))
+    markup.row(InlineKeyboardButton(get_msg(user_id, "btn_challenge_quiz"), callback_data="challenge_quiz"))
     markup.row(InlineKeyboardButton(get_msg(user_id, "btn_lang"), callback_data="toggle_language"))
     markup.row(InlineKeyboardButton(get_msg(user_id, "btn_refresh"), callback_data="refresh_menu"))
 
@@ -2099,6 +2605,9 @@ def handle_all_messages(message):
         elif text == "🎟 گزارش آیدی‌های قرعه‌کشی":
             send_social_lottery_report(chat_id)
             return
+        elif text == "🏆 واجدین شرایط مسابقه":
+            send_challenge_eligible_report(chat_id)
+            return
         elif text == "📣 پیام به واجدین بی‌ولت":
             recipients_count = len(get_eligible_no_wallet_users())
             if recipients_count == 0:
@@ -2335,6 +2844,9 @@ def handle_all_messages(message):
     elif text in [LANG["fa"]["main_kb_social"], LANG["en"]["main_kb_social"]]:
         start_social_registration(chat_id, user_id)
         return
+    elif text in [LANG["fa"]["main_kb_challenge_quiz"], LANG["en"]["main_kb_challenge_quiz"]]:
+        send_challenge_intro(chat_id, user_id)
+        return
     elif text in [LANG["fa"]["main_kb_refresh"], LANG["en"]["main_kb_refresh"]]:
         show_main_menu(chat_id, user_id)
         return
@@ -2542,6 +3054,29 @@ def handle_callbacks(call):
 
     if is_airdrop_finished() and not is_admin(user_id):
         bot.answer_callback_query(call.id, get_msg(user_id, "airdrop_finished"), show_alert=True)
+        return
+
+    if call.data == "challenge_quiz":
+        if not check_membership(user_id):
+            bot.answer_callback_query(call.id, "❌ لطفاً ابتدا در کانال عضو شوید!", show_alert=True)
+            return
+        bot.answer_callback_query(call.id)
+        send_challenge_intro(chat_id, user_id)
+        return
+
+    if call.data == "challenge_begin":
+        if not check_membership(user_id):
+            bot.answer_callback_query(call.id, "❌ لطفاً ابتدا در کانال عضو شوید!", show_alert=True)
+            return
+        bot.answer_callback_query(call.id)
+        start_challenge_quiz(chat_id, user_id)
+        return
+
+    if call.data.startswith("challenge_answer_"):
+        if not check_membership(user_id):
+            bot.answer_callback_query(call.id, "❌ لطفاً ابتدا در کانال عضو شوید!", show_alert=True)
+            return
+        handle_challenge_answer(call)
         return
 
     if call.data.startswith("setlang_"):
