@@ -952,7 +952,6 @@ def get_admin_reply_markup():
     markup.row("🎯 پاداش دستی به کاربر", "📊 اکسل پاداش‌های دستی")
     markup.row("🚫 بررسی و خروجی بلاک‌کنندگان", "📣 پیام به واجدین بی‌ولت")
     markup.row("🎟 گزارش آیدی‌های قرعه‌کشی")
-    markup.row("🏆 واجدین شرایط مسابقه")
     markup.row("🔄 به‌روزرسانی پنل ادمین", "📢 ارسال همگانی پیام")
     markup.row("✉️ ارسال پیام شخصی به کاربر", "🔴 خاموش کردن ربات")
     markup.row("🟢 روشن کردن ربات", "🔙 خروج از حالت ادمین / منوی اصلی")
@@ -1871,18 +1870,28 @@ def send_status_excel_report(chat_id, status_filter):
 
 def send_social_lottery_report(chat_id):
     rows = list(users_col.find({
-        "social_registered": True,
-        "twitter_id": {"$regex": r"^@"},
-        "instagram_id": {"$regex": r"^@"}
-    }).sort("social_updated_at", -1))
+        "$or": [
+            {"social_registered": True},
+            {"instagram_id": {"$regex": r"^@"}},
+            {"ref_count": {"$gte": CHALLENGE_REQUIRED_REFERRALS}},
+            {"challenge_quiz_attempts": {"$gt": 0}},
+            {"challenge_quiz_state": "in_progress"}
+        ]
+    }).sort([("ref_count", -1), ("social_updated_at", -1)]))
 
     if not rows:
         bot.send_message(
             chat_id,
-            "⚠️ هنوز هیچ کاربری هر دو آیدی Twitter/X و Instagram را ثبت نکرده است.",
+            "⚠️ هنوز هیچ کاربری برای گزارش شرایط مسابقه یافت نشد.",
             reply_markup=get_admin_reply_markup()
         )
         return
+
+    referral_ready_count = 0
+    wallet_ready_count = 0
+    instagram_ready_count = 0
+    quiz_passed_count = 0
+    bot_conditions_complete_count = 0
 
     output = io.StringIO(newline="")
     writer = csv.writer(output)
@@ -1893,19 +1902,56 @@ def send_social_lottery_report(chat_id):
         "Twitter/X ID",
         "Instagram ID",
         "Referrals",
+        "Referral Requirement (10+)",
         "Wallet",
-        "Wallet Registered",
-        "Verified",
+        "Valid Wallet",
+        "Instagram ID Registered",
+        "Quiz Correct Answers (Current or Last)",
+        "Quiz Best Score",
+        "Quiz Completed Attempts",
+        "Quiz State",
+        "Quiz Passed (3/3)",
+        "All Bot Conditions Complete",
+        "Instagram Follow Like Comment",
         "Social Registered At UTC",
         "Social Updated At UTC"
     ])
 
-    complete_airdrop_count = 0
     for lottery_number, user in enumerate(rows, 1):
+        ref_count = int(user.get("ref_count", 0) or 0)
+        referral_ready = ref_count >= CHALLENGE_REQUIRED_REFERRALS
         wallet = user.get("wallet") or ""
-        wallet_valid = bool(re.fullmatch(r"0x[a-fA-F0-9]{40}", wallet))
-        if user.get("ref_count", 0) >= REQUIRED_REFERRALS and wallet_valid:
-            complete_airdrop_count += 1
+        wallet_valid = is_valid_wallet(wallet)
+        instagram_id = str(user.get("instagram_id") or "")
+        instagram_valid = bool(re.fullmatch(r"@[A-Za-z0-9._]{1,30}", instagram_id))
+        quiz_state = str(user.get("challenge_quiz_state") or "not_started")
+        quiz_attempts = int(user.get("challenge_quiz_attempts", 0) or 0)
+        if quiz_state == "in_progress":
+            current_or_last_score = int(user.get("challenge_quiz_score", 0) or 0)
+        else:
+            current_or_last_score = int(user.get("challenge_quiz_last_score", 0) or 0)
+
+        history_scores = [
+            int(item.get("score", 0) or 0)
+            for item in (user.get("challenge_quiz_history", []) or [])
+            if isinstance(item, dict)
+        ]
+        best_score = max(history_scores + [current_or_last_score])
+        quiz_passed = user.get("challenge_quiz_passed") is True
+        bot_conditions_complete = (
+            referral_ready and wallet_valid and instagram_valid and quiz_passed
+        )
+
+        if referral_ready:
+            referral_ready_count += 1
+        if wallet_valid:
+            wallet_ready_count += 1
+        if instagram_valid:
+            instagram_ready_count += 1
+        if quiz_passed:
+            quiz_passed_count += 1
+        if bot_conditions_complete:
+            bot_conditions_complete_count += 1
 
         registered_at = int(user.get("social_registered_at", 0) or 0)
         updated_at = int(user.get("social_updated_at", 0) or 0)
@@ -1914,19 +1960,45 @@ def send_social_lottery_report(chat_id):
             user.get("user_id"),
             user.get("telegram_username", ""),
             user.get("twitter_id", ""),
-            user.get("instagram_id", ""),
-            user.get("ref_count", 0),
+            instagram_id,
+            ref_count,
+            "Yes" if referral_ready else "No",
             wallet,
             "Yes" if wallet_valid else "No",
-            user.get("verified", 0),
+            "Yes" if instagram_valid else "No",
+            current_or_last_score,
+            best_score,
+            quiz_attempts,
+            quiz_state,
+            "Yes" if quiz_passed else "No",
+            "Yes" if bot_conditions_complete else "No",
+            "Manual verification required",
             datetime.utcfromtimestamp(registered_at).strftime("%Y-%m-%d %H:%M:%S") if registered_at else "",
             datetime.utcfromtimestamp(updated_at).strftime("%Y-%m-%d %H:%M:%S") if updated_at else ""
         ])
 
     preview_lines = []
     for index, user in enumerate(rows[:10], 1):
+        quiz_state = str(user.get("challenge_quiz_state") or "not_started")
+        if quiz_state == "in_progress":
+            score = int(user.get("challenge_quiz_score", 0) or 0)
+        else:
+            score = int(user.get("challenge_quiz_last_score", 0) or 0)
+        ref_count = int(user.get("ref_count", 0) or 0)
+        wallet_valid = is_valid_wallet(user.get("wallet"))
+        instagram_valid = bool(re.fullmatch(
+            r"@[A-Za-z0-9._]{1,30}",
+            str(user.get("instagram_id") or "")
+        ))
+        complete = (
+            ref_count >= CHALLENGE_REQUIRED_REFERRALS
+            and wallet_valid
+            and instagram_valid
+            and user.get("challenge_quiz_passed") is True
+        )
         preview_lines.append(
-            f"{index}. `{user.get('user_id')}` | `{user.get('twitter_id')}` | `{user.get('instagram_id')}`"
+            f"{index}. `{user.get('user_id')}` | دعوت: `{ref_count}` | "
+            f"پاسخ صحیح: `{score}/3` | شرایط ربات: `{'کامل' if complete else 'ناقص'}`"
         )
     preview_text = "\n".join(preview_lines)
     if len(rows) > 10:
@@ -1934,127 +2006,27 @@ def send_social_lottery_report(chat_id):
 
     bot.send_message(
         chat_id,
-        f"🎟 *گزارش شرکت‌کنندگان قرعه‌کشی شبکه‌های اجتماعی*\n\n"
-        f"👥 دارای هر دو آیدی: `{len(rows):,}` نفر\n"
-        f"✅ دارای ۳ دعوت و ولت معتبر: `{complete_airdrop_count:,}` نفر\n\n"
+        f"🎟 *گزارش کامل شرایط مسابقه و آیدی‌های قرعه‌کشی*\n\n"
+        f"👥 کاربران موجود در گزارش: `{len(rows):,}` نفر\n"
+        f"🔗 حداقل {CHALLENGE_REQUIRED_REFERRALS} دعوت: `{referral_ready_count:,}` نفر\n"
+        f"👝 ولت معتبر: `{wallet_ready_count:,}` نفر\n"
+        f"📸 آیدی Instagram ثبت‌شده: `{instagram_ready_count:,}` نفر\n"
+        f"📝 قبولی آزمون با ۳ پاسخ صحیح: `{quiz_passed_count:,}` نفر\n"
+        f"✅ تکمیل تمام شرایط قابل بررسی ربات: `{bot_conditions_complete_count:,}` نفر\n\n"
+        f"⚠️ فالو، لایک و کامنت Instagram همچنان باید دستی بررسی شود.\n\n"
         f"{preview_text}",
         reply_markup=get_admin_reply_markup(),
         parse_mode="Markdown"
     )
 
     file_bytes = io.BytesIO(output.getvalue().encode("utf-8-sig"))
-    file_bytes.name = "social_lottery_participants.csv"
-    bot.send_document(
-        chat_id,
-        file_bytes,
-        caption="📁 فایل کامل کاربران دارای هر دو آیدی Twitter/X و Instagram برای قرعه‌کشی",
-        reply_markup=get_admin_reply_markup()
-    )
-
-def send_challenge_eligible_report(chat_id):
-    candidates = list(users_col.find({
-        "ref_count": {"$gte": CHALLENGE_REQUIRED_REFERRALS}
-    }).sort("ref_count", -1))
-
-    wallet_ready_count = 0
-    instagram_ready_count = 0
-    quiz_passed_count = 0
-    eligible_users = []
-
-    for user in candidates:
-        wallet_valid = is_valid_wallet(user.get("wallet"))
-        instagram_valid = bool(re.fullmatch(
-            r"@[A-Za-z0-9._]{1,30}",
-            str(user.get("instagram_id") or "")
-        ))
-        quiz_passed = user.get("challenge_quiz_passed") is True
-
-        if wallet_valid:
-            wallet_ready_count += 1
-        if instagram_valid:
-            instagram_ready_count += 1
-        if quiz_passed:
-            quiz_passed_count += 1
-        if wallet_valid and instagram_valid and quiz_passed:
-            eligible_users.append(user)
-
-    summary = (
-        f"🏆 *گزارش واجدین شرایط مسابقه*\n\n"
-        f"👥 حداقل {CHALLENGE_REQUIRED_REFERRALS} دعوت موفق: `{len(candidates):,}` نفر\n"
-        f"👝 دارای ولت معتبر: `{wallet_ready_count:,}` نفر\n"
-        f"📸 دارای آیدی Instagram: `{instagram_ready_count:,}` نفر\n"
-        f"📝 قبول‌شده در آزمون: `{quiz_passed_count:,}` نفر\n"
-        f"✅ تکمیل تمام شرایط قابل بررسی توسط ربات: `{len(eligible_users):,}` نفر\n\n"
-        f"⚠️ فالوکردن صفحه و لایک و کامنت پست Instagram باید مانند قبل به‌صورت دستی بررسی شود."
-    )
-
-    if not eligible_users:
-        bot.send_message(
-            chat_id,
-            summary + "\n\nدر حال حاضر کاربری در فهرست نهایی بررسی ربات قرار ندارد.",
-            reply_markup=get_admin_reply_markup(),
-            parse_mode="Markdown"
-        )
-        return
-
-    preview_lines = []
-    for index, user in enumerate(eligible_users[:10], 1):
-        preview_lines.append(
-            f"{index}. `{user.get('user_id')}` | "
-            f"دعوت: `{user.get('ref_count', 0)}` | "
-            f"Instagram: `{user.get('instagram_id', '')}`"
-        )
-    preview_text = "\n".join(preview_lines)
-    if len(eligible_users) > 10:
-        preview_text += f"\n... و {len(eligible_users) - 10:,} کاربر دیگر در فایل"
-
-    bot.send_message(
-        chat_id,
-        summary + f"\n\n{preview_text}",
-        reply_markup=get_admin_reply_markup(),
-        parse_mode="Markdown"
-    )
-
-    output = io.StringIO(newline="")
-    writer = csv.writer(output)
-    writer.writerow([
-        "Challenge Number",
-        "User ID",
-        "Telegram Username",
-        "Instagram ID",
-        "Referrals",
-        "Wallet",
-        "Quiz Passed",
-        "Quiz Score",
-        "Quiz Attempts",
-        "Quiz Passed At UTC",
-        "Instagram Follow Like Comment"
-    ])
-
-    for challenge_number, user in enumerate(eligible_users, 1):
-        passed_at = int(user.get("challenge_quiz_passed_at", 0) or 0)
-        writer.writerow([
-            challenge_number,
-            user.get("user_id", ""),
-            user.get("telegram_username", ""),
-            user.get("instagram_id", ""),
-            user.get("ref_count", 0),
-            user.get("wallet", ""),
-            "Yes",
-            user.get("challenge_quiz_last_score", 0),
-            user.get("challenge_quiz_attempts", 0),
-            datetime.utcfromtimestamp(passed_at).strftime("%Y-%m-%d %H:%M:%S") if passed_at else "",
-            "Manual verification required"
-        ])
-
-    file_bytes = io.BytesIO(output.getvalue().encode("utf-8-sig"))
-    file_bytes.name = "challenge_eligible_users.csv"
+    file_bytes.name = "lottery_full_conditions_report.csv"
     bot.send_document(
         chat_id,
         file_bytes,
         caption=(
-            "📁 فهرست کاربران دارای ۱۰ دعوت، ولت معتبر، آیدی Instagram و قبولی آزمون؛ "
-            "برای تأیید نهایی فعالیت Instagram بررسی دستی انجام شود."
+            "📁 گزارش کامل شرایط مسابقه، تعداد دعوت‌ها، وضعیت ولت و Instagram، "
+            "تعداد پاسخ‌های صحیح، دفعات آزمون و وضعیت قبولی"
         ),
         reply_markup=get_admin_reply_markup()
     )
@@ -2604,9 +2576,6 @@ def handle_all_messages(message):
             return
         elif text == "🎟 گزارش آیدی‌های قرعه‌کشی":
             send_social_lottery_report(chat_id)
-            return
-        elif text == "🏆 واجدین شرایط مسابقه":
-            send_challenge_eligible_report(chat_id)
             return
         elif text == "📣 پیام به واجدین بی‌ولت":
             recipients_count = len(get_eligible_no_wallet_users())
