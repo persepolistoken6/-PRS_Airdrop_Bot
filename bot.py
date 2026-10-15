@@ -31,8 +31,8 @@ captcha_col = db.captcha
 settings_col = db.bot_settings
 PORTAL_ENABLED = os.getenv("PORTAL_ENABLED", "0") == "1"
 
-BOT_USERNAME = "PRS_Airdrop_Bot"
-CHANNEL_ID = "@persepolisToken6"
+BOT_USERNAME = os.getenv("BOT_USERNAME", "PRS_Airdrop_Bot")
+CHANNEL_ID = os.getenv("CHANNEL_ID", "@persepolisToken6")
 TWITTER_URL = "https://x.com/PersepolisPRS"
 INSTAGRAM_URL = "https://www.instagram.com/persepolistoken6?igsh=eHBwbzdtd2ZoaWI5"
 
