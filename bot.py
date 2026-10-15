@@ -11,6 +11,9 @@ from datetime import datetime
 from telebot import TeleBot
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from pymongo import MongoClient
+from portal.settings import REQUIRED_REFERRALS, BASE_REWARD, EXTRA_REWARD, DAILY_REWARD, MAX_TOTAL_TOKENS_LIMIT
+from portal.service import build_service, PortalError
+from portal.bot_bridge import BotBridge, PANEL_LABELS, MISSION_LABELS
 
 TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
@@ -22,10 +25,11 @@ if not MONGO_URL:
 
 # اتصال به MongoDB با تعیین صریح نام دیتابیس
 mongo_client = MongoClient(MONGO_URL)
-db = mongo_client["persepolis_db"]
+db = mongo_client[os.getenv("MONGO_DB", "persepolis_db")]
 users_col = db.users
 captcha_col = db.captcha
 settings_col = db.bot_settings
+PORTAL_ENABLED = os.getenv("PORTAL_ENABLED", "0") == "1"
 
 BOT_USERNAME = "PRS_Airdrop_Bot"
 CHANNEL_ID = "@persepolisToken6"
@@ -35,7 +39,6 @@ INSTAGRAM_URL = "https://www.instagram.com/persepolistoken6?igsh=eHBwbzdtd2ZoaWI
 ADMIN_IDS = [6661478622, 84460885]
 ADMIN_CHAT_ID = 6661478622
 
-REQUIRED_REFERRALS = 3
 
 # شرایط مستقل چالش جدید (بدون تغییر در حد نصاب ایردراپ اصلی)
 CHALLENGE_REQUIRED_REFERRALS = 10
@@ -51,10 +54,6 @@ WHITEPAPER_LOCAL_PATH = os.getenv(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "PRS_Whitepaper_v1.2_FA_EN-3.pdf")
 )
 
-BASE_REWARD = 2000
-EXTRA_REWARD = 5000
-DAILY_REWARD = 1000
-MAX_TOTAL_TOKENS_LIMIT = 300_000_000
 
 BANNER_FILE_ID = "AgACAgQAAxkBAAMfamINNXWkFr-wk1ONFWAEHF2z-vGAAsgNaxtnhwABU-cbUHZe_7c6AQADAgADeQADPQQ"
 
@@ -445,6 +444,10 @@ def get_main_reply_markup(user_id):
     markup.row(get_msg(lang, "main_kb_status"), get_msg(lang, "main_kb_ref"))
     markup.row(get_msg(lang, "main_kb_daily"), get_msg(lang, "main_kb_wallet"))
     markup.row(get_msg(lang, "main_kb_guide"), get_msg(lang, "main_kb_leaderboard"))
+    if PORTAL_ENABLED:
+        markup.row(MISSION_LABELS[0 if lang == "fa" else 1])
+    if PORTAL_ENABLED and os.getenv("WEB_BASE_URL", "").strip():
+        markup.row(PANEL_LABELS[0 if lang == "fa" else 1])
     markup.row(get_msg(lang, "main_kb_social"))
     markup.row(get_msg(lang, "main_kb_challenge_quiz"))
     markup.row(get_msg(lang, "main_kb_refresh"), get_msg(lang, "main_kb_channel"))
@@ -942,6 +945,8 @@ def check_membership(user_id):
 
 def get_admin_reply_markup():
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
+    if PORTAL_ENABLED and os.getenv("WEB_BASE_URL", "").strip():
+        markup.row(PANEL_LABELS[0])
     markup.row("👝 مدیریت و تایید ولت‌ها", "📊 گزارش کلی توکن‌ها")
     markup.row("🔍 جستجوی کاربر (آیدی یا ولت)", "✏️ ویرایش ولت کاربر با آیدی")
     markup.row("📁 آپلود اکسل پرداختی‌ها", "🟢 اکسل پرداخت‌شده‌ها")
@@ -1651,6 +1656,38 @@ def send_under_threshold_excel(chat_id):
         parse_mode="Markdown"
     )
 
+# Install before the legacy catch-all handlers. Both paths use the same service.
+portal_service = build_service(database=db, member_check=check_membership)
+portal_bridge = BotBridge(
+    bot, portal_service,
+    lambda uid: get_admin_reply_markup() if is_admin(uid) else get_main_reply_markup(uid),
+    [value for messages in LANG.values() for key, value in messages.items() if key.startswith("main_kb_")]
+)
+if PORTAL_ENABLED:
+    portal_bridge.install()
+
+def claim_bot_daily(user_id):
+    if PORTAL_ENABLED:
+        return portal_service.claim_daily(user_id)
+    # Rollout remains opt-in; a legacy standalone MongoDB still supports this CAS.
+    if not check_membership(user_id):
+        raise PortalError("membership_required", 403)
+    user = users_col.find_one({"user_id": user_id})
+    if not user or user.get("ref_count", 0) < REQUIRED_REFERRALS:
+        raise PortalError("referrals_required", 403)
+    if is_bot_globally_disabled():
+        raise PortalError("campaign_paused", 403)
+    if is_airdrop_finished():
+        raise PortalError("campaign_budget_exhausted", 409)
+    current_time = int(time.time())
+    result = users_col.update_one(
+        {"user_id": user_id, "$or": [{"last_daily": {"$lte": current_time - 86400}}, {"last_daily": {"$exists": False}}]},
+        {"$set": {"last_daily": current_time}, "$inc": {"daily_count": 1}}
+    )
+    if not result.modified_count:
+        raise PortalError("daily_cooldown", 409)
+    return {"amount": DAILY_REWARD}
+
 @bot.message_handler(commands=['start', 'menu'])
 def send_welcome(message):
     user_id = message.from_user.id
@@ -1687,6 +1724,9 @@ def send_welcome(message):
         return
 
     user_data = get_user_data(user_id)
+    if PORTAL_ENABLED and len(args) > 1 and args[1] == "portal" and user_data and user_data[3] >= 2:
+        portal_bridge.send_login(message)
+        return
     if user_data and user_data[3] >= 2:
         if not check_membership(user_id):
             ask_to_join(message.chat.id, referrer_id if referrer_id else 0, user_id)
@@ -2120,6 +2160,10 @@ def show_main_menu(chat_id, user_id, message_id=None, edit=False):
     markup.row(InlineKeyboardButton(get_msg(user_id, "btn_insta"), url=INSTAGRAM_URL))
     
     markup.row(InlineKeyboardButton(get_msg(user_id, "btn_ref"), callback_data="get_ref_link"))
+    if PORTAL_ENABLED:
+        markup.row(InlineKeyboardButton(portal_bridge.text(user_id, "🎯 مأموریت‌های جدید", "🎯 New missions"), callback_data="portal:list"))
+    if PORTAL_ENABLED and os.getenv("WEB_BASE_URL", "").strip():
+        markup.row(InlineKeyboardButton(portal_bridge.text(user_id, "🌐 پنل ایردراپ", "🌐 Airdrop portal"), callback_data="portal:open"))
     # جایگذاری دکمه جدید با قابلیت تایمر
     markup.row(InlineKeyboardButton(daily_btn_text, callback_data="daily_bonus"))
     markup.row(InlineKeyboardButton(get_msg(user_id, "btn_guide"), callback_data="wallet_guide"))
@@ -2331,7 +2375,14 @@ def handle_all_messages(message):
                     return
                 target_uid = admin_state.get("target_uid")
                 settings_col.delete_one({"key": "admin_state"})
-                users_col.update_one({"user_id": target_uid}, {"$set": {"wallet": text, "submitted": 1}})
+                if PORTAL_ENABLED:
+                    try:
+                        portal_service.admin_update_wallet(user_id, target_uid, text)
+                    except PortalError as error:
+                        bot.send_message(chat_id, portal_bridge.error_text(error, user_id), reply_markup=get_admin_reply_markup())
+                        return
+                else:
+                    users_col.update_one({"user_id": target_uid}, {"$set": {"wallet": text, "submitted": 1}})
                 bot.send_message(chat_id, f"✅ ولت کاربر `{target_uid}` با موفقیت به مقدار جدید تغییر یافت:\n`{text}`", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
                 return
 
@@ -2767,24 +2818,11 @@ def handle_all_messages(message):
             bot.send_message(chat_id=chat_id, text=link_text)
         return
     elif text in [LANG["fa"]["main_kb_daily"], LANG["en"]["main_kb_daily"]]:
-        user_data = get_user_data(user_id)
-        ref_count = user_data[0] if user_data else 0
-        if ref_count < REQUIRED_REFERRALS:
-            bot.send_message(chat_id, get_msg(user_id, "daily_locked", REQUIRED_REFERRALS))
-            return
-        current_time = int(time.time())
-        last_daily = user_data[4] if user_data else 0
-        if current_time - last_daily < 86400:
-            remaining = 86400 - (current_time - last_daily)
-            hours = remaining // 3600
-            minutes = (remaining % 3600) // 60
-            bot.send_message(chat_id, get_msg(user_id, "daily_already", hours, minutes))
-        else:
-            users_col.update_one(
-                {"user_id": user_id},
-                {"$set": {"last_daily": current_time}, "$inc": {"daily_count": 1}}
-            )
+        try:
+            claim_bot_daily(user_id)
             bot.send_message(chat_id, get_msg(user_id, "daily_success", DAILY_REWARD))
+        except PortalError as error:
+            bot.send_message(chat_id, portal_bridge.error_text(error, user_id))
         return
     elif text in [LANG["fa"]["main_kb_guide"], LANG["en"]["main_kb_guide"]]:
         guide_text = get_msg(user_id, "wallet_guide_text")
@@ -2872,8 +2910,15 @@ def handle_all_messages(message):
             bot.send_message(chat_id, get_msg(user_id, "wallet_limit_err"))
             return
 
-        save_submission(user_id, wallet_address, submitted_status)
-        
+        if PORTAL_ENABLED:
+            try:
+                portal_service.update_wallet(user_id, wallet_address)
+            except PortalError as error:
+                bot.send_message(chat_id, portal_bridge.error_text(error, user_id))
+                return
+        else:
+            save_submission(user_id, wallet_address, submitted_status)
+
         if submitted_status == 0:
             bot.send_message(chat_id, get_msg(user_id, "wallet_saved"))
         else:
@@ -3124,28 +3169,12 @@ def handle_callbacks(call):
         except Exception:
             bot.send_message(chat_id=chat_id, text=link_text)
     elif call.data == "daily_bonus":
-        if not check_membership(user_id):
-            bot.answer_callback_query(call.id, "❌ ابتدا در کانال عضو شوید!", show_alert=True)
-            return
-        user_data = get_user_data(user_id)
-        ref_count = user_data[0] if user_data else 0
-        
-        if ref_count < REQUIRED_REFERRALS:
-            bot.answer_callback_query(call.id, "⚠️ پاداش روزانه قفل است!", show_alert=True)
-            return
-            
-        current_time = int(time.time())
-        last_daily = user_data[4] if user_data else 0
-        
-        if current_time - last_daily < 86400:
-            bot.answer_callback_query(call.id, "⏳ شما قبلاً پاداش امروز خود را دریافت کرده‌اید!", show_alert=True)
-        else:
-            users_col.update_one(
-                {"user_id": user_id},
-                {"$set": {"last_daily": current_time}, "$inc": {"daily_count": 1}}
-            )
-            bot.answer_callback_query(call.id, "🎁 تبریک! پاداش روزانه اضافه شد.", show_alert=True)
+        try:
+            claim_bot_daily(user_id)
+            bot.answer_callback_query(call.id, portal_bridge.text(user_id, "🎁 پاداش روزانه ثبت شد.", "🎁 Daily reward recorded."), show_alert=True)
             show_main_menu(chat_id, user_id, message_id=call.message.message_id, edit=True)
+        except PortalError as error:
+            bot.answer_callback_query(call.id, portal_bridge.error_text(error, user_id), show_alert=True)
     elif call.data == "wallet_guide":
         if not check_membership(user_id):
             bot.answer_callback_query(call.id, "❌ ابتدا در کانال عضو شوید!", show_alert=True)
@@ -3238,6 +3267,10 @@ def handle_callbacks(call):
             bot.send_message(chat_id, get_msg(user_id, "submit_new_mode"))
 
 if __name__ == "__main__":
+    if PORTAL_ENABLED:
+        if not portal_service.store.ready():
+            raise RuntimeError("Portal requires MongoDB transaction support; keep PORTAL_ENABLED=0 until ready")
+        portal_service.store.ensure_indexes()
     print("Bot is starting with MongoDB & Dual-Language Support...")
     bot.delete_webhook(drop_pending_updates=True)
     time.sleep(2)
@@ -3251,3 +3284,4 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"Polling error: {e}")
             time.sleep(10)
+
