@@ -984,7 +984,7 @@ def register_user_after_verify(user_id, referrer_id):
         })
         
         if valid_referrer:
-            users_col.update_one({"user_id": valid_referrer}, {"$inc": {"ref_count": 1}})
+            users_col.update_one({"user_id": valid_referrer}, {"$inc": {"ref_count": 1}}, upsert=True)
             try:
                 ref_user = users_col.find_one({"user_id": valid_referrer})
                 current_refs = ref_user.get("ref_count", 1) if ref_user else 1
@@ -1015,7 +1015,7 @@ def register_user_after_verify(user_id, referrer_id):
                 {"user_id": user_id}, 
                 {"$set": {"verified": 1, "referred_by": valid_referrer}}
             )
-            users_col.update_one({"user_id": valid_referrer}, {"$inc": {"ref_count": 1}})
+            users_col.update_one({"user_id": valid_referrer}, {"$inc": {"ref_count": 1}}, upsert=True)
             try:
                 ref_user = users_col.find_one({"user_id": valid_referrer})
                 current_refs = ref_user.get("ref_count", 1) if ref_user else 1
@@ -1688,14 +1688,22 @@ def claim_bot_daily(user_id):
         raise PortalError("daily_cooldown", 409)
     return {"amount": DAILY_REWARD}
 
-@bot.message_handler(commands=['start', 'menu'])
+@bot.message_handler(commands=['start', 'menu', 'register'])
 def send_welcome(message):
     user_id = message.from_user.id
+    command = (message.text or "").split()[0].split("@")[0]
+    registration_requested = command == "/register"
+
+    if registration_requested and message.chat.type != "private":
+        bot.send_message(message.chat.id, "برای ثبت‌نام، در گفت‌وگوی خصوصی ربات /register را بفرست. / Send /register in the bot's private chat.")
+        return
     
-    if is_admin(user_id):
+    if is_admin(user_id) and not registration_requested:
+        # /start and /menu return to management and cancel a pending captcha.
+        captcha_col.delete_one({"user_id": user_id})
         bot.send_message(
             user_id, 
-            "👑 *به پنل مدیریت خوش آمدید.*\nاز دکمه‌های منوی پایین استفاده کنید.", 
+            "👑 *به پنل مدیریت خوش آمدید.*\nاز دکمه‌های منوی پایین استفاده کنید.\nبرای ثبت‌نام کاربری، /register را بفرستید.",
             reply_markup=get_admin_reply_markup(), 
             parse_mode="Markdown"
         )
@@ -1724,13 +1732,16 @@ def send_welcome(message):
         return
 
     user_data = get_user_data(user_id)
-    if PORTAL_ENABLED and len(args) > 1 and args[1] == "portal" and user_data and user_data[3] >= 2:
+    if PORTAL_ENABLED and len(args) > 1 and args[1] == "portal" and user_data and user_data[3] >= 1:
         portal_bridge.send_login(message)
         return
-    if user_data and user_data[3] >= 2:
+    if user_data and user_data[3] >= 1:
         if not check_membership(user_id):
             ask_to_join(message.chat.id, referrer_id if referrer_id else 0, user_id)
             return
+        if referrer_id:
+            # Keep the existing attribution rule for users without a referrer.
+            register_user_after_verify(user_id, referrer_id)
         show_main_menu(message.chat.id, user_id)
         return
 
@@ -2289,7 +2300,8 @@ def handle_all_messages(message):
     persian_to_english = str.maketrans('۰۱۲۳۴۵۶۷۸۹', '0123456789')
     text = text.translate(persian_to_english)
     
-    if is_admin(user_id):
+    # An admin explicitly registering must be able to answer the usual captcha.
+    if is_admin(user_id) and not captcha_col.find_one({"user_id": user_id}):
         admin_state = settings_col.find_one({"key": "admin_state"})
         if admin_state:
             state_val = admin_state.get("state")
