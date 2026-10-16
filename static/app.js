@@ -28,8 +28,50 @@ async function api(path, method="GET", data) {
  return result;
 }
 let toastTimer;
-function toast(message, error=false) {$("toast").textContent=message; $("toast").classList.toggle("error",error); $("toast").hidden=false; clearTimeout(toastTimer); toastTimer=setTimeout(() => $("toast").hidden=true,5500);}
-async function busy(element, action) {if (element?.disabled) return; if(element) element.disabled=true; try {await action();} catch(error) {toast(errorText(error),true); if(error.status===401) showLogin();} finally {if(element?.isConnected) element.disabled=false;}}
+function toast(message, error=false) {
+ clearTimeout(toastTimer);
+ if ($("modal").open) {
+  // A modal dialog is in the browser's top layer; body toasts sit behind it.
+  let feedback = $("modal-feedback");
+  if (!feedback) {
+   feedback = document.createElement("div");
+   feedback.id = "modal-feedback";
+   const footer = $("modal-body").querySelector(".modal-footer");
+   if (footer) footer.before(feedback);
+   else $("modal-body").append(feedback);
+  }
+  feedback.className = error ? "notice red" : "notice";
+  feedback.setAttribute("role", error ? "alert" : "status");
+  feedback.textContent = message;
+  $("toast").hidden = true;
+  feedback.scrollIntoView({block:"nearest"});
+  return;
+ }
+ $("toast").textContent=message;
+ $("toast").classList.toggle("error",error);
+ $("toast").hidden=false;
+ toastTimer=setTimeout(() => $("toast").hidden=true,5500);
+}
+async function busy(element, action) {
+ if (element?.disabled) return;
+ const label = element?.innerHTML;
+ if (element) {
+  element.disabled=true;
+  element.setAttribute("aria-busy","true");
+  if (element.form && element.type === "submit") element.textContent=t("در حال ارسال…","Submitting…");
+ }
+ try {await action();}
+ catch(error) {
+  if(error.status===401) showLogin();
+  toast(errorText(error),true);
+ } finally {
+  if(element?.isConnected) {
+   element.disabled=false;
+   element.removeAttribute("aria-busy");
+   element.innerHTML=label;
+  }
+ }
+}
 const field = (item,key) => state.lang === "en" && item[`${key}_en`] ? item[`${key}_en`] : item[key];
 const recurrence = (value) => ({once:t("یک‌بار","One-time"),daily:t("روزانه","Daily"),weekly:t("هفتگی","Weekly")}[value]);
 function statusBadge(status) {const labels={available:t("آماده انجام","Available"),attempted:t("تلاش دوباره","Try again"),completed:t("تکمیل شده","Completed"),pending:t("در انتظار بررسی","In review"),rejected:t("نیاز به اصلاح","Needs revision"),expired:t("پایان یافته","Ended"),exhausted:t("ظرفیت / تلاش پایان یافت","No capacity / attempts"),paused:t("متوقف شده","Paused"),recorded:t("پرداخت ثبت شد","Payment recorded")}; const color=status==="completed"||status==="recorded" ? "green" : status==="pending" ? "gold" : status==="rejected" ? "red" : "";return `<span class="badge ${color}">${e(labels[status]||status)}</span>`;}
@@ -64,7 +106,7 @@ function renderAccount() {const me=state.me;const pending=me.payments.some(p=>p.
 function renderAdmin() {const a=state.admin;if(!a)return `<div class="loading">${e(t("در حال دریافت مدیریت…","Loading management…"))}</div>`;const missionNames=Object.fromEntries(a.missions.map(m=>[m.id,m.title]));return `${heading("COMMUNITY MANAGEMENT",t("مدیریت کمپین","Campaign management"),t("مأموریت‌ها و درخواست‌ها را از همین‌جا مدیریت کن.","Manage missions and review requests in one place."),`<button class="btn primary" data-action="new-mission">+ ${e(t("مأموریت جدید","New mission"))}</button>`)}<div class="admin-stats">${[[a.users,t("کاربر ثبت‌شده","Registered users")],[a.missions.length,t("مأموریت","Missions")],[a.submissions.length,t("مدرک در انتظار بررسی","Submissions to review")],[a.payments.length,t("درخواست پرداخت","Payment requests")]].map(([value,label])=>`<article class="card admin-stat"><strong>${n(value)}</strong><span>${e(label)}</span></article>`).join("")}</div><article class="card admin-section"><div class="section-heading"><h2>${e(t("مأموریت‌های کمپین","Campaign missions"))}</h2><span class="badge">${e(t("ذخیره اولیه به‌صورت غیرفعال","New missions start inactive"))}</span></div>${a.missions.length?a.missions.map(m=>`<div class="admin-row"><div><h3>${e(field(m,"title"))} <span class="badge ${m.active?"green":""}">${e(m.active?t("فعال","Active"):t("متوقف","Inactive"))}</span></h3><p>${n(m.reward)} PRS · ${e(recurrence(m.recurrence))} · ${e(t("تکمیل‌شده: ","Completed: "))}${n(m.completed)} / ${n(m.max_claims)}</p><p>${e(t("مصرف بودجه: ","Budget spent: "))}${n(m.spent)} / ${n(m.budget)} PRS · ${e(t("رزروشده: ","Reserved: "))}${n(m.reserved||0)}</p></div><div class="admin-row-actions"><button class="btn ghost small" data-action="toggle-mission" data-id="${e(m.id)}" data-active="${m.active?"0":"1"}">${e(m.active?t("توقف","Pause"):t("فعال‌کردن","Activate"))}</button></div></div>`).join(""):empty(t("اولین مأموریتت را بساز.","Create your first mission."))}</article><article class="card admin-section"><div class="section-heading"><h2>${e(t("مدارک در انتظار بررسی","Submissions to review"))}</h2></div>${a.submissions.length?a.submissions.map(s=>`<div class="admin-row"><div><h3>${e(missionNames[s.mission_id]||t("مأموریت","Mission"))}</h3><p>${e(t("کاربر ","User "))}${e(s.user_id)} · ${n(s.reward)} PRS · ${e(date(s.created_at))}</p></div><button class="btn soft small" data-action="review-submission" data-id="${e(s.id)}">${e(t("بررسی مدرک","Review submission"))}</button></div>`).join(""):empty(t("همه مدارک بررسی شده‌اند.","No submissions are waiting."),"check")}</article><article class="card admin-section"><div class="section-heading"><h2>${e(t("درخواست‌های پرداخت","Payment requests"))}</h2></div><div class="notice">${icon("info")}${e(t("پرداخت را خارج از پنل انجام بده و سپس شناسه تراکنش را اینجا ثبت کن. این پنل توکن منتقل نمی‌کند.","Make the transfer outside this portal, then record its transaction hash here. This portal does not transfer tokens."))}</div>${a.payments.length?a.payments.map(p=>`<div class="admin-row"><div><h3>${e(t("کاربر ","User "))}${e(p.user_id)}</h3><p>${n(p.amount)} PRS · ${e(date(p.created_at,true))}</p></div><button class="btn ghost small" data-action="review-payment" data-id="${e(p.id)}">${e(t("بررسی و ثبت","Review & record"))}</button></div>`).join(""):empty(t("درخواست پرداختی در انتظار نیست.","No payment requests are waiting."),"wallet")}</article><article class="card admin-section"><div class="section-heading"><h2>${e(t("پیام‌های پشتیبانی","Support messages"))}</h2></div>${a.tickets.length?a.tickets.map(ticket=>`<div class="admin-row"><div><h3>${e(t("کاربر ","User "))}${e(ticket.user_id)}</h3><p>${e(ticket.message.slice(0,100))}</p></div><button class="btn ghost small" data-action="reply-ticket" data-id="${e(ticket.id)}">${e(t("پاسخ","Reply"))}</button></div>`).join(""):empty(t("پیام بی‌پاسخی وجود ندارد.","No unanswered messages."),"mail")}</article>`;}
 function render() {if(!state.me)return;renderNav();const renderers={dashboard:renderDashboard,missions:renderMissions,referrals:renderReferrals,leaderboard:renderLeaderboard,account:renderAccount,admin:renderAdmin};$("page").innerHTML=(renderers[state.route]||renderDashboard)();decorateHeritageRoute();}
 async function navigate(route) {if(!["dashboard","missions","referrals","leaderboard","account","admin"].includes(route))route="dashboard";if(route==="admin"&&!state.me?.is_admin)route="dashboard";state.route=route;history.replaceState(null,"",`#${route}`);if(route==="admin")state.admin=await api("/api/admin/overview");render();$("page").focus({preventScroll:true});window.scrollTo({top:0,behavior:"instant"});}
-function showLogin() {clearHeritageReward();state.me=null;state.csrf="";$("app-shell").hidden=true;$("login-screen").hidden=false;}
+function showLogin() {if($("modal").open)closeModal();clearHeritageReward();state.me=null;state.csrf="";$("app-shell").hidden=true;$("login-screen").hidden=false;}
 async function refresh() {const session=await api("/api/session");state.me=session.profile;state.csrf=session.csrf;state.offset=state.me.server_time-Math.floor(Date.now()/1000);const [missions,board]=await Promise.all([api("/api/missions"),api("/api/leaderboard")]);state.missions=missions.missions;state.rows=board.rows;$("user-avatar").textContent=String(state.me.user_id).slice(-2);$("login-screen").hidden=true;$("app-shell").hidden=false;if(state.route==="admin")state.admin=await api("/api/admin/overview");render();}
 function modal(title,html) {$("modal-title").textContent=title;$("modal-body").innerHTML=html;$("modal").showModal();}
 function closeModal() {$("modal").close();$("modal-body").innerHTML="";}
