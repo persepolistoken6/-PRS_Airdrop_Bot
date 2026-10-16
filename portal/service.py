@@ -64,7 +64,8 @@ class PortalService:
 
     def _user(self, tx, user_id):
         user = tx.get("users", user_id)
-        if not user or int(user.get("verified", 0)) < 2:
+        # The existing Telegram registration flow stores verified=1 on success.
+        if not user or int(user.get("verified", 0)) < 1:
             raise PortalError("registration_required", 403)
         return user
 
@@ -150,7 +151,7 @@ class PortalService:
         history = sorted([h for h in self.store.all("portal_history") if h["user_id"] == user_id], key=lambda h: h["created_at"], reverse=True)[:30]
         payments = sorted([p for p in self.store.all("portal_payments") if p["user_id"] == user_id], key=lambda p: p["created_at"], reverse=True)[:20]
         return {"user_id": user_id, "is_admin": admin, "language": user.get("lang", "fa"),
-            "registered": int(user.get("verified", 0)) >= 2,
+            "registered": int(user.get("verified", 0)) >= 1,
             "earned": total, "paid": paid, "unpaid": max(0, total - paid),
             "referrals": int(user.get("ref_count", 0)), "required_referrals": REQUIRED_REFERRALS,
             "daily_count": int(user.get("daily_count", 0)), "daily_reward": DAILY_REWARD,
