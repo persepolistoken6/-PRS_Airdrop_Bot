@@ -9,7 +9,7 @@ import re
 from uuid import uuid4
 from datetime import datetime
 from telebot import TeleBot
-from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
+from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from pymongo import MongoClient
 from portal.settings import Settings, REQUIRED_REFERRALS, BASE_REWARD, EXTRA_REWARD, DAILY_REWARD, MAX_TOTAL_TOKENS_LIMIT
 from portal.service import build_service, PortalError
@@ -30,6 +30,7 @@ users_col = db.users
 captcha_col = db.captcha
 settings_col = db.bot_settings
 PORTAL_ENABLED = os.getenv("PORTAL_ENABLED", "0") == "1"
+BOT_PORTAL_ONLY = PORTAL_ENABLED and os.getenv("BOT_PORTAL_ONLY", "1") == "1"
 
 BOT_USERNAME = os.getenv("BOT_USERNAME", "PRS_Airdrop_Bot")
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@persepolisToken6")
@@ -1550,7 +1551,8 @@ def send_captcha(chat_id, user_id, referrer_id):
 
     captcha_col.replace_one(
         {"user_id": user_id},
-        {"user_id": user_id, "num1": num1, "num2": num2, "answer": correct_ans, "pending_referrer": referrer_id},
+        {"user_id": user_id, "num1": num1, "num2": num2, "answer": correct_ans,
+         "pending_referrer": referrer_id, "solved_at": 0},
         upsert=True
     )
 
@@ -1663,8 +1665,66 @@ portal_bridge = BotBridge(
     lambda uid: get_admin_reply_markup() if is_admin(uid) else get_main_reply_markup(uid),
     [value for messages in LANG.values() for key, value in messages.items() if key.startswith("main_kb_")]
 )
-if PORTAL_ENABLED:
+if PORTAL_ENABLED and not BOT_PORTAL_ONLY:
     portal_bridge.install()
+
+
+def send_portal_entry(user_id):
+    """The gateway always sends personal login links in the user's private chat."""
+    user = users_col.find_one({"user_id": user_id}) or {}
+    if int(user.get("verified", 0)) < 1:
+        pending = captcha_col.find_one({"user_id": user_id})
+        if pending:
+            if pending.get("solved_at"):
+                ask_to_join(user_id, pending["pending_referrer"] or 0, user_id)
+            else:
+                bot.send_message(user_id, get_msg(user_id, "captcha_title", pending["num1"], pending["num2"]))
+        else:
+            send_language_selection(user_id, 0)
+        return
+    if not check_membership(user_id):
+        ask_to_join(user_id, 0, user_id)
+        return
+    bot.send_message(user_id, portal_bridge.text(user_id,
+        "🌐 مأموریت‌ها، دعوت دوستان، پاداش‌ها، کیف پول و پشتیبانی در پنل سایت انجام می‌شوند. دکمه ورود را در پیام بعدی بزن.",
+        "🌐 Missions, referrals, rewards, wallet and support are available in the website portal. Use the sign-in button in the next message."),
+        reply_markup=ReplyKeyboardRemove())
+    message = type("PrivateMessage", (), {
+        "from_user": type("User", (), {"id": user_id})(),
+        "chat": type("Chat", (), {"id": user_id, "type": "private"})(),
+    })()
+    portal_bridge.send_login(message)
+
+
+if BOT_PORTAL_ONLY:
+    # These handlers precede every legacy command, upload and reward handler.
+    @bot.message_handler(content_types=["text", "document", "photo", "video", "audio", "voice", "sticker", "contact", "location", "animation", "video_note"])
+    def portal_only_message(message):
+        if message.chat.type != "private":
+            bot.send_message(message.chat.id, "برای ثبت‌نام و ورود، در گفت‌وگوی خصوصی ربات /start را بفرست. / Open the bot privately and send /start.")
+            return
+        text = (message.text or "").strip()
+        command = text.split()[0].split("@")[0] if text else ""
+        if command in ("/start", "/menu", "/register"):
+            send_welcome(message)
+        elif text and not text.startswith("/") and captcha_col.find_one({"user_id": message.from_user.id}):
+            # Only the registration captcha can consume a text reply here.
+            handle_all_messages(message)
+        else:
+            send_portal_entry(message.from_user.id)
+
+    @bot.callback_query_handler(func=lambda call: True)
+    def portal_only_callback(call):
+        uid = call.from_user.id
+        message = getattr(call, "message", None)
+        private = message and getattr(message.chat, "type", None) == "private" and message.chat.id == uid
+        data = call.data or ""
+        if private and (re.fullmatch(r"setlang_(fa|en)_\d+", data) or re.fullmatch(r"check_join_\d+", data)):
+            handle_callbacks(call)
+            return
+        bot.answer_callback_query(call.id, portal_bridge.text(uid,
+            "فعالیت‌ها از پنل سایت انجام می‌شوند.", "Please use the website portal."))
+        send_portal_entry(uid)
 
 def claim_bot_daily(user_id):
     if PORTAL_ENABLED:
@@ -1694,11 +1754,11 @@ def send_welcome(message):
     command = (message.text or "").split()[0].split("@")[0]
     registration_requested = command == "/register"
 
-    if registration_requested and message.chat.type != "private":
+    if (registration_requested or BOT_PORTAL_ONLY) and message.chat.type != "private":
         bot.send_message(message.chat.id, "برای ثبت‌نام، در گفت‌وگوی خصوصی ربات /register را بفرست. / Send /register in the bot's private chat.")
         return
     
-    if is_admin(user_id) and not registration_requested:
+    if is_admin(user_id) and not registration_requested and not BOT_PORTAL_ONLY:
         # /start and /menu return to management and cancel a pending captcha.
         captcha_col.delete_one({"user_id": user_id})
         bot.send_message(
@@ -1719,10 +1779,23 @@ def send_welcome(message):
 
     args = message.text.split()
     referrer_id = int(args[1]) if len(args) > 1 and args[1].isdigit() else None
+    if not referrer_id:
+        pending = captcha_col.find_one({"user_id": user_id})
+        if pending:
+            referrer_id = pending.get("pending_referrer") or None
+        if not referrer_id:
+            user = users_col.find_one({"user_id": user_id}) or {}
+            if int(user.get("verified", 0)) < 1:
+                referrer_id = user.get("registration_referrer") or None
     
     if referrer_id == user_id:
         bot.send_message(message.chat.id, get_msg(user_id, "self_ref"), parse_mode="Markdown")
         return
+
+    user = users_col.find_one({"user_id": user_id}) or {}
+    if referrer_id and int(user.get("verified", 0)) < 1:
+        # Preserve attribution if the user opens the website before selecting a language.
+        users_col.update_one({"user_id": user_id}, {"$set": {"registration_referrer": referrer_id}}, upsert=True)
 
     if message.text and message.text.startswith('/menu'):
         if not check_membership(user_id):
@@ -1733,7 +1806,10 @@ def send_welcome(message):
 
     user_data = get_user_data(user_id)
     if PORTAL_ENABLED and len(args) > 1 and args[1] == "portal" and user_data and user_data[3] >= 1:
-        portal_bridge.send_login(message)
+        if BOT_PORTAL_ONLY:
+            send_portal_entry(user_id)
+        else:
+            portal_bridge.send_login(message)
         return
     if user_data and user_data[3] >= 1:
         if not check_membership(user_id):
@@ -2133,6 +2209,9 @@ def show_stats_direct(chat_id):
     bot.send_message(chat_id, f"📊 آمار کلی ربات:\n\n👤 کل کاربران استارت کرده: {t_u}\n📝 تعداد ثبت‌فرم‌ها: {t_s}\n💰 پرداخت‌شده‌ها: {t_p}\n🪙 کل توکن توزیع‌شده: {total_tokens_all:,} PRS", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
 
 def show_main_menu(chat_id, user_id, message_id=None, edit=False):
+    if BOT_PORTAL_ONLY:
+        send_portal_entry(user_id)
+        return
     if is_airdrop_finished():
         bot.send_message(chat_id, get_msg(user_id, "airdrop_finished"))
         return
@@ -2765,13 +2844,14 @@ def handle_all_messages(message):
         referrer_id = captcha_data["pending_referrer"]
 
         if text.isdigit() and int(text) == correct_ans:
-            captcha_col.delete_one({"user_id": user_id})
+            captcha_col.update_one({"user_id": user_id}, {"$set": {"solved_at": int(time.time())}})
             
             if not check_membership(user_id):
                 ask_to_join(chat_id, referrer_id if referrer_id else 0, user_id)
                 return
 
             register_user_after_verify(user_id, referrer_id)
+            captcha_col.delete_one({"user_id": user_id})
             show_main_menu(chat_id, user_id)
         else:
             new_n1 = random.randint(1, 10)
@@ -2780,7 +2860,7 @@ def handle_all_messages(message):
 
             captcha_col.update_one(
                 {"user_id": user_id},
-                {"$set": {"num1": new_n1, "num2": new_n2, "answer": new_correct_ans}}
+                {"$set": {"num1": new_n1, "num2": new_n2, "answer": new_correct_ans, "solved_at": 0}}
             )
 
             wrong_text = get_msg(user_id, "captcha_wrong", new_n1, new_n2)
@@ -3109,6 +3189,9 @@ def handle_callbacks(call):
         parts = call.data.split("_")
         chosen_lang = parts[1]
         referrer_id = int(parts[2])
+        user = users_col.find_one({"user_id": user_id}) or {}
+        if int(user.get("verified", 0)) < 1 and user.get("registration_referrer"):
+            referrer_id = user["registration_referrer"]
         
         users_col.update_one(
             {"user_id": user_id},
@@ -3142,6 +3225,16 @@ def handle_callbacks(call):
 
     if call.data.startswith("check_join_"):
         referrer_id = int(call.data.split("_")[2])
+        user = users_col.find_one({"user_id": user_id}) or {}
+        captcha_data = captcha_col.find_one({"user_id": user_id})
+        if int(user.get("verified", 0)) < 1:
+            solved_at = (captcha_data or {}).get("solved_at", 0)
+            if not solved_at or int(time.time()) - solved_at > 900:
+                bot.answer_callback_query(call.id, "ابتدا سؤال امنیتی را درست پاسخ بده. / Answer the security question first.", show_alert=True)
+                send_captcha(chat_id, user_id, (captcha_data or {}).get("pending_referrer", referrer_id))
+                return
+            # Referral attribution comes from the solved challenge, not the button payload.
+            referrer_id = captcha_data.get("pending_referrer", 0)
         
         if not check_membership(user_id):
             no_join_msg = "❌ شما هنوز در کانال عضو نشده‌اید!" if get_msg(user_id, "lang")=="fa" else "❌ You have not joined the channel yet!"
@@ -3151,6 +3244,7 @@ def handle_callbacks(call):
         ok_join_msg = "✅ عضویت شما تایید شد!" if get_msg(user_id, "lang")=="fa" else "✅ Membership verified!"
         bot.answer_callback_query(call.id, ok_join_msg)
         register_user_after_verify(user_id, referrer_id if referrer_id != 0 else None)
+        captcha_col.delete_one({"user_id": user_id})
         
         try:
             bot.delete_message(chat_id, call.message.message_id)
