@@ -5,12 +5,12 @@ import secrets
 from functools import wraps
 from urllib.parse import urlsplit
 
-from flask import Flask, g, jsonify, render_template, request
+from flask import Flask, Response, g, jsonify, render_template, request
 from werkzeug.exceptions import HTTPException
 
 from portal.demo import seed_demo
 from portal.service import PortalError, build_service, digest
-from portal.settings import Settings
+from portal.settings import CAMPAIGN_TIMEZONE, Settings
 
 def create_app(settings=None, service=None):
     settings = settings or Settings.from_env()
@@ -102,7 +102,8 @@ def create_app(settings=None, service=None):
     @app.get("/api/bootstrap")
     def bootstrap():
         return jsonify(demo=settings.demo, bot_url=f"https://t.me/{settings.bot_username}?start=portal",
-                       channel_url=f"https://t.me/{settings.channel.lstrip('@')}", timezone=settings.timezone)
+                       channel_url=f"https://t.me/{settings.channel.lstrip('@')}", timezone=CAMPAIGN_TIMEZONE,
+                       server_time=service.now(), phase=2)
 
     def finish_login(result):
         response = jsonify(csrf=result["csrf"])
@@ -164,6 +165,16 @@ def create_app(settings=None, service=None):
     def daily():
         return jsonify(service.claim_daily(g.user_id))
 
+    @app.post("/api/mining/start")
+    @protected()
+    def start_mining():
+        return jsonify(service.start_mining(g.user_id))
+
+    @app.post("/api/mining/claim")
+    @protected()
+    def claim_mining():
+        return jsonify(service.claim_mining(g.user_id, body().get("cycle_id")))
+
     @app.get("/api/leaderboard")
     @protected()
     def leaderboard():
@@ -178,7 +189,7 @@ def create_app(settings=None, service=None):
     @app.post("/api/payments")
     @protected()
     def payment():
-        return jsonify(payment=service.request_payment(g.user_id))
+        return jsonify(payment=service.request_payment(g.user_id, body().get("amount") if request.is_json else None))
 
     @app.post("/api/tickets")
     @protected()
@@ -189,6 +200,43 @@ def create_app(settings=None, service=None):
     @protected(admin=True)
     def admin_overview():
         return jsonify(service.admin_overview(g.user_id))
+
+    @app.post("/api/admin/controls")
+    @protected(admin=True)
+    def admin_controls():
+        return jsonify(controls=service.admin_controls(g.user_id, body()))
+
+    @app.get("/api/admin/users")
+    @protected(admin=True)
+    def admin_users():
+        try:
+            page = int(request.args.get("page", "1"))
+        except ValueError:
+            raise PortalError("invalid_request") from None
+        return jsonify(service.admin_users(g.user_id, request.args.get("q", ""), page))
+
+    @app.get("/api/admin/users/<int:user_id>")
+    @protected(admin=True)
+    def admin_user_detail(user_id):
+        return jsonify(service.admin_user_detail(g.user_id, user_id))
+
+    @app.post("/api/admin/users/<int:user_id>/action")
+    @protected(admin=True)
+    def admin_user_action(user_id):
+        return jsonify(service.admin_user_action(g.user_id, user_id, body()))
+
+    @app.post("/api/admin/users/<int:user_id>/wallet")
+    @protected(admin=True)
+    def admin_wallet(user_id):
+        service.admin_update_wallet(g.user_id, user_id, body().get("wallet"))
+        return jsonify(ok=True)
+
+    @app.get("/api/admin/export/<kind>")
+    @protected(admin=True)
+    def admin_export(kind):
+        result = service.export_report(g.user_id, kind)
+        return Response(result, content_type="text/csv; charset=utf-8", headers={
+            "Content-Disposition": f'attachment; filename="prs-{kind}.csv"'})
 
     @app.post("/api/admin/missions")
     @protected(admin=True)

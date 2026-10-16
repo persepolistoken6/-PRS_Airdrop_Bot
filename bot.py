@@ -511,6 +511,11 @@ def get_global_total_distributed_tokens():
 def is_airdrop_finished():
     return get_global_total_distributed_tokens() >= MAX_TOTAL_TOKENS_LIMIT
 
+def remaining_reward_capacity():
+    reserved = portal_service.mining_config()["reserved"] if BOT_PORTAL_ONLY else 0
+    return max(0, MAX_TOTAL_TOKENS_LIMIT - get_global_total_distributed_tokens() - reserved)
+
+
 def get_bonus_eligible_filter(operation_id=None):
     query = {
         "ref_count": {"$gte": REQUIRED_REFERRALS},
@@ -522,6 +527,15 @@ def get_bonus_eligible_filter(operation_id=None):
     return query
 
 def execute_global_bonus(admin_chat_id, operation_id, amount):
+    if BOT_PORTAL_ONLY:
+        try:
+            result = portal_service.admin_bot_bonus(admin_chat_id, operation_id, amount)
+            bot.send_message(admin_chat_id,
+                f"✅ پاداش همگانی ثبت شد.\n👥 تعداد: {result['count']:,}\n🎁 هر نفر: {amount:,} PRS\n🪙 مجموع: {result['total']:,} PRS\nنتیجه در حساب سایت کاربران نمایش داده می‌شود.",
+                reply_markup=get_admin_reply_markup())
+        except PortalError as error:
+            bot.send_message(admin_chat_id, portal_bridge.error_text(error, admin_chat_id), reply_markup=get_admin_reply_markup())
+        return
     eligible_users = list(users_col.find(
         get_bonus_eligible_filter(operation_id),
         {"user_id": 1, "lang": 1}
@@ -539,7 +553,7 @@ def execute_global_bonus(admin_chat_id, operation_id, amount):
     total_cost = amount * eligible_count
     current_total = get_global_total_distributed_tokens()
     if current_total + total_cost > MAX_TOTAL_TOKENS_LIMIT:
-        remaining_capacity = max(0, MAX_TOTAL_TOKENS_LIMIT - current_total)
+        remaining_capacity = remaining_reward_capacity()
         bot.send_message(
             admin_chat_id,
             f"❌ عملیات انجام نشد؛ مجموع پاداش از سقف ۳۰۰ میلیون عبور می‌کند.\n\n"
@@ -661,6 +675,14 @@ def update_user_delivery_status(user_id, success, error=None):
     return blocked
 
 def execute_manual_bonus(admin_chat_id, target_uid, operation_id, amount):
+    if BOT_PORTAL_ONLY:
+        try:
+            result = portal_service.admin_bot_bonus(admin_chat_id, operation_id, amount, target_uid)
+            text = "این عملیات قبلاً ثبت شده است." if result["already_completed"] else f"✅ پاداش {amount:,} PRS برای کاربر {target_uid} ثبت شد.\nنتیجه در حساب سایت کاربر نمایش داده می‌شود."
+            bot.send_message(admin_chat_id, text, reply_markup=get_admin_reply_markup())
+        except PortalError as error:
+            bot.send_message(admin_chat_id, portal_bridge.error_text(error, admin_chat_id), reply_markup=get_admin_reply_markup())
+        return
     user = users_col.find_one({"user_id": target_uid})
     if not user:
         bot.send_message(
@@ -671,7 +693,7 @@ def execute_manual_bonus(admin_chat_id, target_uid, operation_id, amount):
         return
 
     current_total = get_global_total_distributed_tokens()
-    remaining_capacity = max(0, MAX_TOTAL_TOKENS_LIMIT - current_total)
+    remaining_capacity = remaining_reward_capacity()
     if amount > remaining_capacity:
         bot.send_message(
             admin_chat_id,
@@ -945,9 +967,12 @@ def check_membership(user_id):
     return False
 
 def get_admin_reply_markup():
-    markup = ReplyKeyboardMarkup(resize_keyboard=True)
+    markup = ReplyKeyboardMarkup(
+        resize_keyboard=True, is_persistent=True, one_time_keyboard=False,
+        input_field_placeholder="یکی از دکمه‌های مدیریت را بزن",
+    )
     if PORTAL_ENABLED and os.getenv("WEB_BASE_URL", "").strip():
-        markup.row(PANEL_LABELS[0])
+        markup.row("🌐 مدیریت سایت" if BOT_PORTAL_ONLY else PANEL_LABELS[0])
     markup.row("👝 مدیریت و تایید ولت‌ها", "📊 گزارش کلی توکن‌ها")
     markup.row("🔍 جستجوی کاربر (آیدی یا ولت)", "✏️ ویرایش ولت کاربر با آیدی")
     markup.row("📁 آپلود اکسل پرداختی‌ها", "🟢 اکسل پرداخت‌شده‌ها")
@@ -964,6 +989,8 @@ def get_admin_reply_markup():
     return markup
 
 def register_user_after_verify(user_id, referrer_id):
+    if BOT_PORTAL_ONLY:
+        return portal_service.register_gateway_user(user_id, referrer_id)
     user = users_col.find_one({"user_id": user_id})
     valid_referrer = referrer_id if (referrer_id and referrer_id != user_id) else None
     
@@ -1557,7 +1584,7 @@ def send_captcha(chat_id, user_id, referrer_id):
     )
 
     text = get_msg(user_id, "captcha_title", num1, num2)
-    bot.send_message(chat_id, text, parse_mode="Markdown")
+    bot.send_message(chat_id, text, parse_mode="Markdown", **({"reply_markup": ReplyKeyboardRemove()} if BOT_PORTAL_ONLY else {}))
 
 def send_database_backup(target_chat_id):
     try:
@@ -1672,6 +1699,9 @@ if PORTAL_ENABLED and not BOT_PORTAL_ONLY:
 def send_portal_entry(user_id):
     """The gateway always sends personal login links in the user's private chat."""
     user = users_col.find_one({"user_id": user_id}) or {}
+    if user.get("portal_suspended"):
+        bot.send_message(user_id, "حساب شما تعلیق شده است. / Your account is suspended.", reply_markup=ReplyKeyboardRemove())
+        return
     if int(user.get("verified", 0)) < 1:
         pending = captcha_col.find_one({"user_id": user_id})
         if pending:
@@ -1680,15 +1710,11 @@ def send_portal_entry(user_id):
             else:
                 bot.send_message(user_id, get_msg(user_id, "captcha_title", pending["num1"], pending["num2"]))
         else:
-            send_language_selection(user_id, 0)
+            send_captcha(user_id, user_id, user.get("registration_referrer") or 0)
         return
     if not check_membership(user_id):
         ask_to_join(user_id, 0, user_id)
         return
-    bot.send_message(user_id, portal_bridge.text(user_id,
-        "🌐 مأموریت‌ها، دعوت دوستان، پاداش‌ها، کیف پول و پشتیبانی در پنل سایت انجام می‌شوند. دکمه ورود را در پیام بعدی بزن.",
-        "🌐 Missions, referrals, rewards, wallet and support are available in the website portal. Use the sign-in button in the next message."),
-        reply_markup=ReplyKeyboardRemove())
     message = type("PrivateMessage", (), {
         "from_user": type("User", (), {"id": user_id})(),
         "chat": type("Chat", (), {"id": user_id, "type": "private"})(),
@@ -1696,12 +1722,89 @@ def send_portal_entry(user_id):
     portal_bridge.send_login(message)
 
 
+def gateway_welcome(message):
+    uid = message.from_user.id
+    user = users_col.find_one({"user_id": uid}) or {}
+    args = (message.text or "").split()
+    ref = int(args[1]) if len(args) > 1 and len(args[1]) <= 20 and args[1].isdecimal() else 0
+    if ref == uid:
+        ref = 0
+    if ref and not user.get("registration_referrer") and not user.get("referred_by"):
+        users_col.update_one({"user_id": uid}, {"$set": {"registration_referrer": ref}}, upsert=True)
+    if not user.get("lang") and int(user.get("verified", 0)) < 1:
+        lang = "fa" if getattr(message.from_user, "language_code", "fa").startswith("fa") else "en"
+        users_col.update_one({"user_id": uid}, {"$set": {"lang": lang}}, upsert=True)
+    send_portal_entry(uid)
+
+
+def gateway_captcha_reply(message):
+    uid = message.from_user.id
+    proof = captcha_col.find_one({"user_id": uid})
+    text = (message.text or "").strip().translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
+    if not proof:
+        send_portal_entry(uid)
+        return
+    if not re.fullmatch(r"[0-9]{1,3}", text) or int(text) != proof["answer"]:
+        send_captcha(uid, uid, proof.get("pending_referrer") or 0)
+        return
+    captcha_col.update_one({"user_id": uid}, {"$set": {"solved_at": int(time.time())}})
+    if not check_membership(uid):
+        ask_to_join(uid, proof.get("pending_referrer") or 0, uid)
+        return
+    register_user_after_verify(uid, proof.get("pending_referrer"))
+    captcha_col.delete_one({"user_id": uid})
+    send_portal_entry(uid)
+
+
+def send_admin_website(user_id):
+    """Keep the admin reply menu visible while issuing a private site login."""
+    if not is_admin(user_id):
+        return send_portal_entry(user_id)
+    captcha_col.delete_one({"user_id": user_id})
+    try:
+        url = portal_service.issue_login(user_id)
+        keyboard = InlineKeyboardMarkup()
+        keyboard.add(InlineKeyboardButton("🌐 ورود به مدیریت سایت", url=url))
+        bot.send_message(user_id, "🔐 مدیریت سایت؛ لینک شخصی یک‌بارمصرف با اعتبار ۵ دقیقه.\nبرای مدیریت در ربات، منوی پایین همچنان فعال است.",
+                         reply_markup=keyboard, protect_content=True)
+    except PortalError as error:
+        bot.send_message(user_id, portal_bridge.error_text(error, user_id), reply_markup=get_admin_reply_markup())
+
+
+def route_admin_message(message):
+    """Only server-configured admins, only in their own private conversation."""
+    if not is_admin(message.from_user.id) or message.chat.type != "private" or message.chat.id != message.from_user.id:
+        return
+    uid = message.from_user.id
+    text = (message.text or "").strip()
+    parts = text.split()
+    command = parts[0].split("@")[0] if parts else ""
+    if command in ("/panel", "/site") or text in (*PANEL_LABELS, "🌐 مدیریت سایت") or (command == "/start" and parts[1:] == ["portal"]):
+        send_admin_website(uid)
+    elif command in ("/start", "/menu", "/admin"):
+        captcha_col.delete_one({"user_id": uid})
+        admin_panel(message)
+    elif command == "/register":
+        gateway_welcome(message)
+    elif getattr(message, "content_type", "text") == "document":
+        handle_admin_documents(message)
+    elif text and not text.startswith("/") and captcha_col.find_one({"user_id": uid}):
+        gateway_captcha_reply(message)
+    else:
+        handle_all_messages(message)
+
+
 if BOT_PORTAL_ONLY:
     # These handlers precede every legacy command, upload and reward handler.
     @bot.message_handler(content_types=["text", "document", "photo", "video", "audio", "voice", "sticker", "contact", "location", "animation", "video_note"])
     def portal_only_message(message):
         if message.chat.type != "private":
-            bot.send_message(message.chat.id, "برای ثبت‌نام و ورود، در گفت‌وگوی خصوصی ربات /start را بفرست. / Open the bot privately and send /start.")
+            return
+        if is_admin(message.from_user.id):
+            try:
+                route_admin_message(message)
+            except PortalError as error:
+                bot.send_message(message.from_user.id, portal_bridge.error_text(error, message.from_user.id), reply_markup=get_admin_reply_markup())
             return
         text = (message.text or "").strip()
         command = text.split()[0].split("@")[0] if text else ""
@@ -1709,7 +1812,10 @@ if BOT_PORTAL_ONLY:
             send_welcome(message)
         elif text and not text.startswith("/") and captcha_col.find_one({"user_id": message.from_user.id}):
             # Only the registration captcha can consume a text reply here.
-            handle_all_messages(message)
+            try:
+                gateway_captcha_reply(message)
+            except PortalError as error:
+                bot.send_message(message.from_user.id, portal_bridge.error_text(error, message.from_user.id))
         else:
             send_portal_entry(message.from_user.id)
 
@@ -1719,8 +1825,31 @@ if BOT_PORTAL_ONLY:
         message = getattr(call, "message", None)
         private = message and getattr(message.chat, "type", None) == "private" and message.chat.id == uid
         data = call.data or ""
-        if private and (re.fullmatch(r"setlang_(fa|en)_\d+", data) or re.fullmatch(r"check_join_\d+", data)):
+        if is_admin(uid) and private and data.startswith("admin_"):
             handle_callbacks(call)
+            return
+        if is_admin(uid) and private and data == "portal:open":
+            bot.answer_callback_query(call.id)
+            send_admin_website(uid)
+            return
+        if private and re.fullmatch(r"check_join_\d+", data):
+            user = users_col.find_one({"user_id": uid}) or {}
+            proof = captcha_col.find_one({"user_id": uid}) or {}
+            if int(user.get("verified", 0)) < 1 and (not proof.get("solved_at") or int(time.time()) - proof["solved_at"] > 900):
+                bot.answer_callback_query(call.id, "ابتدا کپچا را پاسخ بده. / Solve the captcha first.")
+                send_captcha(uid, uid, proof.get("pending_referrer") or user.get("registration_referrer") or 0)
+                return
+            if not check_membership(uid):
+                bot.answer_callback_query(call.id, portal_bridge.text(uid, "هنوز عضو کانال نشده‌ای.", "Please join the channel first."), show_alert=True)
+                return
+            bot.answer_callback_query(call.id)
+            try:
+                if int(user.get("verified", 0)) < 1:
+                    register_user_after_verify(uid, proof.get("pending_referrer"))
+                    captcha_col.delete_one({"user_id": uid})
+                send_portal_entry(uid)
+            except PortalError as error:
+                bot.send_message(uid, portal_bridge.error_text(error, uid))
             return
         bot.answer_callback_query(call.id, portal_bridge.text(uid,
             "فعالیت‌ها از پنل سایت انجام می‌شوند.", "Please use the website portal."))
@@ -1750,6 +1879,10 @@ def claim_bot_daily(user_id):
 
 @bot.message_handler(commands=['start', 'menu', 'register'])
 def send_welcome(message):
+    if BOT_PORTAL_ONLY:
+        if is_admin(message.from_user.id):
+            return route_admin_message(message)
+        return gateway_welcome(message)
     user_id = message.from_user.id
     command = (message.text or "").split()[0].split("@")[0]
     registration_requested = command == "/register"
@@ -2328,6 +2461,7 @@ def handle_admin_documents(message):
         lines = file_text.splitlines()
         updated_count = 0
         not_found_count = 0
+        pending_count = 0
 
         for line in lines:
             line = line.strip()
@@ -2347,6 +2481,13 @@ def handle_admin_documents(message):
             if target_id:
                 usr = users_col.find_one({"user_id": target_id})
                 if usr:
+                    if BOT_PORTAL_ONLY:
+                        try:
+                            portal_service.admin_bot_payment(message.from_user.id, target_id, "yes")
+                            updated_count += 1
+                        except PortalError:
+                            pending_count += 1
+                        continue
                     r_cnt = usr.get("ref_count", 0)
                     d_cnt = usr.get("daily_count", 0)
                     tot = calculate_total_tokens(
@@ -2367,6 +2508,8 @@ def handle_admin_documents(message):
             reply_markup=get_admin_reply_markup(),
             parse_mode="Markdown"
         )
+        if pending_count:
+            bot.send_message(message.chat.id, f"⚠️ {pending_count} ردیف ثبت نشد؛ درخواست‌های پرداخت باز را در سایت بررسی کنید.", reply_markup=get_admin_reply_markup())
     except Exception as e:
         bot.send_message(message.chat.id, f"❌ خطا در پردازش فایل اکسل/متنی:\n`{e}`", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
 
@@ -2533,7 +2676,7 @@ def handle_all_messages(message):
                     bot.send_message(chat_id, "❌ کاربر موردنظر دیگر در دیتابیس وجود ندارد.", reply_markup=get_admin_reply_markup())
                     return
 
-                remaining_capacity = max(0, MAX_TOTAL_TOKENS_LIMIT - get_global_total_distributed_tokens())
+                remaining_capacity = remaining_reward_capacity()
                 if amount > remaining_capacity:
                     bot.send_message(
                         chat_id,
@@ -2569,7 +2712,7 @@ def handle_all_messages(message):
                     f"👝 ولت: `{target_user.get('wallet') or 'ثبت نشده'}`\n"
                     f"🎁 مبلغ پاداش: `{amount:,} PRS`\n"
                     f"📌 ظرفیت باقی‌مانده پس از ثبت: `{remaining_capacity - amount:,} PRS`\n\n"
-                    f"پس از تأیید، پاداش در موجودی کاربر ثبت و برای او پیام ارسال می‌شود.",
+                    f"پس از تأیید، پاداش در موجودی حساب کاربر ثبت می‌شود.",
                     reply_markup=confirm_markup,
                     parse_mode="Markdown"
                 )
@@ -2606,7 +2749,7 @@ def handle_all_messages(message):
                 eligible_count = users_col.count_documents(get_bonus_eligible_filter())
                 total_cost = amount * eligible_count
                 current_total = get_global_total_distributed_tokens()
-                remaining_capacity = max(0, MAX_TOTAL_TOKENS_LIMIT - current_total)
+                remaining_capacity = remaining_reward_capacity()
 
                 if eligible_count == 0:
                     settings_col.delete_one({"key": "admin_state"})
@@ -2660,11 +2803,17 @@ def handle_all_messages(message):
                 return
 
         if text == "🔴 خاموش کردن ربات":
-            settings_col.replace_one({"key": "bot_status"}, {"key": "bot_status", "status": "off"}, upsert=True)
-            bot.send_message(chat_id, "🔴 ربات با موفقیت **خاموش** شد. کاربران عادی دیگر قادر به استفاده از ربات نخواهند بود.", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
+            if BOT_PORTAL_ONLY:
+                portal_service.admin_controls(user_id, {"paused": True})
+            else:
+                settings_col.replace_one({"key": "bot_status"}, {"key": "bot_status", "status": "off"}, upsert=True)
+            bot.send_message(chat_id, ("⏸ پاداش‌های کمپین موقتاً متوقف شد؛ مدیریت و ورود سایت همچنان فعال است." if BOT_PORTAL_ONLY else "🔴 ربات با موفقیت **خاموش** شد. کاربران عادی دیگر قادر به استفاده از ربات نخواهند بود."), reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
             return
         elif text == "🟢 روشن کردن ربات":
-            settings_col.replace_one({"key": "bot_status"}, {"key": "bot_status", "status": "on"}, upsert=True)
+            if BOT_PORTAL_ONLY:
+                portal_service.admin_controls(user_id, {"paused": False})
+            else:
+                settings_col.replace_one({"key": "bot_status"}, {"key": "bot_status", "status": "on"}, upsert=True)
             bot.send_message(chat_id, "🟢 ربات با موفقیت **روشن** شد و به حالت عادی برگشت.", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
             return
         elif text == "📢 ارسال همگانی پیام":
@@ -2686,7 +2835,7 @@ def handle_all_messages(message):
                 upsert=True
             )
             eligible_count = users_col.count_documents(get_bonus_eligible_filter())
-            remaining_capacity = max(0, MAX_TOTAL_TOKENS_LIMIT - get_global_total_distributed_tokens())
+            remaining_capacity = remaining_reward_capacity()
             bot.send_message(
                 chat_id,
                 f"🎁 *ثبت پاداش همگانی PRS*\n\n"
@@ -3133,7 +3282,14 @@ def handle_callbacks(call):
                     r_cnt, d_cnt, usr.get("bonus_tokens", 0), usr.get("manual_bonus_tokens", 0)
                 )
                 
-                if action == "yes":
+                if BOT_PORTAL_ONLY:
+                    try:
+                        portal_service.admin_bot_payment(user_id, target_uid, action)
+                    except PortalError as error:
+                        text = "این کاربر درخواست پرداخت باز در سایت دارد؛ ابتدا همان درخواست را بررسی کنید." if error.code == "payment_pending" else portal_bridge.error_text(error, user_id)
+                        bot.answer_callback_query(call.id, text, show_alert=True)
+                        return
+                elif action == "yes":
                     users_col.update_one({"user_id": target_uid}, {"$set": {"paid": 1, "paid_amount": tot_tokens}})
                 elif action == "no":
                     users_col.update_one({"user_id": target_uid}, {"$set": {"paid": 0}})
@@ -3377,8 +3533,8 @@ if __name__ == "__main__":
         if not portal_service.store.ready():
             raise RuntimeError("Portal requires MongoDB transaction support; keep PORTAL_ENABLED=0 until ready")
         portal_service.store.ensure_indexes()
-    print("Bot is starting with MongoDB & Dual-Language Support...")
-    bot.delete_webhook(drop_pending_updates=True)
+    print("PHASE 2: user website gateway and dual admin management starting..." if BOT_PORTAL_ONLY else "Bot is starting with MongoDB & Dual-Language Support...")
+    bot.delete_webhook(drop_pending_updates=not BOT_PORTAL_ONLY)
     time.sleep(2)
 
     backup_thread = threading.Thread(target=auto_backup_scheduler, daemon=True)
@@ -3386,7 +3542,7 @@ if __name__ == "__main__":
 
     while True:
         try:
-            bot.infinity_polling(timeout=30, long_polling_timeout=30, skip_pending=True)
+            bot.infinity_polling(timeout=30, long_polling_timeout=30, skip_pending=not BOT_PORTAL_ONLY)
         except Exception as e:
             print(f"Polling error: {e}")
             time.sleep(10)
