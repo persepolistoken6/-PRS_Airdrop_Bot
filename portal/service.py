@@ -12,6 +12,8 @@ from zoneinfo import ZoneInfo
 from .settings import (BASE_REWARD, DAILY_REWARD, EXTRA_REWARD, MAX_TOTAL_TOKENS_LIMIT,
                        REQUIRED_REFERRALS, Settings)
 from .store import MemoryStore, MongoStore
+from .features import PhaseTwoMixin
+from .settings import CAMPAIGN_TIMEZONE
 
 
 class PortalError(Exception):
@@ -42,7 +44,7 @@ def telegram_membership(settings, user_id):
         raise PortalError("telegram_unavailable", 503) from None
 
 
-class PortalService:
+class PortalService(PhaseTwoMixin):
     def __init__(self, store, settings, member_check=None, clock=time.time):
         self.store, self.settings, self.clock = store, settings, clock
         self.member_check = member_check or (lambda uid: telegram_membership(settings, uid))
@@ -67,6 +69,8 @@ class PortalService:
         # The existing Telegram registration flow stores verified=1 on success.
         if not user or int(user.get("verified", 0)) < 1:
             raise PortalError("registration_required", 403)
+        if user.get("portal_suspended"):
+            raise PortalError("account_suspended", 403)
         return user
 
     def _enabled(self, tx):
@@ -83,7 +87,8 @@ class PortalService:
         lock = tx.get("portal_state", "credit_lock") or {"sequence": 0}
         lock["sequence"] += 1
         tx.put("portal_state", "credit_lock", lock)
-        if sum(earned(u) for u in tx.all("users")) + amount > MAX_TOTAL_TOKENS_LIMIT:
+        reserved = self.mining_config(tx)["reserved"]
+        if sum(earned(u) for u in tx.all("users")) + reserved + amount > MAX_TOTAL_TOKENS_LIMIT:
             raise PortalError("campaign_budget_exhausted", 409)
 
     def _history(self, tx, receipt, user_id, kind, amount, title):
@@ -99,6 +104,7 @@ class PortalService:
         return f"{self.settings.base_url}/login#token={token}"
 
     def new_login_token(self, user_id):
+        self.check_access(user_id)
         if user_id not in self.settings.admins:
             self._user(self.store, user_id)
         self.limit(f"login:{user_id}", 10, 300)
@@ -116,6 +122,8 @@ class PortalService:
             login = tx.get("portal_login_tokens", digest(token))
             if not login or login["until"] <= self.now():
                 raise PortalError("invalid_login", 401)
+            if (tx.get("users", login["user_id"]) or {}).get("portal_suspended"):
+                raise PortalError("account_suspended", 403)
             tx.delete("portal_login_tokens", digest(token))
             until = self.now() + self.settings.session_ttl
             tx.put("portal_sessions", digest(session_token), {"user_id": login["user_id"], "csrf": csrf,
@@ -127,6 +135,7 @@ class PortalService:
         item = self.store.get("portal_sessions", digest(token)) if token else None
         if not item or item["until"] <= self.now():
             raise PortalError("login_required", 401)
+        self.check_access(item["user_id"])
         return item
 
     def logout(self, token):
@@ -134,11 +143,12 @@ class PortalService:
             self.store.delete("portal_sessions", digest(token))
 
     def leaderboard(self):
-        users = sorted(self.store.all("users"), key=lambda u: (-earned(u), -int(u.get("ref_count", 0)), int(u["user_id"])))
+        users = sorted([u for u in self.store.all("users") if not u.get("portal_suspended") and int(u.get("verified", 0)) >= 1], key=lambda u: (-earned(u), -int(u.get("ref_count", 0)), int(u["user_id"])))
         return [{"rank": i + 1, "label": f"PRS · {digest(str(u['user_id']))[:6].upper()}",
                  "earned": earned(u), "referrals": int(u.get("ref_count", 0)), "user_id": u["user_id"]} for i, u in enumerate(users)]
 
     def profile(self, user_id):
+        self.check_access(user_id)
         user = self.store.get("users", user_id)
         admin = user_id in self.settings.admins
         if not user and not admin:
@@ -147,7 +157,7 @@ class PortalService:
         total = earned(user)
         paid = min(total, max(0, int(user.get("paid_amount", 0))))
         ranking = self.leaderboard()
-        pool = sum(row["earned"] for row in ranking)
+        pool = sum(earned(u) for u in self.store.all("users"))
         history = sorted([h for h in self.store.all("portal_history") if h["user_id"] == user_id], key=lambda h: h["created_at"], reverse=True)[:30]
         payments = sorted([p for p in self.store.all("portal_payments") if p["user_id"] == user_id], key=lambda p: p["created_at"], reverse=True)[:20]
         return {"user_id": user_id, "is_admin": admin, "language": user.get("lang", "fa"),
@@ -163,6 +173,8 @@ class PortalService:
             "campaign_total": pool, "campaign_limit": MAX_TOTAL_TOKENS_LIMIT,
             "paused": (self.store.get("bot_settings", "bot_status") or {}).get("status") == "off",
             "history": history, "payments": payments, "server_time": self.now(),
+            "timezone": CAMPAIGN_TIMEZONE, "mining": self.mining_status(user_id, user),
+            "announcement": (self.store.get("portal_state", "announcement") or {}).get("text", ""),
             "tickets": [self._public_ticket(t) for t in self.store.all("portal_tickets") if t["user_id"] == user_id]}
 
     def public_leaderboard(self, user_id):
@@ -242,6 +254,14 @@ class PortalService:
         if url and (urlsplit(url).scheme != "https" or not urlsplit(url).hostname or urlsplit(url).username):
             raise PortalError("invalid_mission", field="url")
         ends = payload.get("ends_at") or 0
+        if payload.get("ends_at_tehran"):
+            try:
+                local_end = datetime.fromisoformat(payload["ends_at_tehran"])
+                if local_end.tzinfo is not None:
+                    raise ValueError("Expected a Tehran wall-clock date")
+                ends = int(local_end.replace(tzinfo=ZoneInfo(CAMPAIGN_TIMEZONE)).timestamp())
+            except (ValueError, TypeError):
+                raise PortalError("invalid_mission", field="ends_at") from None
         if type(ends) is not int or (ends and ends <= self.now()):
             raise PortalError("invalid_mission", field="ends_at")
         mission = {"id": uuid4().hex[:20], "title": text("title", 100, True), "title_en": text("title_en", 100),
@@ -262,7 +282,10 @@ class PortalService:
                 raise PortalError("invalid_mission", field="answer")
             mission.update(question=text("question", 500, True), question_en=text("question_en", 500),
                            options=[x.strip() for x in options], options_en=options_en, answer=answer)
-        self.store.put("portal_missions", mission["id"], mission)
+        def operation(tx):
+            tx.put("portal_missions", mission["id"], mission)
+            self._audit(tx, admin_id, "create_mission", mission["id"], {"title": mission["title"], "reward": reward, "budget": budget})
+        self.store.transaction(operation)
         return mission
 
     def set_mission_active(self, admin_id, mission_id, active):
@@ -275,6 +298,7 @@ class PortalService:
                 raise PortalError("mission_not_found", 404)
             mission["active"] = active
             tx.put("portal_missions", mission_id, mission)
+            self._audit(tx, admin_id, "mission_active", mission_id, {"active": active})
         self.store.transaction(operation)
 
     def _capacity(self, mission):
@@ -353,6 +377,7 @@ class PortalService:
             submission["reviewed_by"] = admin_id
             tx.put("portal_missions", mission["id"], mission)
             tx.put("portal_submissions", submission_id, submission)
+            self._audit(tx, admin_id, "review_submission", submission_id, {"approve": approve, "reason": reason.strip()})
         self.store.transaction(operation)
 
     def update_wallet(self, user_id, wallet):
@@ -372,7 +397,9 @@ class PortalService:
             tx.put("users", user_id, user)
         self.store.transaction(operation)
 
-    def request_payment(self, user_id):
+    def request_payment(self, user_id, amount=None):
+        if amount is not None and (type(amount) is not int or amount <= 0):
+            raise PortalError("invalid_payment_amount")
         self._member(user_id)
         def operation(tx):
             self._enabled(tx)
@@ -383,11 +410,14 @@ class PortalService:
                 raise PortalError("wallet_required")
             if tx.get("portal_open_payments", user_id):
                 raise PortalError("payment_pending", 409)
-            amount = earned(user) - int(user.get("paid_amount", 0))
-            if amount <= 0:
+            balance = earned(user) - int(user.get("paid_amount", 0))
+            if balance <= 0:
                 raise PortalError("nothing_to_pay", 409)
+            requested = balance if amount is None else amount
+            if requested > balance:
+                raise PortalError("invalid_payment_amount")
             pid = uuid4().hex
-            payment = {"id": pid, "user_id": user_id, "amount": amount, "wallet": user["wallet"],
+            payment = {"id": pid, "user_id": user_id, "amount": requested, "wallet": user["wallet"],
                        "status": "pending", "created_at": self.now(), "tx_hash": "", "reason": ""}
             # A real write to the same user document makes a simultaneous wallet
             # edit conflict/retry, avoiding snapshot-isolation write skew.
@@ -410,6 +440,7 @@ class PortalService:
                 raise PortalError("wallet_locked", 409)
             user.update(wallet=wallet.strip(), submitted=1)
             tx.put("users", user_id, user)
+            self._audit(tx, admin_id, "update_wallet", user_id, {"wallet": wallet.strip()})
         self.store.transaction(operation)
 
     def review_payment(self, admin_id, payment_id, approve, tx_hash="", reason=""):
@@ -442,6 +473,7 @@ class PortalService:
             payment.update(reviewed_at=self.now(), reviewed_by=admin_id)
             tx.put("portal_payments", payment_id, payment)
             tx.delete("portal_open_payments", payment["user_id"])
+            self._audit(tx, admin_id, "review_payment", payment_id, {"approve": approve, "amount": payment["amount"], "tx_hash": payment["tx_hash"], "reason": reason.strip()})
         self.store.transaction(operation)
 
     def ticket(self, user_id, message):
@@ -466,7 +498,9 @@ class PortalService:
             if not ticket:
                 raise PortalError("ticket_not_found", 404)
             ticket.update(reply=reply.strip(), status="resolved", reviewed_by=admin_id)
+            ticket["reviewed_at"] = self.now()
             tx.put("portal_tickets", ticket_id, ticket)
+            self._audit(tx, admin_id, "reply_ticket", ticket_id)
         self.store.transaction(operation)
 
     def require_admin(self, user_id):
@@ -475,11 +509,22 @@ class PortalService:
 
     def admin_overview(self, user_id):
         self.require_admin(user_id)
+        users = self.store.all("users")
+        payments = self.store.all("portal_payments")
+        mining = self.mining_config()
         return {"missions": sorted(self.store.all("portal_missions"), key=lambda m: m["created_at"], reverse=True),
             "submissions": [s for s in self.store.all("portal_submissions") if s["status"] == "pending"],
             "payments": [p for p in self.store.all("portal_payments") if p["status"] == "pending"],
             "tickets": [t for t in self.store.all("portal_tickets") if t["status"] == "open"],
-            "users": len(self.store.all("users"))}
+            "users": len([u for u in users if int(u.get("verified", 0)) >= 1]),
+            "stats": {"earned": sum(earned(u) for u in users), "paid": sum(int(u.get("paid_amount", 0)) for u in users),
+                      "suspended": sum(bool(u.get("portal_suspended")) for u in users),
+                      "active_mining": sum(c.get("status") == "active" for c in self.store.all("portal_mining")),
+                      "mining_spent": mining["spent"], "mining_reserved": mining["reserved"],
+                      "campaign_limit": MAX_TOTAL_TOKENS_LIMIT},
+            "controls": self.campaign_controls(), "user_page": self.admin_users(user_id),
+            "recent_payments": sorted(payments, key=lambda p: p["created_at"], reverse=True)[:50],
+            "audit": sorted(self.store.all("portal_audit"), key=lambda a: a["created_at"], reverse=True)[:50]}
 
 
 def build_service(settings=None, database=None, member_check=None):

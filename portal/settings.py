@@ -9,6 +9,16 @@ EXTRA_REWARD = 5000
 DAILY_REWARD = 1000
 MAX_TOTAL_TOKENS_LIMIT = 300_000_000
 DEFAULT_ADMINS = (6661478622, 84460885)
+CAMPAIGN_TIMEZONE = "Asia/Tehran"
+MINING_SECONDS = 8 * 3600
+MINING_DEFAULT_BUDGET = 135_000_000
+TIERS = (
+    {"id": "bronze", "name": "برنز", "name_en": "Bronze", "referrals": 0, "balance": 0, "reward": 500},
+    {"id": "silver", "name": "نقره", "name_en": "Silver", "referrals": 3, "balance": 10_000, "reward": 550},
+    {"id": "gold", "name": "طلا", "name_en": "Gold", "referrals": 10, "balance": 50_000, "reward": 600},
+    {"id": "platinum", "name": "پلاتینیوم", "name_en": "Platinum", "referrals": 25, "balance": 150_000, "reward": 675},
+    {"id": "diamond", "name": "الماس", "name_en": "Diamond", "referrals": 50, "balance": 500_000, "reward": 750},
+)
 
 
 @dataclass(frozen=True)
@@ -22,9 +32,9 @@ class Settings:
     admins: tuple = DEFAULT_ADMINS
     demo: bool = False
     enabled: bool = False
-    timezone: str = "Asia/Baghdad"
+    timezone: str = CAMPAIGN_TIMEZONE
     login_ttl: int = 300
-    session_ttl: int = 28800
+    session_ttl: int = 86400
 
     @classmethod
     def from_env(cls):
@@ -46,5 +56,7 @@ class Settings:
             bot_token=os.getenv("BOT_TOKEN", ""), bot_username=os.getenv("BOT_USERNAME", "PRS_Airdrop_Bot"),
             channel=os.getenv("CHANNEL_ID", "@persepolisToken6"), base_url=base_url,
             admins=admins, demo=demo, enabled=os.getenv("PORTAL_ENABLED", "0") == "1",
-            timezone=os.getenv("PORTAL_TIMEZONE", "Asia/Baghdad"),
+            # Phase two uses Tehran even when an older deployment still has
+            # PORTAL_TIMEZONE=Asia/Baghdad configured.
+            timezone=CAMPAIGN_TIMEZONE,
         )

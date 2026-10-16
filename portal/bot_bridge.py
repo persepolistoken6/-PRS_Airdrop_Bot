@@ -2,7 +2,7 @@
 import html
 from datetime import datetime, timezone
 
-from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
+from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 
 from .service import PortalError
 
@@ -40,6 +40,7 @@ class BotBridge:
             "wallet_locked": ("تا بررسی درخواست پرداخت فعلی، کیف پول قابل تغییر نیست.", "Your wallet is locked while a payment request is pending."),
             "wallet_edit_limit": ("دفعات مجاز ثبت و اصلاح کیف پول تمام شده است.", "Your wallet registration/edit limit has been reached."),
             "invalid_wallet": ("آدرس کیف پول معتبر نیست.", "The wallet address is invalid."),
+            "account_suspended": ("حساب شما تعلیق شده است.", "Your account is suspended."),
         }
         pair = messages.get(error.code, ("سرویس موقتاً در دسترس نیست؛ کمی بعد تلاش کن.", "The service is temporarily unavailable. Try again shortly."))
         return self.text(uid, *pair)
@@ -56,12 +57,21 @@ class BotBridge:
         uid = message.from_user.id
         try:
             url = self.service.issue_login(uid)
+            # Remove keyboards from older versions, then delete this transient
+            # cleanup message after sending the website entry button.
+            cleanup = self.bot.send_message(uid, self.text(uid, "ورود به سایت…", "Opening website sign-in…"),
+                                            reply_markup=ReplyKeyboardRemove())
             keyboard = InlineKeyboardMarkup()
             keyboard.add(InlineKeyboardButton(self.text(uid, "🌐 ورود به پنل ایردراپ", "🌐 Open airdrop portal"), url=url))
             self.bot.send_message(uid, self.text(uid,
-                "🔐 لینک ورود شخصی تو آماده است.\nاین لینک یک‌بارمصرف است و ۵ دقیقه اعتبار دارد. آن را برای دیگران نفرست.",
-                "🔐 Your personal sign-in link is ready.\nIt works once and expires in 5 minutes. Keep it private."),
+                "🌐 ثبت‌نام آماده است؛ برای ادامه وارد سایت شو.\nلینک شخصی تو ۵ دقیقه اعتبار دارد؛ آن را برای دیگران نفرست.",
+                "🌐 Continue in the website.\nYour private sign-in link expires in 5 minutes. Keep it private."),
                 reply_markup=keyboard, protect_content=True)
+            if getattr(cleanup, "message_id", None):
+                try:
+                    self.bot.delete_message(uid, cleanup.message_id)
+                except Exception:
+                    pass
         except PortalError as error:
             self.bot.send_message(uid, self.error_text(error, uid))
         except Exception:

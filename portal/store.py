@@ -82,6 +82,8 @@ class MongoStore:
         self.database.portal_submissions.create_index([("user_id", 1), ("created_at", -1)])
         self.database.portal_history.create_index([("user_id", 1), ("created_at", -1)])
         self.database.portal_payments.create_index([("status", 1), ("created_at", -1)])
+        self.database.portal_mining.create_index([("status", 1), ("ends_at", 1)])
+        self.database.portal_audit.create_index([("created_at", -1)])
 
     def ready(self):
         hello = self.database.client.admin.command("hello")
