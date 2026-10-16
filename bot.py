@@ -11,7 +11,7 @@ from datetime import datetime
 from telebot import TeleBot
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from pymongo import MongoClient
-from portal.settings import REQUIRED_REFERRALS, BASE_REWARD, EXTRA_REWARD, DAILY_REWARD, MAX_TOTAL_TOKENS_LIMIT
+from portal.settings import Settings, REQUIRED_REFERRALS, BASE_REWARD, EXTRA_REWARD, DAILY_REWARD, MAX_TOTAL_TOKENS_LIMIT
 from portal.service import build_service, PortalError
 from portal.bot_bridge import BotBridge, PANEL_LABELS, MISSION_LABELS
 
@@ -36,8 +36,8 @@ CHANNEL_ID = os.getenv("CHANNEL_ID", "@persepolisToken6")
 TWITTER_URL = "https://x.com/PersepolisPRS"
 INSTAGRAM_URL = "https://www.instagram.com/persepolistoken6?igsh=eHBwbzdtd2ZoaWI5"
 
-ADMIN_IDS = [6661478622, 84460885]
-ADMIN_CHAT_ID = 6661478622
+ADMIN_IDS = list(Settings.from_env().admins)
+ADMIN_CHAT_ID = ADMIN_IDS[0] if ADMIN_IDS else None
 
 
 # شرایط مستقل چالش جدید (بدون تغییر در حد نصاب ایردراپ اصلی)
