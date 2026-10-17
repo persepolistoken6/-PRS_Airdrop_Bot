@@ -3,6 +3,7 @@ import os
 import ipaddress
 import secrets
 from functools import wraps
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from flask import Flask, Response, g, jsonify, render_template, request
@@ -23,6 +24,8 @@ def create_app(settings=None, service=None):
     app = Flask(__name__)
     app.config.update(MAX_CONTENT_LENGTH=24 * 1024, PROPAGATE_EXCEPTIONS=False)
     app.extensions["portal"] = service
+    asset_versions = {name: digest((Path(app.static_folder) / name).read_text(encoding="utf-8"))[:12]
+                      for name in ("app.js", "app.css")}
     if settings.demo and not service.store.all("users"):
         seed_demo(service)
 
@@ -87,7 +90,7 @@ def create_app(settings=None, service=None):
     @app.get("/")
     @app.get("/login")
     def index():
-        return render_template("index.html")
+        return render_template("index.html", asset_versions=asset_versions)
 
     @app.get("/healthz")
     def health():
@@ -201,6 +204,12 @@ def create_app(settings=None, service=None):
     def admin_overview():
         return jsonify(service.admin_overview(g.user_id))
 
+    @app.post("/api/admin/telegram/check")
+    @protected(admin=True)
+    def check_telegram():
+        service.limit(f"telegram-check:{g.user_id}", 6, 60)
+        return jsonify(service.admin_telegram_status(g.user_id))
+
     @app.post("/api/admin/controls")
     @protected(admin=True)
     def admin_controls():
@@ -247,6 +256,12 @@ def create_app(settings=None, service=None):
     @protected(admin=True)
     def active(mission_id):
         service.set_mission_active(g.user_id, mission_id, body().get("active"))
+        return jsonify(ok=True)
+
+    @app.post("/api/admin/missions/<mission_id>/archive")
+    @protected(admin=True)
+    def archive(mission_id):
+        service.archive_mission(g.user_id, mission_id, body().get("archived"))
         return jsonify(ok=True)
 
     @app.post("/api/admin/submissions/<submission_id>/review")
