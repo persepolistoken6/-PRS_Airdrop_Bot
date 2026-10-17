@@ -67,7 +67,7 @@ class BotBridge:
             self.bot.send_message(uid, self.text(uid,
                 "🌐 ثبت‌نام آماده است؛ برای ادامه وارد سایت شو.\nلینک شخصی تو ۵ دقیقه اعتبار دارد؛ آن را برای دیگران نفرست.",
                 "🌐 Continue in the website.\nYour private sign-in link expires in 5 minutes. Keep it private."),
-                reply_markup=keyboard, protect_content=True)
+                reply_markup=keyboard, protect_content=False)
         except PortalError as error:
             self.bot.send_message(uid, self.error_text(error, uid))
         except Exception:
