@@ -514,10 +514,33 @@ def get_bonus_eligible_filter(operation_id=None):
         query["bonus_operation_ids"] = {"$ne": operation_id}
     return query
 
+def notify_portal_bonus_recipients(operation_id, amount, target_uid=None):
+    """Best-effort Telegram delivery after the DB commit; never credits twice."""
+    import threading
+    def worker():
+        import time as _time
+        try:
+            if target_uid is not None:
+                recipients = [target_uid]
+            else:
+                recipients = [u["user_id"] for u in portal_service.store.all("users")
+                              if operation_id in u.get("bonus_operation_ids", [])]
+            for uid in recipients:
+                try:
+                    bot.send_message(uid, f"🎁 پاداش جدید PRS\n\n🪙 {amount:,} PRS به حساب شما اضافه شد.\nبرای مشاهده موجودی وارد پنل ایردراپ شوید.")
+                except Exception:
+                    pass  # blocked users and Telegram outages must not roll back rewards
+                _time.sleep(0.05)
+        except Exception:
+            pass
+    threading.Thread(target=worker, daemon=True, name="prs-bonus-notify").start()
+
 def execute_global_bonus(admin_chat_id, operation_id, amount):
     if BOT_PORTAL_ONLY:
         try:
             result = portal_service.admin_bot_bonus(admin_chat_id, operation_id, amount)
+            if not result.get("already_completed"):
+                notify_portal_bonus_recipients(operation_id, amount)
             bot.send_message(admin_chat_id,
                 f"✅ پاداش همگانی ثبت شد.\n👥 تعداد: {result['count']:,}\n🎁 هر نفر: {amount:,} PRS\n🪙 مجموع: {result['total']:,} PRS\nنتیجه در حساب سایت کاربران نمایش داده می‌شود.",
                 reply_markup=get_admin_reply_markup())
@@ -666,6 +689,8 @@ def execute_manual_bonus(admin_chat_id, target_uid, operation_id, amount):
     if BOT_PORTAL_ONLY:
         try:
             result = portal_service.admin_bot_bonus(admin_chat_id, operation_id, amount, target_uid)
+            if not result.get("already_completed"):
+                notify_portal_bonus_recipients(operation_id, amount, target_uid)
             text = "این عملیات قبلاً ثبت شده است." if result["already_completed"] else f"✅ پاداش {amount:,} PRS برای کاربر {target_uid} ثبت شد.\nنتیجه در حساب سایت کاربر نمایش داده می‌شود."
             bot.send_message(admin_chat_id, text, reply_markup=get_admin_reply_markup())
         except PortalError as error:
