@@ -327,3 +327,15 @@ html[data-motion=off] .heritage-atmosphere span,html[data-motion=off] .heritage-
 .prs-telegram-id{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:16px;margin-block:20px;padding:22px 26px}
 .prs-telegram-id h2{margin:8px 0}.prs-telegram-id .number{font-size:clamp(20px,3vw,28px);direction:ltr;unicode-bidi:isolate}
 @media(max-width:540px){.prs-social-page{grid-template-columns:1fr}.prs-telegram-id{padding:18px}}
+
+/* Notification inbox */
+.prs-inbox-bell{position:relative;display:inline-flex;align-items:center;justify-content:center}
+.prs-inbox-dot,.prs-inbox-new-dot{display:inline-block;width:9px;height:9px;background:#e52538;border-radius:50%;box-shadow:0 0 0 2px white}
+.prs-inbox-dot{position:absolute;top:3px;right:3px}
+.prs-inbox-dot[hidden]{display:none!important}
+.prs-inbox-entry{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:16px 0;border-bottom:1px solid rgba(140,140,140,.2)}
+.prs-inbox-entry:last-child{border-bottom:0}
+.prs-inbox-entry p{white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0}
+.prs-inbox-entry small{opacity:.65}
+.prs-inbox-unread{border-inline-start:3px solid #bb2538;padding-inline-start:12px}
+.prs-inbox-new-dot{margin-inline-start:8px}
