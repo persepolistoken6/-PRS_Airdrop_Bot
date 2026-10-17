@@ -222,6 +222,7 @@ class PortalService(PhaseTwoMixin):
             "campaign_total": pool, "campaign_limit": MAX_TOTAL_TOKENS_LIMIT,
             "paused": (self.store.get("bot_settings", "bot_status") or {}).get("status") == "off",
             "history": history, "payments": payments, "server_time": self.now(),
+            "withdrawals_enabled": self.campaign_controls()["withdrawals_enabled"],
             "timezone": CAMPAIGN_TIMEZONE, "mining": self.mining_status(user_id, user),
             "announcement": (self.store.get("portal_state", "announcement") or {}).get("text", ""),
             "tickets": [self._public_ticket(t) for t in self.store.all("portal_tickets") if t["user_id"] == user_id]}
@@ -477,6 +478,8 @@ class PortalService(PhaseTwoMixin):
         self._member(user_id)
         def operation(tx):
             self._enabled(tx)
+            if not (tx.get("portal_state", "withdrawals") or {}).get("enabled", True):
+                raise PortalError("withdrawals_disabled", 403)
             user = self._user(tx, user_id)
             if user.get("ref_count", 0) < REQUIRED_REFERRALS:
                 raise PortalError("referrals_required", 403, required=REQUIRED_REFERRALS)

@@ -233,15 +233,15 @@ class PhaseTwoMixin:
     def campaign_controls(self):
         return {"paused": (self.store.get("bot_settings", "bot_status") or {}).get("status") == "off",
                 "announcement": (self.store.get("portal_state", "announcement") or {}).get("text", ""),
-                "mining": self.mining_config(), "timezone": CAMPAIGN_TIMEZONE}
+                "mining": self.mining_config(), "withdrawals_enabled": (self.store.get("portal_state", "withdrawals") or {}).get("enabled", True), "timezone": CAMPAIGN_TIMEZONE}
 
     def admin_controls(self, admin_id, payload):
         from .service import PortalError
         self.require_admin(admin_id)
-        allowed = {"paused", "mining_enabled", "mining_budget", "announcement"}
+        allowed = {"paused", "mining_enabled", "mining_budget", "announcement", "withdrawals_enabled"}
         if not payload or not set(payload) <= allowed:
             raise PortalError("invalid_controls")
-        for name in ("paused", "mining_enabled"):
+        for name in ("paused", "mining_enabled", "withdrawals_enabled"):
             if name in payload and type(payload[name]) is not bool:
                 raise PortalError("invalid_controls")
         if "mining_budget" in payload and (type(payload["mining_budget"]) is not int or not 0 <= payload["mining_budget"] <= MAX_TOTAL_TOKENS_LIMIT):
@@ -260,6 +260,8 @@ class PhaseTwoMixin:
                         raise PortalError("budget_below_committed", 409)
                     config["budget"] = payload["mining_budget"]
                 tx.put("portal_state", "mining", config)
+            if "withdrawals_enabled" in payload:
+                tx.put("portal_state", "withdrawals", {"enabled": payload["withdrawals_enabled"], "updated_at": self.now()})
             if "announcement" in payload:
                 tx.put("portal_state", "announcement", {"text": payload["announcement"].strip(), "updated_at": self.now()})
             self._audit(tx, admin_id, "campaign_controls", "campaign", payload)
