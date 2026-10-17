@@ -43,7 +43,7 @@ ADMIN_CHAT_ID = ADMIN_IDS[0] if ADMIN_IDS else None
 
 # شرایط مستقل چالش جدید (بدون تغییر در حد نصاب ایردراپ اصلی)
 CHALLENGE_REQUIRED_REFERRALS = 10
-CHALLENGE_QUIZ_MAX_ATTEMPTS = 2
+CHALLENGE_QUIZ_MAX_ATTEMPTS = 1
 CHALLENGE_QUIZ_PASS_SCORE = 3
 
 # برای ارسال مستقیم فایل، PDF را کنار bot.py قرار دهید یا FILE_ID تلگرام را
