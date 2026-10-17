@@ -1,10 +1,12 @@
 import hashlib
 import json
+import logging
 import re
 import secrets
 import time
 from datetime import datetime, timezone
 from urllib.parse import urlencode, urlsplit
+from urllib.error import HTTPError
 from urllib.request import urlopen
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -32,16 +34,63 @@ def earned(user):
     return base + int(user.get("daily_count", 0)) * DAILY_REWARD + int(user.get("bonus_tokens", 0)) + int(user.get("manual_bonus_tokens", 0))
 
 
-def telegram_membership(settings, user_id):
-    query = urlencode({"chat_id": settings.channel, "user_id": user_id})
+def _telegram_error(payload, http_status=0):
+    code = payload.get("error_code", http_status)
+    description = str(payload.get("description", "")).lower()
+    if code in (401, 404):
+        error = "telegram_token_invalid"
+    elif code == 403 or (code == 400 and any(text in description for text in (
+        "chat not found", "chat_id is empty", "not enough rights", "not a member",
+        "member list is inaccessible", "chat_admin_required", "administrator rights",
+    ))):
+        error = "telegram_channel_access"
+    elif code == 429:
+        error = "telegram_rate_limited"
+    else:
+        error = "telegram_unavailable"
+    # Log only a fixed category, never Telegram's URL, description or token.
+    logging.getLogger(__name__).warning("Telegram membership check failed: %s", error)
+    raise PortalError(error, 503) from None
+
+
+def _telegram_call(settings, method, parameters=None):
+    token = settings.bot_token.strip()
+    if not token:
+        raise PortalError("telegram_token_invalid", 503)
     try:
-        with urlopen(f"https://api.telegram.org/bot{settings.bot_token}/getChatMember?{query}", timeout=5) as response:
-            result = json.load(response)
-        member = result.get("result", {})
-        return result.get("ok") and (member.get("status") in ("member", "administrator", "creator") or (member.get("status") == "restricted" and member.get("is_member")))
+        data = urlencode(parameters or {}).encode("utf-8")
+        with urlopen(f"https://api.telegram.org/bot{token}/{method}", data=data, timeout=8) as response:
+            payload = json.load(response)
+    except HTTPError as error:
+        try:
+            payload = json.loads(error.read(16384))
+            if not isinstance(payload, dict):
+                payload = {}
+        except Exception:
+            payload = {}
+        _telegram_error(payload, error.code)
     except Exception:
-        # Never include the request URL (which contains the token) in an error.
         raise PortalError("telegram_unavailable", 503) from None
+    if not isinstance(payload, dict):
+        raise PortalError("telegram_unavailable", 503)
+    if payload.get("ok") is not True:
+        _telegram_error(payload)
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        raise PortalError("telegram_unavailable", 503)
+    return result
+
+
+def telegram_membership(settings, user_id):
+    member = _telegram_call(settings, "getChatMember", {"chat_id": settings.channel.strip(), "user_id": user_id})
+    status = member.get("status")
+    if status in ("member", "administrator", "creator"):
+        return True
+    if status == "restricted":
+        return member.get("is_member") is True
+    if status in ("left", "kicked"):
+        return False
+    raise PortalError("telegram_unavailable", 503)
 
 
 class PortalService(PhaseTwoMixin):
@@ -214,6 +263,8 @@ class PortalService(PhaseTwoMixin):
     def missions(self, user_id):
         output = []
         for mission in sorted(self.store.all("portal_missions"), key=lambda m: m["created_at"], reverse=True):
+            if mission.get("archived"):
+                continue
             submission = self.store.get("portal_submissions", self._submission_id(mission, user_id)) or {}
             if not mission["active"] and not submission:
                 continue
@@ -296,9 +347,30 @@ class PortalService(PhaseTwoMixin):
             mission = tx.get("portal_missions", mission_id)
             if not mission:
                 raise PortalError("mission_not_found", 404)
+            if active and mission.get("archived"):
+                raise PortalError("mission_archived", 409)
             mission["active"] = active
             tx.put("portal_missions", mission_id, mission)
             self._audit(tx, admin_id, "mission_active", mission_id, {"active": active})
+        self.store.transaction(operation)
+
+    def archive_mission(self, admin_id, mission_id, archived):
+        self.require_admin(admin_id)
+        if type(archived) is not bool:
+            raise PortalError("invalid_mission")
+        def operation(tx):
+            mission = tx.get("portal_missions", mission_id)
+            if not mission:
+                raise PortalError("mission_not_found", 404)
+            if bool(mission.get("archived")) == archived:
+                return
+            # Keep submissions, reserved reviews, rewards and payment history.
+            # Restoring requires an explicit activation before new submissions.
+            mission.update(archived=archived, active=False)
+            if archived:
+                mission.update(archived_at=self.now(), archived_by=admin_id)
+            tx.put("portal_missions", mission_id, mission)
+            self._audit(tx, admin_id, "archive_mission" if archived else "restore_mission", mission_id)
         self.store.transaction(operation)
 
     def _capacity(self, mission):
@@ -323,7 +395,7 @@ class PortalService(PhaseTwoMixin):
             self._enabled(tx)
             user = self._user(tx, user_id)
             mission = tx.get("portal_missions", mission_id)
-            if not mission or not mission["active"]:
+            if not mission or not mission["active"] or mission.get("archived"):
                 raise PortalError("mission_not_found", 404)
             if mission["ends_at"] and mission["ends_at"] <= self.now():
                 raise PortalError("mission_expired", 409)
@@ -506,6 +578,26 @@ class PortalService(PhaseTwoMixin):
     def require_admin(self, user_id):
         if user_id not in self.settings.admins:
             raise PortalError("admin_required", 403)
+
+    def admin_telegram_status(self, user_id):
+        self.require_admin(user_id)
+        result = {"ok": False, "channel": self.settings.channel,
+                  "configured_bot_username": self.settings.bot_username}
+        try:
+            bot = _telegram_call(self.settings, "getMe")
+            result["bot_username"] = bot.get("username", "")
+            if str(bot.get("username", "")).casefold() != self.settings.bot_username.strip().lstrip("@").casefold():
+                raise PortalError("telegram_bot_mismatch", 503)
+            member = _telegram_call(self.settings, "getChatMember", {
+                "chat_id": self.settings.channel.strip(), "user_id": bot["id"]})
+            result["bot_status"] = member.get("status", "unknown")
+            if member.get("status") not in ("administrator", "creator"):
+                raise PortalError("telegram_bot_not_admin", 503)
+            result["user_is_member"] = telegram_membership(self.settings, user_id)
+            result["ok"] = True
+        except PortalError as error:
+            result["error"] = error.code
+        return result
 
     def admin_overview(self, user_id):
         self.require_admin(user_id)
