@@ -436,23 +436,11 @@ def get_msg(user_id_or_lang, key, *args, **kwargs):
     return text
 
 def get_main_reply_markup(user_id):
-    lang = "fa"
+    """One persistent user shortcut; existing commands and admin controls remain intact."""
     user = users_col.find_one({"user_id": user_id})
-    if user and user.get("lang"):
-        lang = user.get("lang")
-    
-    markup = ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row(get_msg(lang, "main_kb_status"), get_msg(lang, "main_kb_ref"))
-    markup.row(get_msg(lang, "main_kb_daily"), get_msg(lang, "main_kb_wallet"))
-    markup.row(get_msg(lang, "main_kb_guide"), get_msg(lang, "main_kb_leaderboard"))
-    if PORTAL_ENABLED:
-        markup.row(MISSION_LABELS[0 if lang == "fa" else 1])
-    if PORTAL_ENABLED and os.getenv("WEB_BASE_URL", "").strip():
-        markup.row(PANEL_LABELS[0 if lang == "fa" else 1])
-    markup.row(get_msg(lang, "main_kb_social"))
-    markup.row(get_msg(lang, "main_kb_challenge_quiz"))
-    markup.row(get_msg(lang, "main_kb_refresh"), get_msg(lang, "main_kb_channel"))
-    markup.row(get_msg(lang, "main_kb_twitter"), get_msg(lang, "main_kb_instagram"))
+    lang = (user or {}).get("lang", "fa")
+    markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=1, is_persistent=True, one_time_keyboard=False)
+    markup.row(KeyboardButton(PANEL_LABELS[0 if lang == "fa" else 1]))
     return markup
 
 def is_admin(user_id):
@@ -1584,7 +1572,7 @@ def send_captcha(chat_id, user_id, referrer_id):
     )
 
     text = get_msg(user_id, "captcha_title", num1, num2)
-    bot.send_message(chat_id, text, parse_mode="Markdown", **({"reply_markup": ReplyKeyboardRemove()} if BOT_PORTAL_ONLY else {}))
+    bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=get_main_reply_markup(user_id))
 
 def send_database_backup(target_chat_id):
     try:
@@ -1766,7 +1754,7 @@ def send_admin_website(user_id):
         keyboard = InlineKeyboardMarkup()
         keyboard.add(InlineKeyboardButton("🌐 ورود به مدیریت سایت", url=url))
         bot.send_message(user_id, "🔐 مدیریت سایت؛ لینک شخصی یک‌بارمصرف با اعتبار ۵ دقیقه.\nبرای مدیریت در ربات، منوی پایین همچنان فعال است.",
-                         reply_markup=keyboard, protect_content=True)
+                         reply_markup=keyboard, protect_content=False)
     except PortalError as error:
         bot.send_message(user_id, portal_bridge.error_text(error, user_id), reply_markup=get_admin_reply_markup())
 
