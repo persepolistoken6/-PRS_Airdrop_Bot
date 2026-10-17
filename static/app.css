@@ -314,3 +314,16 @@ html[data-motion=off] .heritage-atmosphere span,html[data-motion=off] .heritage-
 .prs-social-symbol{color:#dfba70;font-size:24px}.prs-social strong{font-size:11px;letter-spacing:.08em}.prs-social small{font-size:10px;color:#dfc6a0;text-align:center}
 .mining-actions .notice{max-width:320px;font-size:12px}
 @media(max-width:600px){.prs-social{gap:6px}.prs-social a{padding:12px 5px}.prs-social strong{font-size:9px}.prs-social small{font-size:9px}}
+
+/* Dedicated official social page and Telegram account identifier */
+.prs-social-page{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:18px;margin-block:24px 38px}
+.prs-social-card{display:flex;align-items:center;gap:18px;padding:26px 20px;min-height:126px;background:linear-gradient(145deg,#201b21,#0e0c11);color:#fff;border:1px solid rgba(218,174,84,.42);border-radius:20px;text-decoration:none;box-shadow:0 12px 32px rgba(0,0,0,.12);transition:transform .2s,border-color .2s}
+.prs-social-card:hover,.prs-social-card:focus-visible{transform:translateY(-3px);border-color:#e4ba62}
+.prs-social-card-mark{font-size:32px;color:#e4ba62;min-width:40px;text-align:center}
+.prs-social-card-content{display:flex;flex-direction:column;gap:7px;flex:1;min-width:0}
+.prs-social-card-content strong{font-size:16px;letter-spacing:.04em}
+.prs-social-card-content small{color:#c6b8ac;line-height:1.6}
+.prs-social-card-arrow{color:#e4ba62;font-size:23px}
+.prs-telegram-id{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:16px;margin-block:20px;padding:22px 26px}
+.prs-telegram-id h2{margin:8px 0}.prs-telegram-id .number{font-size:clamp(20px,3vw,28px);direction:ltr;unicode-bidi:isolate}
+@media(max-width:540px){.prs-social-page{grid-template-columns:1fr}.prs-telegram-id{padding:18px}}
