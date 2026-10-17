@@ -1051,7 +1051,7 @@ def register_user_after_verify(user_id, referrer_id):
                 pass
     else:
         current_referred_by = user.get("referred_by")
-        if not current_referred_by and valid_referrer:
+        if not current_referred_by and valid_referrer and int(user.get("verified", 0)) < 1:
             users_col.update_one(
                 {"user_id": user_id}, 
                 {"$set": {"verified": 1, "referred_by": valid_referrer}}
@@ -1742,7 +1742,7 @@ def gateway_welcome(message):
     ref = int(args[1]) if len(args) > 1 and len(args[1]) <= 20 and args[1].isdecimal() else 0
     if ref == uid:
         ref = 0
-    if ref and not user.get("registration_referrer") and not user.get("referred_by"):
+    if ref and int(user.get("verified", 0)) < 1 and not user.get("registration_referrer") and not user.get("referred_by"):
         users_col.update_one({"user_id": uid}, {"$set": {"registration_referrer": ref}}, upsert=True)
     if not user.get("lang") and int(user.get("verified", 0)) < 1:
         lang = "fa" if getattr(message.from_user, "language_code", "fa").startswith("fa") else "en"
@@ -1943,7 +1943,7 @@ def send_welcome(message):
         return
 
     user = users_col.find_one({"user_id": user_id}) or {}
-    if referrer_id and int(user.get("verified", 0)) < 1:
+    if referrer_id and int(user.get("verified", 0)) < 1 and not user.get("registration_referrer"):
         # Preserve attribution if the user opens the website before selecting a language.
         users_col.update_one({"user_id": user_id}, {"$set": {"registration_referrer": referrer_id}}, upsert=True)
 
