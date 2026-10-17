@@ -473,7 +473,8 @@ class PortalService(PhaseTwoMixin):
         self.store.transaction(operation)
 
     def request_payment(self, user_id, amount=None):
-        if amount is not None and (type(amount) is not int or amount <= 0):
+        # Full-balance requests only. Reject partial amounts even from old clients.
+        if amount is not None and type(amount) is not int:
             raise PortalError("invalid_payment_amount")
         self._member(user_id)
         def operation(tx):
@@ -490,9 +491,9 @@ class PortalService(PhaseTwoMixin):
             balance = earned(user) - int(user.get("paid_amount", 0))
             if balance <= 0:
                 raise PortalError("nothing_to_pay", 409)
-            requested = balance if amount is None else amount
-            if requested > balance:
-                raise PortalError("invalid_payment_amount")
+            if amount is not None and amount != balance:
+                raise PortalError("full_balance_required", 400)
+            requested = balance
             pid = uuid4().hex
             payment = {"id": pid, "user_id": user_id, "amount": requested, "wallet": user["wallet"],
                        "status": "pending", "created_at": self.now(), "tx_hash": "", "reason": ""}
