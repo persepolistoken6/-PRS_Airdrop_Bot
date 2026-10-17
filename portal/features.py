@@ -114,7 +114,7 @@ class PhaseTwoMixin:
             if user.get("portal_suspended"):
                 raise PortalError("account_suspended", 403)
             candidate = user.get("registration_referrer") or referrer_id
-            if type(candidate) is int and candidate > 0 and candidate != user_id and not user.get("referred_by"):
+            if type(candidate) is int and candidate > 0 and candidate != user_id and not user.get("referred_by") and int(user.get("verified", 0)) < 1:
                 inviter = tx.get("users", candidate) or {"user_id": candidate, "verified": 0, "ref_count": 0}
                 old_total = earned(inviter)
                 inviter["ref_count"] = int(inviter.get("ref_count", 0)) + 1
