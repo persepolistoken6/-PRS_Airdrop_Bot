@@ -133,6 +133,9 @@ class PhaseTwoMixin:
         from .service import PortalError
         if (self.store.get("users", user_id) or {}).get("portal_suspended"):
             raise PortalError("account_suspended", 403)
+        # Every authenticated web API request rechecks current channel membership.
+        if user_id not in self.settings.admins:
+            self._member(user_id)
 
     def mining_config(self, tx=None):
         tx = tx or self.store
@@ -156,6 +159,10 @@ class PhaseTwoMixin:
         def operation(tx):
             self._enabled(tx)
             user = self._user(tx, user_id)
+            if int(user.get("ref_count", 0)) < REQUIRED_REFERRALS:
+                raise PortalError("referrals_required", 403)
+            if not re.fullmatch(r"0x[a-fA-F0-9]{40}", user.get("wallet") or ""):
+                raise PortalError("wallet_required", 403)
             current = tx.get("portal_mining", user_id)
             if current and current.get("status") == "active":
                 raise PortalError("mining_active", 409)
@@ -189,6 +196,10 @@ class PhaseTwoMixin:
         def operation(tx):
             self._enabled(tx)
             user = self._user(tx, user_id)
+            if int(user.get("ref_count", 0)) < REQUIRED_REFERRALS:
+                raise PortalError("referrals_required", 403)
+            if not re.fullmatch(r"0x[a-fA-F0-9]{40}", user.get("wallet") or ""):
+                raise PortalError("wallet_required", 403)
             cycle = tx.get("portal_mining", user_id)
             receipt = f"mining:{user_id}:{cycle_id}"
             previous = tx.get("portal_history", receipt)

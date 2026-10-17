@@ -269,11 +269,13 @@ class PortalService(PhaseTwoMixin):
             if not mission["active"] and not submission:
                 continue
             item = {k: mission.get(k) for k in ("id", "title", "title_en", "description", "description_en", "kind", "reward", "recurrence", "ends_at", "url", "question", "question_en", "options", "options_en", "max_attempts")}
+            if mission["kind"] == "quiz":
+                item["max_attempts"] = 1
             item["status"] = submission.get("status", "available")
             if not mission["active"] and item["status"] not in ("pending", "completed"):
                 item["status"] = "paused"
             item["reason"] = submission.get("reason", "")
-            item["attempts_left"] = max(0, mission["max_attempts"] - submission.get("attempts", 0))
+            item["attempts_left"] = max(0, (1 if mission["kind"] == "quiz" else mission["max_attempts"]) - submission.get("attempts", 0))
             item["remaining_places"] = max(0, min(mission["max_claims"] - mission["completed"] - mission.get("pending", 0),
                 (mission["budget"] - mission["spent"] - mission.get("reserved", 0)) // mission["reward"]))
             if not submission.get("status") and mission["ends_at"] and mission["ends_at"] <= self.now():
@@ -320,7 +322,7 @@ class PortalService(PhaseTwoMixin):
             "kind": kind, "recurrence": recurrence, "reward": reward, "budget": budget,
             "spent": 0, "reserved": 0, "completed": 0, "pending": 0, "max_claims": claims,
             "active": False, "ends_at": ends, "url": url, "created_at": self.now(), "created_by": admin_id,
-            "question": "", "question_en": "", "options": [], "options_en": [], "answer": None, "max_attempts": 2}
+            "question": "", "question_en": "", "options": [], "options_en": [], "answer": None, "max_attempts": 1}
         if kind == "quiz":
             options = payload.get("options", [])
             options_en = payload.get("options_en", [])
@@ -404,7 +406,7 @@ class PortalService(PhaseTwoMixin):
                 "period": self._period(mission), "attempts": 0, "reward": mission["reward"], "created_at": self.now()}
             if submission.get("status") in ("completed", "pending"):
                 raise PortalError("already_completed", 409)
-            if submission["attempts"] >= mission["max_attempts"]:
+            if submission["attempts"] >= (1 if mission["kind"] == "quiz" else mission["max_attempts"]):
                 raise PortalError("attempts_exhausted", 409)
             self._capacity(mission)
             if mission["kind"] == "quiz":
@@ -426,7 +428,7 @@ class PortalService(PhaseTwoMixin):
             tx.put("portal_missions", mission_id, mission)
             tx.put("portal_submissions", sid, submission)
             return {"status": submission["status"], "amount": mission["reward"] if submission["status"] == "completed" else 0,
-                    "attempts_left": max(0, mission["max_attempts"] - submission["attempts"])}
+                    "attempts_left": max(0, (1 if mission["kind"] == "quiz" else mission["max_attempts"]) - submission["attempts"])}
         return self.store.transaction(operation)
 
     def review_submission(self, admin_id, submission_id, approve, reason=""):

@@ -2,7 +2,7 @@
 import html
 from datetime import datetime, timezone
 
-from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
+from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from .service import PortalError
 
@@ -57,21 +57,17 @@ class BotBridge:
         uid = message.from_user.id
         try:
             url = self.service.issue_login(uid)
-            # Remove keyboards from older versions, then delete this transient
-            # cleanup message after sending the website entry button.
-            cleanup = self.bot.send_message(uid, self.text(uid, "ورود به سایت…", "Opening website sign-in…"),
-                                            reply_markup=ReplyKeyboardRemove())
+            # Keep the persistent reply keyboard, including the panel shortcut.
+            self.bot.send_message(uid, self.text(uid,
+                "برای بازکردن پنل در هر زمان، دکمه پنل کاربری را بزن.",
+                "Use the user panel button any time to open the portal."),
+                reply_markup=self.menu_factory(uid))
             keyboard = InlineKeyboardMarkup()
             keyboard.add(InlineKeyboardButton(self.text(uid, "🌐 ورود به پنل ایردراپ", "🌐 Open airdrop portal"), url=url))
             self.bot.send_message(uid, self.text(uid,
                 "🌐 ثبت‌نام آماده است؛ برای ادامه وارد سایت شو.\nلینک شخصی تو ۵ دقیقه اعتبار دارد؛ آن را برای دیگران نفرست.",
                 "🌐 Continue in the website.\nYour private sign-in link expires in 5 minutes. Keep it private."),
                 reply_markup=keyboard, protect_content=True)
-            if getattr(cleanup, "message_id", None):
-                try:
-                    self.bot.delete_message(uid, cleanup.message_id)
-                except Exception:
-                    pass
         except PortalError as error:
             self.bot.send_message(uid, self.error_text(error, uid))
         except Exception:
