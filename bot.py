@@ -1800,6 +1800,8 @@ if BOT_PORTAL_ONLY:
     def portal_only_message(message):
         if message.chat.type != "private":
             return
+        # Confirm receipt without recording chat IDs, answers or message text.
+        print("BOT UPDATE: private message received", flush=True)
         if is_admin(message.from_user.id):
             try:
                 route_admin_message(message)
@@ -1824,6 +1826,8 @@ if BOT_PORTAL_ONLY:
         uid = call.from_user.id
         message = getattr(call, "message", None)
         private = message and getattr(message.chat, "type", None) == "private" and message.chat.id == uid
+        if private:
+            print("BOT UPDATE: private callback received", flush=True)
         data = call.data or ""
         if is_admin(uid) and private and data.startswith("admin_"):
             handle_callbacks(call)
@@ -3528,13 +3532,52 @@ def handle_callbacks(call):
         else:
             bot.send_message(chat_id, get_msg(user_id, "submit_new_mode"))
 
+def bot_failure_label(error):
+    """Never log exception strings: Telegram request URLs contain the token."""
+    code = getattr(error, "error_code", None)
+    return f"Telegram API {code}" if type(code) is int else type(error).__name__
+
+
+def prepare_bot_polling():
+    print("BOT CHECK: validating Telegram connection", flush=True)
+    try:
+        identity = bot.get_me()
+    except Exception as error:
+        label = bot_failure_label(error)
+        print(f"BOT STARTUP FAILED: {label} during getMe", flush=True)
+        raise RuntimeError(f"Bot connection failed: {label}") from None
+    username = str(getattr(identity, "username", "") or "")
+    if not re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):
+        raise RuntimeError("Telegram returned an invalid bot username")
+    print(f"BOT CONNECTED: @{username}", flush=True)
+    if username.casefold() != BOT_USERNAME.strip().lstrip("@").casefold():
+        print(f"BOT CONFIG WARNING: set BOT_USERNAME to {username} in both services", flush=True)
+    print("BOT CHECK: clearing webhook before polling", flush=True)
+    try:
+        bot.delete_webhook(drop_pending_updates=not BOT_PORTAL_ONLY)
+    except Exception as error:
+        label = bot_failure_label(error)
+        print(f"BOT STARTUP FAILED: {label} during deleteWebhook", flush=True)
+        raise RuntimeError(f"Bot webhook setup failed: {label}") from None
+    print("BOT WEBHOOK: cleared", flush=True)
+
+
+def poll_bot_updates():
+    # Telegram retains a previous allowed_updates filter when it is omitted.
+    # Request both update types used by this bot explicitly on every poll.
+    print("BOT POLLING: message and callback_query enabled", flush=True)
+    return bot.infinity_polling(timeout=30, long_polling_timeout=30,
+                                skip_pending=not BOT_PORTAL_ONLY,
+                                allowed_updates=["message", "callback_query"])
+
+
 if __name__ == "__main__":
     if PORTAL_ENABLED:
         if not portal_service.store.ready():
             raise RuntimeError("Portal requires MongoDB transaction support; keep PORTAL_ENABLED=0 until ready")
         portal_service.store.ensure_indexes()
-    print("PHASE 2: user website gateway and dual admin management starting..." if BOT_PORTAL_ONLY else "Bot is starting with MongoDB & Dual-Language Support...")
-    bot.delete_webhook(drop_pending_updates=not BOT_PORTAL_ONLY)
+    print("PHASE 2: user website gateway and dual admin management starting..." if BOT_PORTAL_ONLY else "Bot is starting with MongoDB & Dual-Language Support...", flush=True)
+    prepare_bot_polling()
     time.sleep(2)
 
     backup_thread = threading.Thread(target=auto_backup_scheduler, daemon=True)
@@ -3542,8 +3585,8 @@ if __name__ == "__main__":
 
     while True:
         try:
-            bot.infinity_polling(timeout=30, long_polling_timeout=30, skip_pending=not BOT_PORTAL_ONLY)
+            poll_bot_updates()
         except Exception as e:
-            print(f"Polling error: {e}")
+            print(f"BOT POLLING FAILED: {bot_failure_label(e)}", flush=True)
             time.sleep(10)
 
