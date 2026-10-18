@@ -229,7 +229,7 @@ def create_app(settings=None, service=None):
             page = int(request.args.get("page", "1"))
         except ValueError:
             raise PortalError("invalid_request") from None
-        return jsonify(service.admin_users(g.user_id, request.args.get("q", ""), page))
+        return jsonify(service.admin_users(g.user_id, request.args.get("q", ""), page, eligible_only=request.args.get("eligible") == "1"))
 
     @app.get("/api/admin/users/<int:user_id>")
     @protected(admin=True)
