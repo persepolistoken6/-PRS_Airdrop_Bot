@@ -189,6 +189,13 @@ def create_app(settings=None, service=None):
         service.update_wallet(g.user_id, body().get("wallet"))
         return jsonify(ok=True)
 
+    @app.post("/api/social-links")
+    @protected()
+    def social_links():
+        data = body()
+        service.update_social_links(g.user_id, data.get("instagram", ""), data.get("twitter", ""))
+        return jsonify(ok=True)
+
     @app.post("/api/payments")
     @protected()
     def payment():
@@ -247,6 +254,13 @@ def create_app(settings=None, service=None):
         return Response(result, content_type="text/csv; charset=utf-8", headers={
             "Content-Disposition": f'attachment; filename="prs-{kind}.csv"'})
 
+    @app.get("/api/admin/export-xlsx/<kind>")
+    @protected(admin=True)
+    def admin_export_xlsx(kind):
+        result = service.export_xlsx(g.user_id, kind)
+        return Response(result, content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={
+            "Content-Disposition": f'attachment; filename="prs-{kind}.xlsx"'})
+
     @app.post("/api/admin/missions")
     @protected(admin=True)
     def create_mission():
@@ -277,6 +291,11 @@ def create_app(settings=None, service=None):
         data = body()
         service.review_payment(g.user_id, payment_id, data.get("approve"), data.get("tx_hash", ""), data.get("reason", ""))
         return jsonify(ok=True)
+
+    @app.post("/api/admin/payments/payout")
+    @protected(admin=True)
+    def payout_payments():
+        return jsonify(service.payout_payments(g.user_id, body().get("payment_ids")))
 
     @app.post("/api/admin/tickets/<ticket_id>/reply")
     @protected(admin=True)
