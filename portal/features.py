@@ -270,30 +270,61 @@ class PhaseTwoMixin:
 
     @staticmethod
     def _admin_user(user):
-        from .service import earned
+        from .service import MIN_WITHDRAWAL, earned
+        wallet = user.get("wallet") or ""
+        paid = int(user.get("paid_amount", 0))
+        referrals = int(user.get("ref_count", 0))
+        total_earned = earned(user)
+        balance = max(0, total_earned - paid)
+        wallet_valid = bool(re.fullmatch(r"0x[a-fA-F0-9]{40}", wallet))
+        suspended = bool(user.get("portal_suspended"))
+        eligible = (int(user.get("verified", 0)) >= 1 and referrals >= 3 and wallet_valid and
+                    balance >= MIN_WITHDRAWAL and not suspended)
         return {"user_id": user["user_id"], "registered": int(user.get("verified", 0)) >= 1,
+                "verified": int(user.get("verified", 0)),
                 "telegram_username": user.get("telegram_username") or "",
-                "referrals": int(user.get("ref_count", 0)), "referred_by": user.get("referred_by"),
-                "earned": earned(user), "paid": int(user.get("paid_amount", 0)),
-                "unpaid": level_for(user)["stored_balance"], "level": level_for(user),
-                "wallet": user.get("wallet") or "", "instagram": user.get("instagram") or user.get("instagram_id") or "",
+                "lang": user.get("lang") or "",
+                "registered_at": user.get("registered_at"),
+                "referrals": referrals, "referred_by": user.get("referred_by"),
+                "earned": total_earned, "paid": paid, "unpaid": balance,
+                "bonus_tokens": int(user.get("bonus_tokens", 0)),
+                "manual_bonus_tokens": int(user.get("manual_bonus_tokens", 0)),
+                "daily_count": int(user.get("daily_count", 0)),
+                "last_daily": user.get("last_daily", 0),
+                "level": level_for(user), "wallet": wallet,
+                "wallet_registered": bool(wallet), "submitted": int(user.get("submitted", 0)),
+                "instagram": user.get("instagram") or user.get("instagram_id") or "",
                 "twitter": user.get("twitter") or user.get("twitter_id") or "",
-                "suspended": bool(user.get("portal_suspended")),
-                "mining_total": int(user.get("mining_total", 0))}
+                "social_registered": bool(user.get("social_registered") or user.get("instagram_id") or user.get("twitter_id")),
+                "social_registered_at": user.get("social_registered_at"),
+                "social_updated_at": user.get("social_updated_at"),
+                "suspended": suspended, "eligible": eligible,
+                "mining_total": int(user.get("mining_total", 0)),
+                "challenge_quiz_attempts": int(user.get("challenge_quiz_attempts", 0)),
+                "challenge_quiz_passed": bool(user.get("challenge_quiz_passed", False))}
 
-    def admin_users(self, admin_id, query="", page=1):
-        from .service import PortalError
+    def admin_users(self, admin_id, query="", page=1, eligible_only=False):
+        from .service import MIN_WITHDRAWAL, PortalError
         self.require_admin(admin_id)
         if not isinstance(query, str) or len(query) > 100 or type(page) is not int or not 1 <= page <= 100000:
             raise PortalError("invalid_request")
         query = query.strip().lower()
         normalized_query = query.lstrip("@")
-        users = [self._admin_user(u) for u in self.store.all("users")
-                 if not query or any(normalized_query in str(value or "").lower() for value in (
-                     u.get("user_id"), u.get("telegram_username"), u.get("wallet"),
-                     u.get("instagram"), u.get("instagram_id"), u.get("twitter"), u.get("twitter_id")))]
+        users = []
+        for raw_user in self.store.all("users"):
+            user = self._admin_user(raw_user)
+            if eligible_only and not user["eligible"]:
+                continue
+            if query and not any(normalized_query in str(value or "").lower() for value in (
+                    user["user_id"], user["telegram_username"], user["wallet"],
+                    user["instagram"], user["twitter"])):
+                continue
+            users.append(user)
         users.sort(key=lambda u: u["user_id"], reverse=True)
-        return {"users": users[(page - 1) * 50:page * 50], "total": len(users), "page": page, "page_size": 50}
+        total = len(users)
+        return {"users": users[(page - 1) * 50:page * 50], "total": total,
+                "page": page, "page_size": 50, "eligible_only": bool(eligible_only),
+                "minimum_withdrawal": MIN_WITHDRAWAL if eligible_only else None}
 
     def admin_user_detail(self, admin_id, user_id):
         from .service import PortalError
@@ -302,12 +333,13 @@ class PhaseTwoMixin:
         if not user:
             raise PortalError("user_not_found", 404)
         recent = lambda name: sorted([item for item in self.store.all(name) if item.get("user_id") == user_id],
-                                    key=lambda item: item.get("created_at", 0), reverse=True)[:30]
+                                     key=lambda item: item.get("created_at", 0), reverse=True)[:100]
+        referrals = [{"user_id": u["user_id"], "registered": int(u.get("verified", 0)) >= 1,
+                      "telegram_username": u.get("telegram_username") or ""}
+                     for u in self.store.all("users") if u.get("referred_by") == user_id]
         return {"user": self._admin_user(user), "history": recent("portal_history"),
                 "payments": recent("portal_payments"), "mining": self.mining_status(user_id, user),
-                "referrals": [{"user_id": u["user_id"], "registered": int(u.get("verified", 0)) >= 1}
-                              for u in self.store.all("users") if u.get("referred_by") == user_id]}
-
+                "submissions": recent("portal_submissions"), "referrals": referrals}
     def admin_user_action(self, admin_id, user_id, payload):
         from .service import PortalError
         self.require_admin(admin_id)
