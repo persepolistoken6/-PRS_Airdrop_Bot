@@ -592,11 +592,6 @@ class PortalService(PhaseTwoMixin):
                         if int(receipt.status) == 1 and transfer_confirmed(receipt, payment["wallet"], int(payment["amount"]) * (10 ** decimals)):
                             self._finalize_onchain_payment(admin_id, payment_id, payment["tx_hash"], int(receipt.blockNumber))
                             results.append({"payment_id": payment_id, "status": "paid", "tx_hash": payment["tx_hash"]})
-                            try:
-                                _telegram_call(self.settings, "sendMessage", {"chat_id": int(payment["user_id"]),
-                                    "text": f"✅ پرداخت {int(payment['amount']):,} PRS انجام شد.\nهش تراکنش: {payment['tx_hash']}\nhttps://bscscan.com/tx/{payment['tx_hash']}"})
-                            except Exception:
-                                pass
                         else:
                             self._reset_failed_onchain_payment(admin_id, payment_id, payment["tx_hash"])
                             results.append({"payment_id": payment_id, "status": "failed", "tx_hash": payment["tx_hash"]})
@@ -649,11 +644,6 @@ class PortalService(PhaseTwoMixin):
                         continue
                     self._finalize_onchain_payment(admin_id, payment_id, tx_hash, int(receipt.blockNumber))
                     results.append({"payment_id": payment_id, "status": "paid", "tx_hash": tx_hash})
-                    try:
-                        _telegram_call(self.settings, "sendMessage", {"chat_id": int(payment["user_id"]),
-                            "text": f"✅ پرداخت {int(payment['amount']):,} PRS انجام شد.\nهش تراکنش: {tx_hash}\nhttps://bscscan.com/tx/{tx_hash}"})
-                    except Exception:
-                        pass
                 except PortalError:
                     raise
                 except Exception:
@@ -754,13 +744,6 @@ class PortalService(PhaseTwoMixin):
             tx.delete("portal_open_payments", payment["user_id"])
             self._audit(tx, admin_id, "review_payment", payment_id, {"approve": approve, "amount": payment["amount"], "tx_hash": payment["tx_hash"], "reason": reason.strip()})
         self.store.transaction(operation)
-        if approve:
-            payment = self.store.get("portal_payments", payment_id)
-            try:
-                _telegram_call(self.settings, "sendMessage", {"chat_id": int(payment["user_id"]),
-                    "text": f"✅ پرداخت {int(payment['amount']):,} PRS ثبت شد.\nهش تراکنش: {payment['tx_hash']}\nhttps://bscscan.com/tx/{payment['tx_hash']}"})
-            except Exception:
-                pass
 
     def ticket(self, user_id, message):
         if not isinstance(message, str) or not 10 <= len(message.strip()) <= 1500:

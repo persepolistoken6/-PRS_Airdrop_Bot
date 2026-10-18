@@ -272,11 +272,13 @@ class PhaseTwoMixin:
     def _admin_user(user):
         from .service import earned
         return {"user_id": user["user_id"], "registered": int(user.get("verified", 0)) >= 1,
+                "telegram_username": user.get("telegram_username") or "",
                 "referrals": int(user.get("ref_count", 0)), "referred_by": user.get("referred_by"),
                 "earned": earned(user), "paid": int(user.get("paid_amount", 0)),
                 "unpaid": level_for(user)["stored_balance"], "level": level_for(user),
-                "wallet": user.get("wallet") or "", "instagram": user.get("instagram") or "",
-                "twitter": user.get("twitter") or "", "suspended": bool(user.get("portal_suspended")),
+                "wallet": user.get("wallet") or "", "instagram": user.get("instagram") or user.get("instagram_id") or "",
+                "twitter": user.get("twitter") or user.get("twitter_id") or "",
+                "suspended": bool(user.get("portal_suspended")),
                 "mining_total": int(user.get("mining_total", 0))}
 
     def admin_users(self, admin_id, query="", page=1):
@@ -285,8 +287,11 @@ class PhaseTwoMixin:
         if not isinstance(query, str) or len(query) > 100 or type(page) is not int or not 1 <= page <= 100000:
             raise PortalError("invalid_request")
         query = query.strip().lower()
+        normalized_query = query.lstrip("@")
         users = [self._admin_user(u) for u in self.store.all("users")
-                 if not query or query in str(u["user_id"]) or query in str(u.get("wallet", "")).lower()]
+                 if not query or any(normalized_query in str(value or "").lower() for value in (
+                     u.get("user_id"), u.get("telegram_username"), u.get("wallet"),
+                     u.get("instagram"), u.get("instagram_id"), u.get("twitter"), u.get("twitter_id")))]
         users.sort(key=lambda u: u["user_id"], reverse=True)
         return {"users": users[(page - 1) * 50:page * 50], "total": len(users), "page": page, "page_size": 50}
 
