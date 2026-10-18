@@ -112,7 +112,7 @@ function inboxItems(){
  const items=[];
  for(const h of (state.me.history||[]).filter(h=>h.kind==="admin_bonus"))items.push({id:`bonus:${h.id||h.created_at}`,at:Number(h.created_at)||0,title:t("پاداش مدیر","Admin reward"),body:`${n(h.amount)} PRS — ${h.title||""}`});
  for(const ticket of state.me.tickets||[])if(ticket.reply)items.push({id:`reply:${ticket.id}:${ticket.replied_at||ticket.reply}`,at:Number(ticket.replied_at||ticket.updated_at||ticket.created_at)||0,title:t("پاسخ پشتیبانی","Support reply"),body:ticket.reply});
- for(const payment of state.me.payments||[])if(payment.status==="recorded"&&/^0x[0-9a-fA-F]{64}$/.test(payment.tx_hash||""))items.push({id:`site-payment:${payment.id}:${payment.tx_hash}`,at:Number(payment.reviewed_at||payment.created_at)||0,title:t("پرداخت انجام شد","Payment completed"),body:`${n(payment.amount)} PRS · ${payment.tx_hash}`,url:`https://bscscan.com/tx/${payment.tx_hash}`});
+ for(const payment of state.me.payments||[])if(payment.status==="recorded"&&/^0x[0-9a-fA-F]{64}$/.test(payment.tx_hash||""))items.push({id:`site-payment:${payment.id}:${payment.tx_hash}`,at:Number(payment.reviewed_at||payment.created_at)||0,title:t("پرداخت با موفقیت انجام شد","Payment completed successfully"),body:t(`تراکنش با موفقیت ثبت شد و ${n(payment.amount)} PRS برای شما ارسال شد.\nهش تراکنش: ${payment.tx_hash}`,`Transaction confirmed. ${n(payment.amount)} PRS was sent to your wallet.\nTransaction hash: ${payment.tx_hash}`),url:`https://bscscan.com/tx/${payment.tx_hash}`});
  if(state.me.announcement)items.push({id:`announcement:${state.me.announcement}`,at:0,title:t("پیام مدیریت","Management message"),body:state.me.announcement});
  return items.sort((a,b)=>b.at-a.at);
 }
