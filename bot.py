@@ -11,7 +11,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from telebot import TeleBot
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
-from pymongo import MongoClient
+from pymongo import MongoClient, ReturnDocument
 from portal.settings import Settings, REQUIRED_REFERRALS, BASE_REWARD, EXTRA_REWARD, DAILY_REWARD, MAX_TOTAL_TOKENS_LIMIT
 from portal.service import build_service, PortalError
 from portal.bot_bridge import BotBridge, PANEL_LABELS, MISSION_LABELS
@@ -1758,6 +1758,61 @@ def auto_backup_scheduler():
                 )
         except Exception as e:
             print(f"Auto backup error: {e}")
+
+
+def portal_payment_notification_scheduler():
+    """Deliver confirmed on-chain payment notices from the durable outbox."""
+    notifications = db.portal_payment_notifications
+    while True:
+        item = None
+        now = int(time.time())
+        try:
+            # Re-queue work left claimed by a process that stopped unexpectedly.
+            notifications.update_many(
+                {"status": "sending", "updated_at": {"$lt": now - 120}},
+                {"$set": {"status": "pending", "retry_at": now}},
+            )
+            item = notifications.find_one_and_update(
+                {"status": "pending", "retry_at": {"$lte": now}},
+                {"$set": {"status": "sending", "updated_at": now}, "$inc": {"attempts": 1}},
+                sort=[("created_at", 1)], return_document=ReturnDocument.AFTER,
+            )
+            if not item:
+                time.sleep(5)
+                continue
+            user = users_col.find_one({"user_id": item["user_id"]}, {"lang": 1}) or {}
+            if user.get("lang", "fa") == "en":
+                message = (
+                    f"✅ Your transaction was confirmed and {int(item['amount']):,} PRS "
+                    f"was sent to your wallet.\nTransaction hash: {item['tx_hash']}\n"
+                    f"https://bscscan.com/tx/{item['tx_hash']}"
+                )
+            else:
+                message = (
+                    f"✅ تراکنش با موفقیت ثبت شد و {int(item['amount']):,} PRS برای شما ارسال شد.\n"
+                    f"هش تراکنش: {item['tx_hash']}\n"
+                    f"https://bscscan.com/tx/{item['tx_hash']}"
+                )
+            bot.send_message(item["user_id"], message, disable_web_page_preview=True)
+            notifications.update_one(
+                {"_id": item["_id"], "status": "sending"},
+                {"$set": {"status": "sent", "sent_at": int(time.time())}},
+            )
+        except Exception:
+            # Do not log exception text; Telegram client errors can include URLs.
+            if item:
+                attempts = int(item.get("attempts", 1))
+                retry_at = int(time.time()) + min(3600, 30 * (2 ** min(attempts - 1, 7)))
+                try:
+                    notifications.update_one(
+                        {"_id": item["_id"], "status": "sending"},
+                        {"$set": {"status": "pending", "retry_at": retry_at,
+                                  "last_attempt_at": int(time.time())}},
+                    )
+                except Exception:
+                    pass
+            print("Payment notice delivery failed; queued for retry.", flush=True)
+            time.sleep(3)
 
 def send_eligible_no_wallet_excel(chat_id):
     rows = list(users_col.find({"ref_count": {"$gte": REQUIRED_REFERRALS}, "$or": [{"submitted": 0}, {"submitted": {"$exists": False}}]}).sort("ref_count", -1))
@@ -3589,6 +3644,9 @@ if __name__ == "__main__":
 
     backup_thread = threading.Thread(target=auto_backup_scheduler, daemon=True)
     backup_thread.start()
+    if PORTAL_ENABLED:
+        payment_notice_thread = threading.Thread(target=portal_payment_notification_scheduler, daemon=True)
+        payment_notice_thread.start()
 
     while True:
         try:
