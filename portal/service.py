@@ -33,6 +33,8 @@ def earned(user):
     base = BASE_REWARD + (refs - REQUIRED_REFERRALS) * EXTRA_REWARD if refs >= REQUIRED_REFERRALS else 0
     return base + int(user.get("daily_count", 0)) * DAILY_REWARD + int(user.get("bonus_tokens", 0)) + int(user.get("manual_bonus_tokens", 0))
 
+MIN_WITHDRAWAL = 20_000
+
 
 def _telegram_error(payload, http_status=0):
     code = payload.get("error_code", http_status)
@@ -213,9 +215,11 @@ class PortalService(PhaseTwoMixin):
             "registered": int(user.get("verified", 0)) >= 1,
             "earned": total, "paid": paid, "unpaid": max(0, total - paid),
             "referrals": int(user.get("ref_count", 0)), "required_referrals": REQUIRED_REFERRALS,
+            "min_withdrawal": MIN_WITHDRAWAL,
             "daily_count": int(user.get("daily_count", 0)), "daily_reward": DAILY_REWARD,
             "daily_available_at": max(0, int(user.get("last_daily", 0)) + 86400) if user.get("last_daily") else 0,
             "wallet": user.get("wallet") or "", "rank": next((r["rank"] for r in ranking if r["user_id"] == user_id), None),
+            "instagram": user.get("instagram") or "", "twitter": user.get("twitter") or "",
             "wallet_edits_remaining": max(0, 2 - int(user.get("submitted", 0))),
             "referral_link": f"https://t.me/{self.settings.bot_username}?start={user_id}",
             "channel_link": f"https://t.me/{self.settings.channel.lstrip('@')}",
@@ -472,6 +476,28 @@ class PortalService(PhaseTwoMixin):
             tx.put("users", user_id, user)
         self.store.transaction(operation)
 
+    def update_social_links(self, user_id, instagram, twitter):
+        if not isinstance(instagram, str) or not isinstance(twitter, str) or len(instagram) > 300 or len(twitter) > 300:
+            raise PortalError("invalid_request")
+        def valid(value, hosts):
+            if not value.strip():
+                return True
+            from urllib.parse import urlsplit
+            candidate = value.strip()
+            if not candidate.startswith(("https://", "http://")):
+                candidate = "https://" + candidate.lstrip("/")
+            parts = urlsplit(candidate)
+            return parts.scheme == "https" and (parts.hostname or "").lower() in hosts and bool(parts.path.strip("/")) and not parts.username and not parts.password
+        if not valid(instagram, {"instagram.com", "www.instagram.com"}) or not valid(twitter, {"x.com", "www.x.com", "twitter.com", "www.twitter.com"}):
+            raise PortalError("invalid_request")
+        self._member(user_id)
+        def operation(tx):
+            user = self._user(tx, user_id)
+            user["instagram"] = instagram.strip()
+            user["twitter"] = twitter.strip()
+            tx.put("users", user_id, user)
+        self.store.transaction(operation)
+
     def request_payment(self, user_id, amount=None):
         # Full-balance requests only. Reject partial amounts even from old clients.
         if amount is not None and type(amount) is not int:
@@ -489,7 +515,7 @@ class PortalService(PhaseTwoMixin):
             if tx.get("portal_open_payments", user_id):
                 raise PortalError("payment_pending", 409)
             balance = earned(user) - int(user.get("paid_amount", 0))
-            if balance <= 0:
+            if balance < MIN_WITHDRAWAL:
                 raise PortalError("nothing_to_pay", 409)
             if amount is not None and amount != balance:
                 raise PortalError("full_balance_required", 400)
@@ -505,6 +531,181 @@ class PortalService(PhaseTwoMixin):
             tx.put("portal_open_payments", user_id, {"payment_id": pid})
             return payment
         return self.store.transaction(operation)
+
+    def payout_payments(self, admin_id, payment_ids):
+        """Send approved pending withdrawals from the configured BSC signer."""
+        self.require_admin(admin_id)
+        if not isinstance(payment_ids, list) or not 1 <= len(payment_ids) <= 20 or any(not isinstance(x, str) or len(x) > 64 for x in payment_ids) or len(set(payment_ids)) != len(payment_ids):
+            raise PortalError("invalid_request")
+        if self.settings.demo:
+            raise PortalError("payout_unavailable", 503)
+        if not (self.settings.bsc_rpc_url and self.settings.payout_private_key):
+            raise PortalError("payout_not_configured", 503)
+        try:
+            from web3 import Web3
+            w3 = Web3(Web3.HTTPProvider(self.settings.bsc_rpc_url, request_kwargs={"timeout": 20}))
+            if not w3.is_connected() or int(w3.eth.chain_id) != 56:
+                raise ValueError("wrong network")
+            account = w3.eth.account.from_key(self.settings.payout_private_key)
+            token_address = Web3.to_checksum_address(self.settings.prs_token_address)
+            token = w3.eth.contract(address=token_address, abi=[
+                {"constant": True, "inputs": [], "name": "decimals", "outputs": [{"name": "", "type": "uint8"}], "type": "function"},
+                {"constant": False, "inputs": [{"name": "to", "type": "address"}, {"name": "value", "type": "uint256"}], "name": "transfer", "outputs": [{"name": "", "type": "bool"}], "type": "function"},
+                {"anonymous": False, "inputs": [{"indexed": True, "name": "from", "type": "address"}, {"indexed": True, "name": "to", "type": "address"}, {"indexed": False, "name": "value", "type": "uint256"}], "name": "Transfer", "type": "event"},
+            ])
+            decimals = int(token.functions.decimals().call())
+            if decimals != self.settings.prs_token_decimals:
+                raise ValueError("token decimals mismatch")
+        except PortalError:
+            raise
+        except Exception:
+            raise PortalError("payout_unavailable", 503) from None
+
+        def transfer_confirmed(receipt, recipient, amount):
+            signature = bytes(w3.keccak(text="Transfer(address,address,uint256)"))
+            recipient_bytes = bytes.fromhex(recipient[2:]).lower()
+            for log in receipt.logs:
+                topics = [bytes.fromhex(x[2:]) if isinstance(x, str) else bytes(x) for x in log.get("topics", [])]
+                if (str(log.get("address", "")).lower() == token_address.lower() and len(topics) >= 3
+                        and topics[0] == signature and topics[2][-20:].lower() == recipient_bytes):
+                    data = log.get("data", "0x0")
+                    value = int(data, 16) if isinstance(data, str) else int.from_bytes(bytes(data), "big")
+                    if value == amount:
+                        return True
+            return False
+
+        lease_id = uuid4().hex
+        def acquire(store_tx):
+            lease = store_tx.get("portal_state", "onchain_payout_lease") or {}
+            if int(lease.get("expires_at", 0)) > self.now():
+                raise PortalError("payout_in_progress", 409)
+            store_tx.put("portal_state", "onchain_payout_lease", {"id": lease_id, "expires_at": self.now() + 7200})
+        self.store.transaction(acquire)
+        try:
+            results = []
+            for payment_id in payment_ids:
+                tx_hash = ""
+                payment = self.store.get("portal_payments", payment_id)
+                if payment and payment.get("status") == "sending" and payment.get("tx_hash"):
+                    try:
+                        receipt = w3.eth.get_transaction_receipt(payment["tx_hash"])
+                        if int(receipt.status) == 1 and transfer_confirmed(receipt, payment["wallet"], int(payment["amount"]) * (10 ** decimals)):
+                            self._finalize_onchain_payment(admin_id, payment_id, payment["tx_hash"], int(receipt.blockNumber))
+                            results.append({"payment_id": payment_id, "status": "paid", "tx_hash": payment["tx_hash"]})
+                            try:
+                                _telegram_call(self.settings, "sendMessage", {"chat_id": int(payment["user_id"]),
+                                    "text": f"✅ پرداخت {int(payment['amount']):,} PRS انجام شد.\nهش تراکنش: {payment['tx_hash']}\nhttps://bscscan.com/tx/{payment['tx_hash']}"})
+                            except Exception:
+                                pass
+                        else:
+                            self._reset_failed_onchain_payment(admin_id, payment_id, payment["tx_hash"])
+                            results.append({"payment_id": payment_id, "status": "failed", "tx_hash": payment["tx_hash"]})
+                    except Exception:
+                        results.append({"payment_id": payment_id, "status": "sending", "tx_hash": payment["tx_hash"]})
+                    continue
+                if not payment or payment.get("status") != "pending":
+                    results.append({"payment_id": payment_id, "status": "skipped"})
+                    continue
+                wallet = payment.get("wallet", "")
+                if not re.fullmatch(r"0x[a-fA-F0-9]{40}", wallet) or int(payment.get("amount", 0)) < MIN_WITHDRAWAL:
+                    results.append({"payment_id": payment_id, "status": "invalid_request"})
+                    continue
+                # Reserve before broadcasting. An uncertain RPC response stays locked
+                # for reconciliation and cannot be accidentally paid a second time.
+                nonce = w3.eth.get_transaction_count(account.address, "pending")
+                amount_wei = int(payment["amount"]) * (10 ** decimals)
+                try:
+                    tx = token.functions.transfer(Web3.to_checksum_address(wallet), amount_wei).build_transaction({
+                        "from": account.address, "nonce": nonce, "chainId": 56,
+                        "gas": 100000, "gasPrice": w3.eth.gas_price,
+                    })
+                    signed = account.sign_transaction(tx)
+                    tx_hash = Web3.to_hex(signed.hash)
+                    def mark_sending(store_tx):
+                        current = store_tx.get("portal_payments", payment_id)
+                        if not current or current.get("status") != "pending":
+                            raise PortalError("already_reviewed", 409)
+                        current.update(status="sending", tx_hash=tx_hash, reviewed_by=admin_id,
+                                       payout_started_at=self.now())
+                        store_tx.put("portal_payments", payment_id, current)
+                        self._audit(store_tx, admin_id, "payout_started", payment_id,
+                                    {"amount": current["amount"], "tx_hash": tx_hash})
+                    self.store.transaction(mark_sending)
+                    try:
+                        raw_transaction = getattr(signed, "raw_transaction", None) or signed.rawTransaction
+                        sent = w3.eth.send_raw_transaction(raw_transaction)
+                    except Exception:
+                        # The RPC may have accepted the raw transaction before the
+                        # connection failed; resolve by its deterministic hash.
+                        try:
+                            sent = w3.eth.get_transaction(tx_hash)
+                        except Exception:
+                            results.append({"payment_id": payment_id, "status": "sending", "tx_hash": tx_hash})
+                            return {"results": results}
+                    receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=180, poll_latency=3)
+                    if int(receipt.status) != 1 or not transfer_confirmed(receipt, wallet, amount_wei):
+                        self._reset_failed_onchain_payment(admin_id, payment_id, tx_hash)
+                        results.append({"payment_id": payment_id, "status": "failed", "tx_hash": tx_hash})
+                        continue
+                    self._finalize_onchain_payment(admin_id, payment_id, tx_hash, int(receipt.blockNumber))
+                    results.append({"payment_id": payment_id, "status": "paid", "tx_hash": tx_hash})
+                    try:
+                        _telegram_call(self.settings, "sendMessage", {"chat_id": int(payment["user_id"]),
+                            "text": f"✅ پرداخت {int(payment['amount']):,} PRS انجام شد.\nهش تراکنش: {tx_hash}\nhttps://bscscan.com/tx/{tx_hash}"})
+                    except Exception:
+                        pass
+                except PortalError:
+                    raise
+                except Exception:
+                    current = self.store.get("portal_payments", payment_id) or {}
+                    results.append({"payment_id": payment_id,
+                                    "status": "sending" if current.get("status") == "sending" else "failed",
+                                    "tx_hash": current.get("tx_hash", "")})
+            return {"results": results}
+        finally:
+            def release(store_tx):
+                lease = store_tx.get("portal_state", "onchain_payout_lease") or {}
+                if lease.get("id") == lease_id:
+                    store_tx.delete("portal_state", "onchain_payout_lease")
+            self.store.transaction(release)
+
+    def _reset_failed_onchain_payment(self, admin_id, payment_id, tx_hash):
+        def operation(tx):
+            payment = tx.get("portal_payments", payment_id)
+            if payment and payment.get("status") == "sending" and payment.get("tx_hash", "").lower() == tx_hash.lower():
+                payment["last_failed_tx_hash"] = tx_hash
+                payment.update(status="pending", tx_hash="")
+                tx.put("portal_payments", payment_id, payment)
+                self._audit(tx, admin_id, "payout_reverted", payment_id, {"tx_hash": tx_hash})
+        self.store.transaction(operation)
+
+    def _finalize_onchain_payment(self, admin_id, payment_id, tx_hash, block_number):
+        def operation(tx):
+            payment = tx.get("portal_payments", payment_id)
+            if not payment:
+                raise PortalError("user_not_found", 404)
+            if payment.get("status") == "recorded" and payment.get("tx_hash", "").lower() == tx_hash.lower():
+                return
+            if payment.get("status") != "sending" or payment.get("tx_hash", "").lower() != tx_hash.lower():
+                raise PortalError("payment_balance_changed", 409)
+            user = tx.get("users", payment["user_id"])
+            if not user or payment["amount"] > earned(user) - int(user.get("paid_amount", 0)):
+                raise PortalError("payment_balance_changed", 409)
+            receipt = tx_hash.lower()
+            if tx.get("portal_payment_receipts", receipt):
+                raise PortalError("transaction_used", 409)
+            tx.put("portal_payment_receipts", receipt, {"payment_id": payment_id})
+            user["paid_amount"] = int(user.get("paid_amount", 0)) + int(payment["amount"])
+            user["paid"] = int(user["paid_amount"] >= earned(user))
+            tx.put("users", user["user_id"], user)
+            payment.update(status="recorded", tx_hash=tx_hash, reviewed_at=self.now(),
+                           block_number=block_number)
+            tx.put("portal_payments", payment_id, payment)
+            tx.delete("portal_open_payments", payment["user_id"])
+            self._history(tx, f"payment:{payment_id}", user["user_id"], "payment", -int(payment["amount"]), "پرداخت تأییدشده روی بلاکچین · On-chain payment confirmed")
+            self._audit(tx, admin_id, "payout_confirmed", payment_id,
+                        {"amount": payment["amount"], "tx_hash": tx_hash, "block_number": block_number})
+        self.store.transaction(operation)
 
     def admin_update_wallet(self, admin_id, user_id, wallet):
         self.require_admin(admin_id)
@@ -553,6 +754,13 @@ class PortalService(PhaseTwoMixin):
             tx.delete("portal_open_payments", payment["user_id"])
             self._audit(tx, admin_id, "review_payment", payment_id, {"approve": approve, "amount": payment["amount"], "tx_hash": payment["tx_hash"], "reason": reason.strip()})
         self.store.transaction(operation)
+        if approve:
+            payment = self.store.get("portal_payments", payment_id)
+            try:
+                _telegram_call(self.settings, "sendMessage", {"chat_id": int(payment["user_id"]),
+                    "text": f"✅ پرداخت {int(payment['amount']):,} PRS ثبت شد.\nهش تراکنش: {payment['tx_hash']}\nhttps://bscscan.com/tx/{payment['tx_hash']}"})
+            except Exception:
+                pass
 
     def ticket(self, user_id, message):
         if not isinstance(message, str) or not 10 <= len(message.strip()) <= 1500:
@@ -612,7 +820,7 @@ class PortalService(PhaseTwoMixin):
         mining = self.mining_config()
         return {"missions": sorted(self.store.all("portal_missions"), key=lambda m: m["created_at"], reverse=True),
             "submissions": [s for s in self.store.all("portal_submissions") if s["status"] == "pending"],
-            "payments": [p for p in self.store.all("portal_payments") if p["status"] == "pending"],
+            "payments": [p for p in self.store.all("portal_payments") if p["status"] in ("pending", "sending")],
             "tickets": [t for t in self.store.all("portal_tickets") if t["status"] == "open"],
             "users": len([u for u in users if int(u.get("verified", 0)) >= 1]),
             "stats": {"earned": sum(earned(u) for u in users), "paid": sum(int(u.get("paid_amount", 0)) for u in users),

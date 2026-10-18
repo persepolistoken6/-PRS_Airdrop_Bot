@@ -275,7 +275,8 @@ class PhaseTwoMixin:
                 "referrals": int(user.get("ref_count", 0)), "referred_by": user.get("referred_by"),
                 "earned": earned(user), "paid": int(user.get("paid_amount", 0)),
                 "unpaid": level_for(user)["stored_balance"], "level": level_for(user),
-                "wallet": user.get("wallet") or "", "suspended": bool(user.get("portal_suspended")),
+                "wallet": user.get("wallet") or "", "instagram": user.get("instagram") or "",
+                "twitter": user.get("twitter") or "", "suspended": bool(user.get("portal_suspended")),
                 "mining_total": int(user.get("mining_total", 0))}
 
     def admin_users(self, admin_id, query="", page=1):
@@ -376,3 +377,42 @@ class PhaseTwoMixin:
                 values.append(value)
             writer.writerow(values)
         return "\ufeff" + output.getvalue()
+
+    def export_xlsx(self, admin_id, kind):
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill
+        from .service import PortalError
+        self.require_admin(admin_id)
+        if kind == "paid":
+            rows = [p for p in self.store.all("portal_payments") if p.get("status") == "recorded"]
+            fields = ["tx_hash", "user_id", "amount", "wallet", "status", "block_number", "created_at", "reviewed_at", "reviewed_by"]
+            headers = ["Transaction hash", "Telegram numeric ID", "PRS paid", "Wallet", "Status", "Block", "Requested at", "Paid at", "Admin ID"]
+        elif kind == "social":
+            rows = [self._admin_user(u) for u in self.store.all("users")]
+            fields = ["user_id", "instagram", "twitter"]
+            headers = ["Telegram numeric ID", "Instagram URL", "X / Twitter URL"]
+        else:
+            raise PortalError("not_found", 404)
+        book = Workbook()
+        sheet = book.active
+        sheet.title = "Paid transactions" if kind == "paid" else "Social profiles"
+        sheet.append(headers)
+        for cell in sheet[1]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor="8B1E2D")
+        for row in sorted(rows, key=lambda item: item.get("reviewed_at", item.get("user_id", 0)) or 0, reverse=True):
+            values = []
+            for field in fields:
+                value = row.get(field, "")
+                if field.endswith("_at") and value:
+                    value = datetime.fromtimestamp(value, ZoneInfo(CAMPAIGN_TIMEZONE)).isoformat()
+                values.append(value if value is not None else "")
+            sheet.append(values)
+        sheet.freeze_panes = "A2"
+        sheet.auto_filter.ref = sheet.dimensions
+        for column in sheet.columns:
+            width = min(70, max(15, max(len(str(cell.value or "")) for cell in column) + 2))
+            sheet.column_dimensions[column[0].column_letter].width = width
+        stream = io.BytesIO()
+        book.save(stream)
+        return stream.getvalue()

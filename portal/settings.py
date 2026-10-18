@@ -35,6 +35,10 @@ class Settings:
     timezone: str = CAMPAIGN_TIMEZONE
     login_ttl: int = 300
     session_ttl: int = 86400
+    bsc_rpc_url: str = ""
+    payout_private_key: str = ""
+    prs_token_address: str = "0x1f67eB3e7487b7D70C69264Ab907Dd074ef1d39f"
+    prs_token_decimals: int = 18
 
     @classmethod
     def from_env(cls):
@@ -59,4 +63,8 @@ class Settings:
             # Phase two uses Tehran even when an older deployment still has
             # PORTAL_TIMEZONE=Asia/Baghdad configured.
             timezone=CAMPAIGN_TIMEZONE,
+            bsc_rpc_url=os.getenv("BSC_RPC_URL", "").strip(),
+            payout_private_key=os.getenv("PAYOUT_PRIVATE_KEY", "").strip(),
+            prs_token_address=os.getenv("PRS_TOKEN_ADDRESS", "0x1f67eB3e7487b7D70C69264Ab907Dd074ef1d39f").strip(),
+            prs_token_decimals=int(os.getenv("PRS_TOKEN_DECIMALS", "18")),
         )
