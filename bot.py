@@ -8,6 +8,7 @@ import threading
 import re
 from uuid import uuid4
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from telebot import TeleBot
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from pymongo import MongoClient
@@ -451,6 +452,126 @@ def is_bot_globally_disabled():
     if setting and setting.get("status") == "off":
         return True
     return False
+
+
+def get_admin_reports_markup():
+    """Separate portal exports from legacy bot reports to avoid button collisions."""
+    markup = ReplyKeyboardMarkup(resize_keyboard=True, is_persistent=True, row_width=2)
+    markup.row("👥 کاربران پنل سایت (CSV)", "💳 پرداخت‌های پنل سایت (CSV)")
+    markup.row("✅ پرداخت‌های موفق سایت (Excel)", "🌐 آیدی‌های اجتماعی سایت (Excel)")
+    markup.row("🧾 سوابق مدیریت سایت (CSV)")
+    markup.row("↩️ بازگشت به پنل مدیریت")
+    return markup
+
+
+def _portal_report_csv_value(value, field=""):
+    if value is None:
+        return ""
+    if field.endswith("_at") and isinstance(value, (int, float)) and value:
+        try:
+            value = datetime.fromtimestamp(value, ZoneInfo("Asia/Tehran")).isoformat()
+        except (OverflowError, OSError, ValueError):
+            pass
+    elif isinstance(value, (dict, list, tuple)):
+        value = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    text_value = str(value)
+    if text_value.lstrip().startswith(("=", "+", "-", "@", "\t", "\r")):
+        text_value = "'" + text_value
+    return text_value
+
+
+def send_portal_csv_report(chat_id, report_kind):
+    reports = {
+        "users": ("گزارش کاربران پنل سایت", "portal_site_users.csv", list(db.users.find({})),
+                  ["user_id", "telegram_username", "registered", "referrals", "referred_by", "earned", "paid", "unpaid", "wallet", "instagram", "twitter", "suspended", "mining_total"]),
+        "payments": ("گزارش درخواست‌ها و پرداخت‌های سایت", "portal_site_payments.csv", list(db.portal_payments.find({})),
+                     ["id", "user_id", "amount", "wallet", "status", "tx_hash", "block_number", "reason", "created_at", "reviewed_at", "reviewed_by"]),
+        "audit": ("گزارش سوابق مدیریت سایت", "portal_site_admin_audit.csv", list(db.portal_audit.find({})),
+                  ["id", "admin_id", "action", "target", "details", "created_at"]),
+    }
+    if report_kind not in reports:
+        return
+    title, filename, rows, fields = reports[report_kind]
+    if report_kind == "users":
+        prepared = []
+        for user in rows:
+            total = calculate_total_tokens(user.get("ref_count", 0), user.get("daily_count", 0),
+                                           user.get("bonus_tokens", 0), user.get("manual_bonus_tokens", 0))
+            paid = int(user.get("paid_amount", 0) or 0)
+            prepared.append({
+                "user_id": user.get("user_id"), "telegram_username": user.get("telegram_username", ""),
+                "registered": int(user.get("verified", 0) or 0) >= 1,
+                "referrals": user.get("ref_count", 0), "referred_by": user.get("referred_by", ""),
+                "earned": total, "paid": paid, "unpaid": max(0, total - paid),
+                "wallet": user.get("wallet", ""), "instagram": user.get("instagram") or user.get("instagram_id", ""),
+                "twitter": user.get("twitter") or user.get("twitter_id", ""),
+                "suspended": bool(user.get("portal_suspended")), "mining_total": user.get("mining_total", 0),
+            })
+        rows = prepared
+    output = io.StringIO(newline="")
+    writer = csv.writer(output)
+    writer.writerow(fields)
+    for row in rows:
+        writer.writerow([_portal_report_csv_value(row.get(field, ""), field) for field in fields])
+    file_bytes = io.BytesIO(("\ufeff" + output.getvalue()).encode("utf-8"))
+    file_bytes.name = filename
+    bot.send_document(chat_id, file_bytes, caption=f"📁 {title} · {len(rows):,} ردیف", reply_markup=get_admin_reports_markup())
+
+
+def send_portal_xlsx_report(chat_id, report_kind):
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    if report_kind == "paid":
+        rows = list(db.portal_payments.find({"status": "recorded"}))
+        headers = ["هش تراکنش", "آیدی عددی تلگرام", "مبلغ PRS", "کیف پول", "وضعیت", "بلاک", "زمان درخواست", "زمان پرداخت", "آیدی مدیر"]
+        fields = ["tx_hash", "user_id", "amount", "wallet", "status", "block_number", "created_at", "reviewed_at", "reviewed_by"]
+        filename, title, sheet_title = "portal_site_paid_transactions.xlsx", "پرداخت‌های موفق سایت", "پرداخت‌های موفق"
+    elif report_kind == "social":
+        rows = list(db.users.find({}))
+        headers = ["آیدی عددی تلگرام", "نام کاربری تلگرام", "Instagram", "X / Twitter", "کیف پول"]
+        fields = ["user_id", "telegram_username", "instagram", "twitter", "wallet"]
+        filename, title, sheet_title = "portal_site_social_profiles.xlsx", "آیدی‌های اجتماعی کاربران سایت", "پروفایل‌های اجتماعی"
+    else:
+        return
+    book = Workbook()
+    sheet = book.active
+    sheet.title = sheet_title
+    sheet.append(headers)
+    for cell in sheet[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="8B1E2D")
+    if report_kind == "social":
+        rows.sort(key=lambda row: int(row.get("user_id", 0) or 0), reverse=True)
+    else:
+        rows.sort(key=lambda row: row.get("reviewed_at", 0) or 0, reverse=True)
+    for row in rows:
+        values = []
+        for field in fields:
+            if report_kind == "social" and field == "instagram":
+                value = row.get("instagram") or row.get("instagram_id", "")
+            elif report_kind == "social" and field == "twitter":
+                value = row.get("twitter") or row.get("twitter_id", "")
+            else:
+                value = row.get(field, "")
+            if field.endswith("_at") and value:
+                try:
+                    value = datetime.fromtimestamp(value, ZoneInfo("Asia/Tehran")).strftime("%Y-%m-%d %H:%M:%S")
+                except (TypeError, OverflowError, OSError, ValueError):
+                    value = str(value)
+            if isinstance(value, (dict, list, tuple)):
+                value = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+            values.append(value if value is not None else "")
+        sheet.append(values)
+    for col_index in range(1, len(headers) + 1):
+        width = min(60, max(16, max((len(str(sheet.cell(row, col_index).value or "")) for row in range(1, min(sheet.max_row, 150) + 1)), default=12) + 2))
+        sheet.column_dimensions[get_column_letter(col_index)].width = width
+    output = io.BytesIO()
+    book.save(output)
+    output.seek(0)
+    output.name = filename
+    bot.send_document(chat_id, output, caption=f"📁 {title} · {len(rows):,} ردیف", reply_markup=get_admin_reports_markup())
 
 def get_user_data(user_id):
     user = users_col.find_one({"user_id": user_id})
@@ -987,7 +1108,7 @@ def get_admin_reply_markup():
     if PORTAL_ENABLED and os.getenv("WEB_BASE_URL", "").strip():
         markup.row("🌐 مدیریت سایت" if BOT_PORTAL_ONLY else PANEL_LABELS[0])
     markup.row("👝 مدیریت و تایید ولت‌ها", "📊 گزارش کلی توکن‌ها")
-    markup.row("🔍 جستجوی کاربر (آیدی یا ولت)", "✏️ ویرایش ولت کاربر با آیدی")
+    markup.row("🔍 جستجوی کاربر (نام کاربری، آیدی یا ولت)", "✏️ ویرایش ولت کاربر با آیدی")
     markup.row("📁 آپلود اکسل پرداختی‌ها", "🟢 اکسل پرداخت‌شده‌ها")
     markup.row("🟡 اکسل در انتظار پرداخت", "📥 اکسل واجدین شرایط بی‌ولت")
     markup.row("📥 اکسل کاربران زیر حد نصاب (<3 دعوت)", "📊 گزارش تفکیکی کامل (فایل)")
@@ -995,7 +1116,7 @@ def get_admin_reply_markup():
     markup.row("🎁 پاداش همگانی واجدین شرایط")
     markup.row("🎯 پاداش دستی به کاربر", "📊 اکسل پاداش‌های دستی")
     markup.row("🚫 بررسی و خروجی بلاک‌کنندگان", "📣 پیام به واجدین بی‌ولت")
-    markup.row("🎟 گزارش آیدی‌های قرعه‌کشی")
+    markup.row("📂 گزارش‌های پنل سایت")
     markup.row("🔄 به‌روزرسانی پنل ادمین", "📢 ارسال همگانی پیام")
     markup.row("✉️ ارسال پیام شخصی به کاربر", "🔴 خاموش کردن ربات")
     markup.row("🟢 روشن کردن ربات", "🔙 خروج از حالت ادمین / منوی اصلی")
@@ -1738,6 +1859,9 @@ def send_portal_entry(user_id):
 def gateway_welcome(message):
     uid = message.from_user.id
     user = users_col.find_one({"user_id": uid}) or {}
+    telegram_username = getattr(message.from_user, "username", None)
+    if telegram_username:
+        users_col.update_one({"user_id": uid}, {"$set": {"telegram_username": f"@{telegram_username}"}})
     args = (message.text or "").split()
     ref = int(args[1]) if len(args) > 1 and len(args[1]) <= 20 and args[1].isdecimal() else 0
     if ref == uid:
@@ -1765,6 +1889,8 @@ def gateway_captcha_reply(message):
         ask_to_join(uid, proof.get("pending_referrer") or 0, uid)
         return
     register_user_after_verify(uid, proof.get("pending_referrer"))
+    if getattr(message.from_user, "username", None):
+        users_col.update_one({"user_id": uid}, {"$set": {"telegram_username": f"@{message.from_user.username}"}})
     captcha_col.delete_one({"user_id": uid})
     send_portal_entry(uid)
 
@@ -1901,6 +2027,9 @@ def send_welcome(message):
             return route_admin_message(message)
         return gateway_welcome(message)
     user_id = message.from_user.id
+    telegram_username = getattr(message.from_user, "username", None)
+    if telegram_username:
+        users_col.update_one({"user_id": user_id}, {"$set": {"telegram_username": f"@{telegram_username}"}})
     command = (message.text or "").split()[0].split("@")[0]
     registration_requested = command == "/register"
 
@@ -2144,169 +2273,6 @@ def send_status_excel_report(chat_id, status_filter):
     
     caption_text = f"📁 فایل گزارش کاربران **{status_name}** (فرمت سازگار با اکسل/CSV)"
     bot.send_document(chat_id, file_bytes, caption=caption_text, reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
-
-def send_social_lottery_report(chat_id):
-    rows = list(users_col.find({
-        "$or": [
-            {"social_registered": True},
-            {"instagram_id": {"$regex": r"^@"}},
-            {"ref_count": {"$gte": CHALLENGE_REQUIRED_REFERRALS}},
-            {"challenge_quiz_attempts": {"$gt": 0}},
-            {"challenge_quiz_state": "in_progress"}
-        ]
-    }).sort([("ref_count", -1), ("social_updated_at", -1)]))
-
-    if not rows:
-        bot.send_message(
-            chat_id,
-            "⚠️ هنوز هیچ کاربری برای گزارش شرایط مسابقه یافت نشد.",
-            reply_markup=get_admin_reply_markup()
-        )
-        return
-
-    referral_ready_count = 0
-    wallet_ready_count = 0
-    instagram_ready_count = 0
-    quiz_passed_count = 0
-    bot_conditions_complete_count = 0
-
-    output = io.StringIO(newline="")
-    writer = csv.writer(output)
-    writer.writerow([
-        "Lottery Number",
-        "User ID",
-        "Telegram Username",
-        "Twitter/X ID",
-        "Instagram ID",
-        "Referrals",
-        "Referral Requirement (10+)",
-        "Wallet",
-        "Valid Wallet",
-        "Instagram ID Registered",
-        "Quiz Correct Answers (Current or Last)",
-        "Quiz Best Score",
-        "Quiz Completed Attempts",
-        "Quiz State",
-        "Quiz Passed (3/3)",
-        "All Bot Conditions Complete",
-        "Instagram Follow Like Comment",
-        "Social Registered At UTC",
-        "Social Updated At UTC"
-    ])
-
-    for lottery_number, user in enumerate(rows, 1):
-        ref_count = int(user.get("ref_count", 0) or 0)
-        referral_ready = ref_count >= CHALLENGE_REQUIRED_REFERRALS
-        wallet = user.get("wallet") or ""
-        wallet_valid = is_valid_wallet(wallet)
-        instagram_id = str(user.get("instagram_id") or "")
-        instagram_valid = bool(re.fullmatch(r"@[A-Za-z0-9._]{1,30}", instagram_id))
-        quiz_state = str(user.get("challenge_quiz_state") or "not_started")
-        quiz_attempts = int(user.get("challenge_quiz_attempts", 0) or 0)
-        if quiz_state == "in_progress":
-            current_or_last_score = int(user.get("challenge_quiz_score", 0) or 0)
-        else:
-            current_or_last_score = int(user.get("challenge_quiz_last_score", 0) or 0)
-
-        history_scores = [
-            int(item.get("score", 0) or 0)
-            for item in (user.get("challenge_quiz_history", []) or [])
-            if isinstance(item, dict)
-        ]
-        best_score = max(history_scores + [current_or_last_score])
-        quiz_passed = user.get("challenge_quiz_passed") is True
-        bot_conditions_complete = (
-            referral_ready and wallet_valid and instagram_valid and quiz_passed
-        )
-
-        if referral_ready:
-            referral_ready_count += 1
-        if wallet_valid:
-            wallet_ready_count += 1
-        if instagram_valid:
-            instagram_ready_count += 1
-        if quiz_passed:
-            quiz_passed_count += 1
-        if bot_conditions_complete:
-            bot_conditions_complete_count += 1
-
-        registered_at = int(user.get("social_registered_at", 0) or 0)
-        updated_at = int(user.get("social_updated_at", 0) or 0)
-        writer.writerow([
-            lottery_number,
-            user.get("user_id"),
-            user.get("telegram_username", ""),
-            user.get("twitter_id", ""),
-            instagram_id,
-            ref_count,
-            "Yes" if referral_ready else "No",
-            wallet,
-            "Yes" if wallet_valid else "No",
-            "Yes" if instagram_valid else "No",
-            current_or_last_score,
-            best_score,
-            quiz_attempts,
-            quiz_state,
-            "Yes" if quiz_passed else "No",
-            "Yes" if bot_conditions_complete else "No",
-            "Manual verification required",
-            datetime.utcfromtimestamp(registered_at).strftime("%Y-%m-%d %H:%M:%S") if registered_at else "",
-            datetime.utcfromtimestamp(updated_at).strftime("%Y-%m-%d %H:%M:%S") if updated_at else ""
-        ])
-
-    preview_lines = []
-    for index, user in enumerate(rows[:10], 1):
-        quiz_state = str(user.get("challenge_quiz_state") or "not_started")
-        if quiz_state == "in_progress":
-            score = int(user.get("challenge_quiz_score", 0) or 0)
-        else:
-            score = int(user.get("challenge_quiz_last_score", 0) or 0)
-        ref_count = int(user.get("ref_count", 0) or 0)
-        wallet_valid = is_valid_wallet(user.get("wallet"))
-        instagram_valid = bool(re.fullmatch(
-            r"@[A-Za-z0-9._]{1,30}",
-            str(user.get("instagram_id") or "")
-        ))
-        complete = (
-            ref_count >= CHALLENGE_REQUIRED_REFERRALS
-            and wallet_valid
-            and instagram_valid
-            and user.get("challenge_quiz_passed") is True
-        )
-        preview_lines.append(
-            f"{index}. `{user.get('user_id')}` | دعوت: `{ref_count}` | "
-            f"پاسخ صحیح: `{score}/3` | شرایط ربات: `{'کامل' if complete else 'ناقص'}`"
-        )
-    preview_text = "\n".join(preview_lines)
-    if len(rows) > 10:
-        preview_text += f"\n... و {len(rows) - 10:,} کاربر دیگر در فایل"
-
-    bot.send_message(
-        chat_id,
-        f"🎟 *گزارش کامل شرایط مسابقه و آیدی‌های قرعه‌کشی*\n\n"
-        f"👥 کاربران موجود در گزارش: `{len(rows):,}` نفر\n"
-        f"🔗 حداقل {CHALLENGE_REQUIRED_REFERRALS} دعوت: `{referral_ready_count:,}` نفر\n"
-        f"👝 ولت معتبر: `{wallet_ready_count:,}` نفر\n"
-        f"📸 آیدی Instagram ثبت‌شده: `{instagram_ready_count:,}` نفر\n"
-        f"📝 قبولی آزمون با ۳ پاسخ صحیح: `{quiz_passed_count:,}` نفر\n"
-        f"✅ تکمیل تمام شرایط قابل بررسی ربات: `{bot_conditions_complete_count:,}` نفر\n\n"
-        f"⚠️ فالو، لایک و کامنت Instagram همچنان باید دستی بررسی شود.\n\n"
-        f"{preview_text}",
-        reply_markup=get_admin_reply_markup(),
-        parse_mode="Markdown"
-    )
-
-    file_bytes = io.BytesIO(output.getvalue().encode("utf-8-sig"))
-    file_bytes.name = "lottery_full_conditions_report.csv"
-    bot.send_document(
-        chat_id,
-        file_bytes,
-        caption=(
-            "📁 گزارش کامل شرایط مسابقه، تعداد دعوت‌ها، وضعیت ولت و Instagram، "
-            "تعداد پاسخ‌های صحیح، دفعات آزمون و وضعیت قبولی"
-        ),
-        reply_markup=get_admin_reply_markup()
-    )
 
 def send_detailed_report_file(chat_id):
     rows = list(users_col.find({}).sort([("paid", 1), ("ref_count", -1)]))
@@ -2819,7 +2785,28 @@ def handle_all_messages(message):
                 bot.send_message(chat_id, "⚠️ لطفاً برای انجام یا لغو عملیات از دکمه‌های تأیید نهایی استفاده کنید.")
                 return
 
-        if text == "🔴 خاموش کردن ربات":
+        if text == "📂 گزارش‌های پنل سایت":
+            bot.send_message(chat_id, "📂 خروجی‌های پنل سایت را از این بخش بگیر:", reply_markup=get_admin_reports_markup())
+            return
+        elif text == "👥 کاربران پنل سایت (CSV)":
+            send_portal_csv_report(chat_id, "users")
+            return
+        elif text == "💳 پرداخت‌های پنل سایت (CSV)":
+            send_portal_csv_report(chat_id, "payments")
+            return
+        elif text == "🧾 سوابق مدیریت سایت (CSV)":
+            send_portal_csv_report(chat_id, "audit")
+            return
+        elif text == "✅ پرداخت‌های موفق سایت (Excel)":
+            send_portal_xlsx_report(chat_id, "paid")
+            return
+        elif text == "🌐 آیدی‌های اجتماعی سایت (Excel)":
+            send_portal_xlsx_report(chat_id, "social")
+            return
+        elif text == "↩️ بازگشت به پنل مدیریت":
+            bot.send_message(chat_id, "👑 پنل مدیریت:", reply_markup=get_admin_reply_markup())
+            return
+        elif text == "🔴 خاموش کردن ربات":
             if BOT_PORTAL_ONLY:
                 portal_service.admin_controls(user_id, {"paused": True})
             else:
@@ -2882,9 +2869,6 @@ def handle_all_messages(message):
         elif text == "🚫 بررسی و خروجی بلاک‌کنندگان":
             start_blocked_users_scan(chat_id)
             return
-        elif text == "🎟 گزارش آیدی‌های قرعه‌کشی":
-            send_social_lottery_report(chat_id)
-            return
         elif text == "📣 پیام به واجدین بی‌ولت":
             recipients_count = len(get_eligible_no_wallet_users())
             if recipients_count == 0:
@@ -2914,8 +2898,8 @@ def handle_all_messages(message):
         elif text == "📊 گزارش کلی توکن‌ها":
             show_token_summary_direct(chat_id)
             return
-        elif text == "🔍 جستجوی کاربر (آیدی یا ولت)":
-            bot.send_message(chat_id, "🔍 برای جستجو، دستور زیر را ارسال کنید:\n`/search [آیدی عددی یا بخشی از ولت]`", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
+        elif text == "🔍 جستجوی کاربر (نام کاربری، آیدی یا ولت)":
+            bot.send_message(chat_id, "🔍 برای جستجو، دستور زیر را ارسال کنید:\n`/search [نام کاربری، آیدی عددی یا بخشی از ولت]`", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
             return
         elif text == "📁 آپلود اکسل پرداختی‌ها":
             bot.send_message(chat_id, "📁 لطفاً فایل خروجی پرداختی خود (فرمت CSV یا متنی حاوی آیدی یا ولت کاربران) را مستقیماً در همین چت آپلود کنید تا وضعیت آن‌ها اتوماتیک به «پرداخت‌شده» تغییر يابد.", reply_markup=get_admin_reply_markup())
@@ -2949,7 +2933,11 @@ def handle_all_messages(message):
             return
         elif text.startswith("/search "):
             query = text.replace("/search", "").strip()
-            query_filter = {"user_id": int(query)} if query.isdigit() else {"wallet": {"$regex": query, "$options": "i"}}
+            search_term = query.lstrip("@")
+            query_filter = {"user_id": int(query)} if query.isdigit() else {"$or": [
+                {field: {"$regex": re.escape(search_term), "$options": "i"}}
+                for field in ("wallet", "telegram_username", "instagram", "instagram_id", "twitter", "twitter_id")
+            ]}
             rows = list(users_col.find(query_filter))
             if not rows:
                 bot.send_message(chat_id, "❌ هیچ کاربری با این مشخصات پیدا نشد.", reply_markup=get_admin_reply_markup())
@@ -2967,6 +2955,7 @@ def handle_all_messages(message):
                 manual_bonus_tokens = r.get("manual_bonus_tokens", 0)
                 twitter_id = r.get("twitter_id") or "ثبت نشده"
                 instagram_id = r.get("instagram_id") or "ثبت نشده"
+                telegram_username = r.get("telegram_username") or "ثبت نشده"
                 total_tokens = calculate_total_tokens(ref_cnt, d_cnt, bonus_tokens, manual_bonus_tokens)
                 base_used, extra_count = get_ref_details(ref_cnt)
                 
@@ -2974,6 +2963,7 @@ def handle_all_messages(message):
                 
                 res += (
                     f"👤 آیدی عددی: `{uid}`\n"
+                    f"🔎 نام کاربری تلگرام: `{telegram_username}`\n"
                     f"👥 کل رفال: {ref_cnt} (ثابت: {base_used} | مازاد: {extra_count})\n"
                     f"🎁 پاداش همگانی: {bonus_tokens:,} | پاداش دستی: {manual_bonus_tokens:,} PRS\n"
                     f"🪙 توکن کل: {total_tokens:,} | پرداخت شده: {paid_amt:,} PRS\n"
@@ -3017,6 +3007,8 @@ def handle_all_messages(message):
                 return
 
             register_user_after_verify(user_id, referrer_id)
+            if getattr(message.from_user, "username", None):
+                users_col.update_one({"user_id": user_id}, {"$set": {"telegram_username": f"@{message.from_user.username}"}})
             captcha_col.delete_one({"user_id": user_id})
             show_main_menu(chat_id, user_id)
         else:
@@ -3417,6 +3409,8 @@ def handle_callbacks(call):
         ok_join_msg = "✅ عضویت شما تایید شد!" if get_msg(user_id, "lang")=="fa" else "✅ Membership verified!"
         bot.answer_callback_query(call.id, ok_join_msg)
         register_user_after_verify(user_id, referrer_id if referrer_id != 0 else None)
+        if getattr(call.from_user, "username", None):
+            users_col.update_one({"user_id": user_id}, {"$set": {"telegram_username": f"@{call.from_user.username}"}})
         captcha_col.delete_one({"user_id": user_id})
         
         try:
