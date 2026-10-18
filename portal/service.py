@@ -692,6 +692,17 @@ class PortalService(PhaseTwoMixin):
                            block_number=block_number)
             tx.put("portal_payments", payment_id, payment)
             tx.delete("portal_open_payments", payment["user_id"])
+            # Durable outbox: the bot worker sends the success notice after the
+            # payment transaction commits. This keeps a Telegram outage from
+            # undoing a confirmed on-chain transfer.
+            notification_id = f"payment-success:{payment_id}"
+            if not tx.get("portal_payment_notifications", notification_id):
+                tx.put("portal_payment_notifications", notification_id, {
+                    "id": notification_id, "payment_id": payment_id,
+                    "user_id": user["user_id"], "amount": int(payment["amount"]),
+                    "tx_hash": tx_hash, "status": "pending", "attempts": 0,
+                    "created_at": self.now(), "retry_at": self.now(),
+                })
             self._history(tx, f"payment:{payment_id}", user["user_id"], "payment", -int(payment["amount"]), "پرداخت تأییدشده روی بلاکچین · On-chain payment confirmed")
             self._audit(tx, admin_id, "payout_confirmed", payment_id,
                         {"amount": payment["amount"], "tx_hash": tx_hash, "block_number": block_number})
