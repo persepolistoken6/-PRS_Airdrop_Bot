@@ -66,10 +66,13 @@ def create_app(settings=None, service=None):
     @app.after_request
     def security_headers(response):
         response.headers["Content-Security-Policy"] = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
-            "img-src 'self' data: https://walletconnect.com https://*.walletconnect.com https://api.web3modal.org https://explorer-api.walletconnect.com; "
-            "font-src 'self' data:; connect-src 'self' https://bsc-dataseed.bnbchain.org "
+            "img-src 'self' data: https://walletconnect.com https://*.walletconnect.com https://walletconnect.org https://*.walletconnect.org "
+            "https://reown.com https://*.reown.com https://api.web3modal.org https://explorer-api.walletconnect.com; "
+            "font-src 'self' data: https://fonts.reown.com; connect-src 'self' https://bsc-dataseed.bnbchain.org "
             "https://relay.walletconnect.com wss://relay.walletconnect.com https://api.web3modal.org "
             "https://explorer-api.walletconnect.com https://pulse.walletconnect.org https://verify.walletconnect.com "
+            "https://verify.walletconnect.org https://secure.walletconnect.org https://secure-mobile.walletconnect.com "
+            "https://secure-mobile.walletconnect.org https://echo.walletconnect.com https://rpc.walletconnect.org "
             "https://cloud.walletconnect.com https://metadata.walletconnect.com; "
             "base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
         response.headers["X-Content-Type-Options"] = "nosniff"
