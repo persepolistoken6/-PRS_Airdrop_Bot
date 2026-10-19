@@ -25,7 +25,7 @@ def create_app(settings=None, service=None):
     app.config.update(MAX_CONTENT_LENGTH=24 * 1024, PROPAGATE_EXCEPTIONS=False)
     app.extensions["portal"] = service
     asset_versions = {name: digest((Path(app.static_folder) / name).read_text(encoding="utf-8"))[:12]
-                      for name in ("app.js", "app.css")}
+                      for name in ("app.js", "app.css", "wallet-payout.js")}
     if settings.demo and not service.store.all("users"):
         seed_demo(service)
 
@@ -65,7 +65,13 @@ def create_app(settings=None, service=None):
 
     @app.after_request
     def security_headers(response):
-        response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+        response.headers["Content-Security-Policy"] = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: https://walletconnect.com https://*.walletconnect.com https://api.web3modal.org https://explorer-api.walletconnect.com; "
+            "font-src 'self' data:; connect-src 'self' https://bsc-dataseed.bnbchain.org "
+            "https://relay.walletconnect.com wss://relay.walletconnect.com https://api.web3modal.org "
+            "https://explorer-api.walletconnect.com https://pulse.walletconnect.org https://verify.walletconnect.com "
+            "https://cloud.walletconnect.com https://metadata.walletconnect.com; "
+            "base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
@@ -296,6 +302,23 @@ def create_app(settings=None, service=None):
     @protected(admin=True)
     def payout_payments():
         return jsonify(service.payout_payments(g.user_id, body().get("payment_ids")))
+
+    @app.post("/api/admin/payments/prepare-wallet-payout")
+    @protected(admin=True)
+    def prepare_wallet_payout():
+        return jsonify(service.prepare_wallet_payout(g.user_id, body().get("payment_id")))
+
+    @app.post("/api/admin/payments/<payment_id>/confirm-wallet-payout")
+    @protected(admin=True)
+    def confirm_wallet_payout(payment_id):
+        data = body()
+        return jsonify(service.confirm_wallet_payout(g.user_id, payment_id, data.get("tx_hash")))
+
+    @app.post("/api/admin/payments/<payment_id>/cancel-wallet-payout")
+    @protected(admin=True)
+    def cancel_wallet_payout(payment_id):
+        service.cancel_wallet_payout(g.user_id, payment_id)
+        return jsonify(ok=True)
 
     @app.post("/api/admin/tickets/<ticket_id>/reply")
     @protected(admin=True)
