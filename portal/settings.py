@@ -36,7 +36,7 @@ class Settings:
     login_ttl: int = 300
     session_ttl: int = 86400
     bsc_rpc_url: str = ""
-    payout_private_key: str = ""
+    payout_wallet_address: str = ""
     prs_token_address: str = "0x1f67eB3e7487b7D70C69264Ab907Dd074ef1d39f"
     prs_token_decimals: int = 18
 
@@ -64,7 +64,7 @@ class Settings:
             # PORTAL_TIMEZONE=Asia/Baghdad configured.
             timezone=CAMPAIGN_TIMEZONE,
             bsc_rpc_url=os.getenv("BSC_RPC_URL", "").strip(),
-            payout_private_key=os.getenv("PAYOUT_PRIVATE_KEY", "").strip(),
+            payout_wallet_address=os.getenv("PAYOUT_WALLET_ADDRESS", "").strip(),
             prs_token_address=os.getenv("PRS_TOKEN_ADDRESS", "0x1f67eB3e7487b7D70C69264Ab907Dd074ef1d39f").strip(),
             prs_token_decimals=int(os.getenv("PRS_TOKEN_DECIMALS", "18")),
         )

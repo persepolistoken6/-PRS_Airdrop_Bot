@@ -532,26 +532,22 @@ class PortalService(PhaseTwoMixin):
             return payment
         return self.store.transaction(operation)
 
-    def payout_payments(self, admin_id, payment_ids):
-        """Send approved pending withdrawals from the configured BSC signer."""
+    def prepare_wallet_payout(self, admin_id, payment_id):
+        """Reserve one withdrawal and return the exact BSC token transfer for wallet signing."""
         self.require_admin(admin_id)
-        if not isinstance(payment_ids, list) or not 1 <= len(payment_ids) <= 20 or any(not isinstance(x, str) or len(x) > 64 for x in payment_ids) or len(set(payment_ids)) != len(payment_ids):
+        if not isinstance(payment_id, str) or not 1 <= len(payment_id) <= 64:
             raise PortalError("invalid_request")
-        if self.settings.demo:
-            raise PortalError("payout_unavailable", 503)
-        if not (self.settings.bsc_rpc_url and self.settings.payout_private_key):
+        if self.settings.demo or not self.settings.bsc_rpc_url or not self.settings.payout_wallet_address:
             raise PortalError("payout_not_configured", 503)
         try:
             from web3 import Web3
-            w3 = Web3(Web3.HTTPProvider(self.settings.bsc_rpc_url, request_kwargs={"timeout": 20}))
+            w3 = Web3(Web3.HTTPProvider(self.settings.bsc_rpc_url, request_kwargs={"timeout": 15}))
             if not w3.is_connected() or int(w3.eth.chain_id) != 56:
                 raise ValueError("wrong network")
-            account = w3.eth.account.from_key(self.settings.payout_private_key)
+            signer = Web3.to_checksum_address(self.settings.payout_wallet_address)
             token_address = Web3.to_checksum_address(self.settings.prs_token_address)
             token = w3.eth.contract(address=token_address, abi=[
-                {"constant": True, "inputs": [], "name": "decimals", "outputs": [{"name": "", "type": "uint8"}], "type": "function"},
-                {"constant": False, "inputs": [{"name": "to", "type": "address"}, {"name": "value", "type": "uint256"}], "name": "transfer", "outputs": [{"name": "", "type": "bool"}], "type": "function"},
-                {"anonymous": False, "inputs": [{"indexed": True, "name": "from", "type": "address"}, {"indexed": True, "name": "to", "type": "address"}, {"indexed": False, "name": "value", "type": "uint256"}], "name": "Transfer", "type": "event"},
+                {"inputs": [], "name": "decimals", "outputs": [{"type": "uint8"}], "stateMutability": "view", "type": "function"}
             ])
             decimals = int(token.functions.decimals().call())
             if decimals != self.settings.prs_token_decimals:
@@ -561,103 +557,133 @@ class PortalService(PhaseTwoMixin):
         except Exception:
             raise PortalError("payout_unavailable", 503) from None
 
-        def transfer_confirmed(receipt, recipient, amount):
-            signature = bytes(w3.keccak(text="Transfer(address,address,uint256)"))
-            recipient_bytes = bytes.fromhex(recipient[2:]).lower()
-            for log in receipt.logs:
-                topics = [bytes.fromhex(x[2:]) if isinstance(x, str) else bytes(x) for x in log.get("topics", [])]
-                if (str(log.get("address", "")).lower() == token_address.lower() and len(topics) >= 3
-                        and topics[0] == signature and topics[2][-20:].lower() == recipient_bytes):
-                    data = log.get("data", "0x0")
-                    value = int(data, 16) if isinstance(data, str) else int.from_bytes(bytes(data), "big")
-                    if value == amount:
-                        return True
-            return False
+        payment = self.store.get("portal_payments", payment_id)
+        if not payment:
+            raise PortalError("user_not_found", 404)
+        # A signer must not accidentally pay an arbitrary address selected by the browser.
+        recipient = payment.get("wallet", "")
+        if not Web3.is_address(recipient) or int(recipient, 16) == 0:
+            raise PortalError("invalid_wallet")
+        amount = int(payment.get("amount", 0))
+        if amount < MIN_WITHDRAWAL:
+            raise PortalError("invalid_request")
+        amount_units = amount * (10 ** decimals)
+        data = "0xa9059cbb" + recipient[2:].lower().rjust(64, "0") + format(amount_units, "064x")
 
-        lease_id = uuid4().hex
-        def acquire(store_tx):
-            lease = store_tx.get("portal_state", "onchain_payout_lease") or {}
-            if int(lease.get("expires_at", 0)) > self.now():
-                raise PortalError("payout_in_progress", 409)
-            store_tx.put("portal_state", "onchain_payout_lease", {"id": lease_id, "expires_at": self.now() + 7200})
-        self.store.transaction(acquire)
+        def reserve(tx):
+            current = tx.get("portal_payments", payment_id)
+            if not current or current.get("status") != "pending":
+                raise PortalError("already_reviewed", 409)
+            current.update(status="signing", signing_wallet=signer, signing_started_at=self.now())
+            tx.put("portal_payments", payment_id, current)
+            self._audit(tx, admin_id, "wallet_payout_prepared", payment_id,
+                        {"amount": amount, "recipient": recipient, "signer": signer})
+        self.store.transaction(reserve)
+        return {"payment_id": payment_id, "amount": amount, "recipient": Web3.to_checksum_address(recipient),
+                "payout_wallet": signer, "token_address": token_address, "chain_id": 56,
+                "transaction": {"from": signer, "to": token_address, "value": "0x0", "data": data, "chainId": "0x38"}}
+
+    def cancel_wallet_payout(self, admin_id, payment_id):
+        self.require_admin(admin_id)
+        def cancel(tx):
+            payment = tx.get("portal_payments", payment_id)
+            if not payment or payment.get("status") != "signing" or payment.get("tx_hash") or payment.get("submitted_tx_hash"):
+                raise PortalError("payment_not_cancellable", 409)
+            payment.update(status="pending", signing_wallet="", signing_started_at=0)
+            tx.put("portal_payments", payment_id, payment)
+            self._audit(tx, admin_id, "wallet_payout_cancelled", payment_id, {})
+        self.store.transaction(cancel)
+
+    def confirm_wallet_payout(self, admin_id, payment_id, tx_hash):
+        self.require_admin(admin_id)
+        if not isinstance(payment_id, str) or not 1 <= len(payment_id) <= 64:
+            raise PortalError("invalid_request")
+        if not isinstance(tx_hash, str) or not re.fullmatch(r"0x[a-fA-F0-9]{64}", tx_hash):
+            raise PortalError("invalid_request")
+        if self.settings.demo or not self.settings.bsc_rpc_url or not self.settings.payout_wallet_address:
+            raise PortalError("payout_not_configured", 503)
+        payment = self.store.get("portal_payments", payment_id)
+        if not payment:
+            raise PortalError("user_not_found", 404)
+        if payment.get("status") == "recorded" and payment.get("tx_hash", "").lower() == tx_hash.lower():
+            return {"payment_id": payment_id, "status": "paid", "tx_hash": tx_hash}
+        if payment.get("status") not in ("signing", "sending"):
+            raise PortalError("already_reviewed", 409)
+        if payment.get("status") == "sending" and payment.get("tx_hash", "").lower() != tx_hash.lower():
+            raise PortalError("already_reviewed", 409)
+        if payment.get("status") == "signing" and payment.get("submitted_tx_hash") and payment["submitted_tx_hash"].lower() != tx_hash.lower():
+            raise PortalError("already_reviewed", 409)
+        if payment.get("status") == "signing":
+            def remember_hash(store_tx):
+                current = store_tx.get("portal_payments", payment_id)
+                if (not current or current.get("status") != "signing"
+                        or (current.get("submitted_tx_hash") and current["submitted_tx_hash"].lower() != tx_hash.lower())):
+                    raise PortalError("already_reviewed", 409)
+                current["submitted_tx_hash"] = tx_hash
+                store_tx.put("portal_payments", payment_id, current)
+            self.store.transaction(remember_hash)
         try:
-            results = []
-            for payment_id in payment_ids:
-                tx_hash = ""
-                payment = self.store.get("portal_payments", payment_id)
-                if payment and payment.get("status") == "sending" and payment.get("tx_hash"):
-                    try:
-                        receipt = w3.eth.get_transaction_receipt(payment["tx_hash"])
-                        if int(receipt.status) == 1 and transfer_confirmed(receipt, payment["wallet"], int(payment["amount"]) * (10 ** decimals)):
-                            self._finalize_onchain_payment(admin_id, payment_id, payment["tx_hash"], int(receipt.blockNumber))
-                            results.append({"payment_id": payment_id, "status": "paid", "tx_hash": payment["tx_hash"]})
-                        else:
-                            self._reset_failed_onchain_payment(admin_id, payment_id, payment["tx_hash"])
-                            results.append({"payment_id": payment_id, "status": "failed", "tx_hash": payment["tx_hash"]})
-                    except Exception:
-                        results.append({"payment_id": payment_id, "status": "sending", "tx_hash": payment["tx_hash"]})
-                    continue
-                if not payment or payment.get("status") != "pending":
-                    results.append({"payment_id": payment_id, "status": "skipped"})
-                    continue
-                wallet = payment.get("wallet", "")
-                if not re.fullmatch(r"0x[a-fA-F0-9]{40}", wallet) or int(payment.get("amount", 0)) < MIN_WITHDRAWAL:
-                    results.append({"payment_id": payment_id, "status": "invalid_request"})
-                    continue
-                # Reserve before broadcasting. An uncertain RPC response stays locked
-                # for reconciliation and cannot be accidentally paid a second time.
-                nonce = w3.eth.get_transaction_count(account.address, "pending")
-                amount_wei = int(payment["amount"]) * (10 ** decimals)
-                try:
-                    tx = token.functions.transfer(Web3.to_checksum_address(wallet), amount_wei).build_transaction({
-                        "from": account.address, "nonce": nonce, "chainId": 56,
-                        "gas": 100000, "gasPrice": w3.eth.gas_price,
-                    })
-                    signed = account.sign_transaction(tx)
-                    tx_hash = Web3.to_hex(signed.hash)
-                    def mark_sending(store_tx):
-                        current = store_tx.get("portal_payments", payment_id)
-                        if not current or current.get("status") != "pending":
-                            raise PortalError("already_reviewed", 409)
-                        current.update(status="sending", tx_hash=tx_hash, reviewed_by=admin_id,
-                                       payout_started_at=self.now())
-                        store_tx.put("portal_payments", payment_id, current)
-                        self._audit(store_tx, admin_id, "payout_started", payment_id,
-                                    {"amount": current["amount"], "tx_hash": tx_hash})
-                    self.store.transaction(mark_sending)
-                    try:
-                        raw_transaction = getattr(signed, "raw_transaction", None) or signed.rawTransaction
-                        sent = w3.eth.send_raw_transaction(raw_transaction)
-                    except Exception:
-                        # The RPC may have accepted the raw transaction before the
-                        # connection failed; resolve by its deterministic hash.
-                        try:
-                            sent = w3.eth.get_transaction(tx_hash)
-                        except Exception:
-                            results.append({"payment_id": payment_id, "status": "sending", "tx_hash": tx_hash})
-                            return {"results": results}
-                    receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=180, poll_latency=3)
-                    if int(receipt.status) != 1 or not transfer_confirmed(receipt, wallet, amount_wei):
-                        self._reset_failed_onchain_payment(admin_id, payment_id, tx_hash)
-                        results.append({"payment_id": payment_id, "status": "failed", "tx_hash": tx_hash})
-                        continue
-                    self._finalize_onchain_payment(admin_id, payment_id, tx_hash, int(receipt.blockNumber))
-                    results.append({"payment_id": payment_id, "status": "paid", "tx_hash": tx_hash})
-                except PortalError:
-                    raise
-                except Exception:
-                    current = self.store.get("portal_payments", payment_id) or {}
-                    results.append({"payment_id": payment_id,
-                                    "status": "sending" if current.get("status") == "sending" else "failed",
-                                    "tx_hash": current.get("tx_hash", "")})
-            return {"results": results}
-        finally:
-            def release(store_tx):
-                lease = store_tx.get("portal_state", "onchain_payout_lease") or {}
-                if lease.get("id") == lease_id:
-                    store_tx.delete("portal_state", "onchain_payout_lease")
-            self.store.transaction(release)
+            from web3 import Web3
+            w3 = Web3(Web3.HTTPProvider(self.settings.bsc_rpc_url, request_kwargs={"timeout": 20}))
+            if not w3.is_connected() or int(w3.eth.chain_id) != 56:
+                raise ValueError("wrong network")
+            signer = Web3.to_checksum_address(self.settings.payout_wallet_address)
+            token_address = Web3.to_checksum_address(self.settings.prs_token_address)
+            tx = w3.eth.get_transaction(tx_hash)
+        except Exception as exc:
+            if type(exc).__name__ in ("TransactionNotFound", "TimeExhausted"):
+                raise PortalError("transaction_pending", 409) from None
+            raise PortalError("payout_unavailable", 503) from None
+
+        recipient = Web3.to_checksum_address(payment.get("wallet", ""))
+        amount_units = int(payment["amount"]) * (10 ** self.settings.prs_token_decimals)
+        expected_data = "0xa9059cbb" + recipient[2:].lower().rjust(64, "0") + format(amount_units, "064x")
+        if (int(tx.get("chainId", 0)) != 56 or str(tx.get("from", "")).lower() != signer.lower()
+                or str(tx.get("to", "")).lower() != token_address.lower()
+                or int(tx.get("value", 0)) != 0 or str(tx.get("input", tx.get("data", ""))).lower() != expected_data.lower()):
+            raise PortalError("transaction_mismatch", 400)
+        def mark_sending(store_tx):
+            current = store_tx.get("portal_payments", payment_id)
+            if current and current.get("status") == "sending" and current.get("tx_hash", "").lower() == tx_hash.lower():
+                return
+            if not current or current.get("status") != "signing" or current.get("signing_wallet", "").lower() != signer.lower():
+                raise PortalError("already_reviewed", 409)
+            current.update(status="sending", tx_hash=tx_hash, submitted_tx_hash="", reviewed_by=admin_id, payout_started_at=self.now())
+            store_tx.put("portal_payments", payment_id, current)
+            self._audit(store_tx, admin_id, "wallet_payout_submitted", payment_id, {"tx_hash": tx_hash})
+        self.store.transaction(mark_sending)
+        try:
+            receipt = w3.eth.get_transaction_receipt(tx_hash)
+        except Exception as exc:
+            if type(exc).__name__ in ("TransactionNotFound", "TimeExhausted"):
+                raise PortalError("transaction_pending", 409) from None
+            raise PortalError("payout_unavailable", 503) from None
+        if int(receipt.status) != 1:
+            self._reset_failed_onchain_payment(admin_id, payment_id, tx_hash)
+            raise PortalError("transaction_failed", 409)
+
+        signature = bytes(w3.keccak(text="Transfer(address,address,uint256)"))
+        sender_bytes, recipient_bytes = bytes.fromhex(signer[2:]), bytes.fromhex(recipient[2:])
+        matched = False
+        for log in receipt.logs:
+            topics = [bytes.fromhex(x[2:]) if isinstance(x, str) else bytes(x) for x in log.get("topics", [])]
+            if (str(log.get("address", "")).lower() == token_address.lower() and len(topics) >= 3
+                    and topics[0] == signature and topics[1][-20:] == sender_bytes and topics[2][-20:] == recipient_bytes):
+                data = log.get("data", "0x0")
+                value = int(data, 16) if isinstance(data, str) else int.from_bytes(bytes(data), "big")
+                if value == amount_units:
+                    matched = True
+                    break
+        if not matched:
+            raise PortalError("transaction_mismatch", 400)
+
+        self._finalize_onchain_payment(admin_id, payment_id, tx_hash, int(receipt.blockNumber))
+        return {"payment_id": payment_id, "status": "paid", "tx_hash": tx_hash}
+
+    def payout_payments(self, admin_id, payment_ids):
+        """Legacy server-signing payout is intentionally disabled."""
+        self.require_admin(admin_id)
+        raise PortalError("wallet_signing_required", 409)
 
     def _reset_failed_onchain_payment(self, admin_id, payment_id, tx_hash):
         def operation(tx):
@@ -814,7 +840,7 @@ class PortalService(PhaseTwoMixin):
         mining = self.mining_config()
         return {"missions": sorted(self.store.all("portal_missions"), key=lambda m: m["created_at"], reverse=True),
             "submissions": [s for s in self.store.all("portal_submissions") if s["status"] == "pending"],
-            "payments": [p for p in self.store.all("portal_payments") if p["status"] in ("pending", "sending")],
+            "payments": [p for p in self.store.all("portal_payments") if p["status"] in ("pending", "signing", "sending")],
             "tickets": [t for t in self.store.all("portal_tickets") if t["status"] == "open"],
             "users": len([u for u in users if int(u.get("verified", 0)) >= 1]),
             "stats": {"earned": sum(earned(u) for u in users), "paid": sum(int(u.get("paid_amount", 0)) for u in users),
