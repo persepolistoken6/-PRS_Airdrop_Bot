@@ -22,11 +22,22 @@ def main():
     ]), None)
     if duplicate:
         raise RuntimeError("Duplicate legacy user IDs detected. Resolve them before enabling the portal; no users were changed.")
-    service.store.ensure_indexes()
+    if not service.store.ensure_indexes():
+        # No duplicates were found above, so this is an older index on user_id
+        # with other options. Deployment continues; the index can be fixed later.
+        print("WARNING: unique users.user_id index not created (an older index on user_id probably conflicts).")
+    added = service.store.backfill_wallet_keys()
+    shared = list(service.store.database.users.aggregate([
+        {"$match": {"wallet_lc": {"$type": "string", "$ne": ""}}},
+        {"$group": {"_id": "$wallet_lc", "count": {"$sum": 1}}},
+        {"$match": {"count": {"$gt": 1}}}, {"$count": "wallets"}
+    ]))
     service.store.transaction(lambda tx: tx.put("portal_state", "readiness", {
-        "checked_at": datetime.now(timezone.utc), "version": 1
+        "checked_at": datetime.now(timezone.utc), "version": 2
     }))
-    print("READY: transaction support and portal indexes checked. Existing users and balances were not modified.")
+    print(f"INFO: wallet keys added for {added} user(s); wallets shared by several accounts: "
+          f"{shared[0]['wallets'] if shared else 0} (new registrations of a used wallet are now refused).")
+    print("READY: transaction support, unique user IDs and portal indexes checked. Existing balances were not modified.")
 
 
 if __name__ == "__main__":
