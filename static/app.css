@@ -339,3 +339,6 @@ html[data-motion=off] .heritage-atmosphere span,html[data-motion=off] .heritage-
 .prs-inbox-entry small{opacity:.65}
 .prs-inbox-unread{border-inline-start:3px solid #bb2538;padding-inline-start:12px}
 .prs-inbox-new-dot{margin-inline-start:8px}
+
+/* Wallet payout: two actions for a signing attempt without a recorded hash */
+.payout-actions{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end}
