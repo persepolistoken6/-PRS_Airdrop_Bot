@@ -8,6 +8,11 @@ from zoneinfo import ZoneInfo
 
 from .settings import CAMPAIGN_TIMEZONE, MAX_TOTAL_TOKENS_LIMIT, MINING_DEFAULT_BUDGET, MINING_SECONDS, REQUIRED_REFERRALS, TIERS
 
+BONUS_BATCH_SIZE = 200
+# A finished mining cycle must be claimed within this window. After it, the
+# reserved reward returns to the mining budget instead of staying locked forever.
+MINING_CLAIM_WINDOW = 7 * 86400
+
 
 def level_for(user):
     from .service import earned
@@ -25,27 +30,16 @@ class PhaseTwoMixin:
         if type(amount) is not int or not 1 <= amount <= MAX_TOTAL_TOKENS_LIMIT or not isinstance(operation_id, str) or not re.fullmatch(r"[a-f0-9]{12,64}", operation_id):
             raise PortalError("invalid_request")
         receipt = f"bot-bonus:{admin_id}:{operation_id}"
-        def operation(tx):
-            previous = tx.get("portal_admin_operations", receipt)
-            if previous:
-                if previous["amount"] != amount or previous["user_id"] != user_id:
-                    raise PortalError("operation_conflict", 409)
-                return {**previous, "already_completed": True}
-            if user_id is not None:
-                user = tx.get("users", user_id)
-                if not user:
-                    raise PortalError("user_not_found", 404)
-                if user.get("portal_suspended"):
-                    raise PortalError("account_suspended", 403)
-                users = [user]
-            else:
-                users = [u for u in tx.all("users") if int(u.get("ref_count", 0)) >= REQUIRED_REFERRALS and
-                         int(u.get("submitted", 0)) > 0 and not u.get("portal_suspended") and
-                         re.fullmatch(r"0x[a-fA-F0-9]{40}", u.get("wallet") or "")]
-            field = "manual_bonus_tokens" if user_id is not None else "bonus_tokens"
-            ids_field = "manual_bonus_operation_ids" if user_id is not None else "bonus_operation_ids"
-            history_field = "manual_bonus_history" if user_id is not None else "bonus_history"
-            users = [u for u in users if operation_id not in u.get(ids_field, [])]
+        field = "manual_bonus_tokens" if user_id is not None else "bonus_tokens"
+        ids_field = "manual_bonus_operation_ids" if user_id is not None else "bonus_operation_ids"
+        history_field = "manual_bonus_history" if user_id is not None else "bonus_history"
+
+        def eligible(u):
+            return (int(u.get("ref_count", 0) or 0) >= REQUIRED_REFERRALS and int(u.get("submitted", 0) or 0) > 0
+                    and not u.get("portal_suspended") and re.fullmatch(r"0x[a-fA-F0-9]{40}", u.get("wallet") or "")
+                    and operation_id not in (u.get(ids_field) or []))
+
+        def credit(tx, users):
             self._credit_lock(tx, amount * len(users))
             for user in users:
                 user[field] = int(user.get(field, 0)) + amount
@@ -56,22 +50,68 @@ class PhaseTwoMixin:
                 tx.put("users", user["user_id"], user)
                 self._history(tx, f"{receipt}:{user['user_id']}", user["user_id"], "admin_bonus", amount,
                               "پاداش مدیریت · Management reward")
-            result = {"user_id": user_id, "amount": amount, "count": len(users), "total": amount * len(users)}
+
+        def finish(tx, count):
+            result = {"user_id": user_id, "amount": amount, "count": count, "total": amount * count}
             tx.put("portal_admin_operations", receipt, result)
             self._audit(tx, admin_id, "bonus", user_id if user_id is not None else "campaign",
-                        {"amount": amount, "count": len(users), "source": "telegram"})
-            return {**result, "already_completed": user_id is not None and not users}
-        return self.store.transaction(operation)
+                        {"amount": amount, "count": count, "source": "telegram"})
+            return result
 
-    def admin_bot_payment(self, admin_id, user_id, action):
+        def previous_result(tx):
+            previous = tx.get("portal_admin_operations", receipt)
+            if previous and (previous["amount"] != amount or previous["user_id"] != user_id):
+                raise PortalError("operation_conflict", 409)
+            return previous
+
+        if user_id is not None:
+            def single(tx):
+                previous = previous_result(tx)
+                if previous:
+                    return {**previous, "already_completed": True}
+                user = tx.get("users", user_id)
+                if not user:
+                    raise PortalError("user_not_found", 404)
+                if user.get("portal_suspended"):
+                    raise PortalError("account_suspended", 403)
+                users = [user] if operation_id not in user.get(ids_field, []) else []
+                credit(tx, users)
+                return {**finish(tx, len(users)), "already_completed": not users}
+            return self.store.transaction(single)
+
+        # Campaign-wide bonus: one huge transaction fails on a large user base,
+        # so credit in batches. A rerun with the same operation_id skips users
+        # already credited, so an interrupted run can be resumed safely.
+        previous = self.store.transaction(previous_result)
+        if previous:
+            return {**previous, "already_completed": True}
+        candidates = [u["user_id"] for u in self.store.scan(
+            "users", ("user_id", "ref_count", "submitted", "portal_suspended", "wallet", ids_field)) if eligible(u)]
+        # Refuse up front when the whole operation cannot fit in the campaign cap.
+        self.store.transaction(lambda tx: self._credit_lock(tx, amount * len(candidates), commit=False))
+        credited = 0
+        for start in range(0, len(candidates), BONUS_BATCH_SIZE):
+            batch = candidates[start:start + BONUS_BATCH_SIZE]
+            def batch_operation(tx, batch=batch):
+                users = [u for u in (tx.get("users", uid) for uid in batch) if u and eligible(u)]
+                credit(tx, users)
+                return len(users)
+            credited += self.store.transaction(batch_operation)
+        return {**self.store.transaction(lambda tx: finish(tx, credited)), "already_completed": False}
+
+    def admin_bot_payment(self, admin_id, user_id, action, paid_total=None):
         """Record the trusted admin's legacy payment status without write skew.
 
         This records an external payment/status correction, never sends tokens.
         A pending portal request must be reviewed through its existing workflow.
+        paid_total (from a payment file) marks only that much as paid, so
+        rewards earned after the file was prepared stay unpaid.
         """
         from .service import PortalError, earned
         self.require_admin(admin_id)
         if action not in ("yes", "no", "unpaid"):
+            raise PortalError("invalid_request")
+        if paid_total is not None and (type(paid_total) is not int or paid_total < 0):
             raise PortalError("invalid_request")
         receipt = f"bot-payment:{uuid4().hex}"
         def operation(tx):
@@ -82,10 +122,16 @@ class PhaseTwoMixin:
                 raise PortalError("payment_pending", 409)
             before = max(0, int(user.get("paid_amount", 0)))
             if action == "yes":
-                user.update(paid=1, paid_amount=earned(user))
+                total = earned(user)
+                target = total if paid_total is None else min(total, max(before, paid_total))
+                user.update(paid=int(target >= total), paid_amount=target)
             elif action == "no":
                 user["paid"] = 0
             else:
+                # Tokens confirmed on-chain cannot be "unpaid": resetting would let
+                # the user withdraw the same balance a second time.
+                if tx.find("portal_payments", {"user_id": user_id, "status": "recorded"}, limit=1):
+                    raise PortalError("onchain_payment_recorded", 409)
                 user.update(paid=0, paid_amount=0)
             after = max(0, int(user.get("paid_amount", 0)))
             tx.put("users", user_id, user)
@@ -133,9 +179,10 @@ class PhaseTwoMixin:
         from .service import PortalError
         if (self.store.get("users", user_id) or {}).get("portal_suspended"):
             raise PortalError("account_suspended", 403)
-        # Every authenticated web API request rechecks current channel membership.
+        # Every authenticated web API request rechecks channel membership, using
+        # a short cache so page views do not hit Telegram's rate limit.
         if user_id not in self.settings.admins:
-            self._member(user_id)
+            self._member(user_id, fresh=False)
 
     def mining_config(self, tx=None):
         tx = tx or self.store
@@ -146,7 +193,7 @@ class PhaseTwoMixin:
         user = user or self.store.get("users", user_id) or {"user_id": user_id}
         config = self.mining_config()
         cycle = self.store.get("portal_mining", user_id)
-        active = cycle if cycle and cycle.get("status") == "active" else None
+        active = cycle if cycle and cycle.get("status") == "active" and not self._mining_expired(cycle) else None
         return {"enabled": config["enabled"], "duration": MINING_SECONDS, "level": level_for(user),
                 "tiers": [dict(tier) for tier in TIERS], "total_claimed": int(user.get("mining_total", 0)),
                 "budget_remaining": max(0, config["budget"] - config["spent"] - config["reserved"]),
@@ -165,7 +212,9 @@ class PhaseTwoMixin:
                 raise PortalError("wallet_required", 403)
             current = tx.get("portal_mining", user_id)
             if current and current.get("status") == "active":
-                raise PortalError("mining_active", 409)
+                if not self._mining_expired(current):
+                    raise PortalError("mining_active", 409)
+                self._release_mining_cycle(tx, current)
             config = self.mining_config(tx)
             if not config["enabled"]:
                 raise PortalError("mining_paused", 409)
@@ -173,9 +222,9 @@ class PhaseTwoMixin:
             amount = tier["reward"]
             if config["spent"] + config["reserved"] + amount > config["budget"]:
                 raise PortalError("mining_budget_exhausted", 409)
-            # Reserve the reward before the timer starts. Daily and mission
-            # awards also account for these reservations under the credit lock.
-            self._credit_lock(tx, amount)
+            # Reserve the reward before the timer starts. This only checks the
+            # campaign cap; the reward is counted as earned when it is claimed.
+            self._credit_lock(tx, amount, commit=False)
             config["reserved"] += amount
             tx.put("portal_state", "mining", config)
             cycle = {"id": cycle_id, "user_id": user_id, "status": "active", "started_at": self.now(),
@@ -209,6 +258,10 @@ class PhaseTwoMixin:
                 raise PortalError("mining_not_started", 409)
             if self.now() < cycle["ends_at"]:
                 raise PortalError("mining_not_ready", 409, remaining=cycle["ends_at"] - self.now())
+            if self._mining_expired(cycle):
+                # Commit the release, then report the expiry outside the transaction.
+                self._release_mining_cycle(tx, cycle)
+                return {"_expired": True}
             amount = cycle["reward"]
             config = self.mining_config(tx)
             config["reserved"] -= amount
@@ -223,7 +276,36 @@ class PhaseTwoMixin:
             tx.put("portal_mining", user_id, cycle)
             self._history(tx, receipt, user_id, "mining", amount, "پاداش ماین · Mining reward")
             return {"amount": amount, "already_claimed": False}
-        return self.store.transaction(operation)
+        result = self.store.transaction(operation)
+        if result.get("_expired"):
+            raise PortalError("mining_expired", 409)
+        return result
+
+    def _mining_expired(self, cycle):
+        return self.now() > int(cycle.get("ends_at", 0)) + MINING_CLAIM_WINDOW
+
+    def _release_mining_cycle(self, tx, cycle):
+        """Return an unclaimed, expired reservation to the mining budget."""
+        config = self.mining_config(tx)
+        config["reserved"] = max(0, int(config["reserved"]) - int(cycle.get("reward", 0)))
+        tx.put("portal_state", "mining", config)
+        cycle = dict(cycle, status="expired", expired_at=self.now())
+        tx.put("portal_mining", cycle["user_id"], cycle)
+        return cycle
+
+    def expire_mining_cycles(self, limit=500):
+        """Background sweep: release reservations of cycles nobody claimed in time."""
+        cutoff = self.now() - MINING_CLAIM_WINDOW
+        released = 0
+        for cycle in self.store.find("portal_mining", {"status": "active", "ends_at": {"$lt": cutoff}}, limit=limit):
+            def operation(tx, user_id=cycle["user_id"], cycle_id=cycle["id"]):
+                current = tx.get("portal_mining", user_id)
+                if current and current.get("id") == cycle_id and current.get("status") == "active" and self._mining_expired(current):
+                    self._release_mining_cycle(tx, current)
+                    return 1
+                return 0
+            released += self.store.transaction(operation)
+        return released
 
     def _audit(self, tx, admin_id, action, target, details=None):
         key = uuid4().hex
@@ -332,12 +414,17 @@ class PhaseTwoMixin:
         user = self.store.get("users", user_id)
         if not user:
             raise PortalError("user_not_found", 404)
-        recent = lambda name: sorted([item for item in self.store.all(name) if item.get("user_id") == user_id],
-                                     key=lambda item: item.get("created_at", 0), reverse=True)[:100]
+        recent = lambda name: self.store.find(name, {"user_id": user_id}, sort=[("created_at", -1)], limit=100)
+        invited = self.store.find("users", {"referred_by": user_id})
         referrals = [{"user_id": u["user_id"], "registered": int(u.get("verified", 0)) >= 1,
-                      "telegram_username": u.get("telegram_username") or ""}
-                     for u in self.store.all("users") if u.get("referred_by") == user_id]
-        return {"user": self._admin_user(user), "history": recent("portal_history"),
+                      "telegram_username": u.get("telegram_username") or ""} for u in invited]
+        # Referral quality: accounts that never claimed a daily reward and never
+        # saved a wallet are a common sign of farmed (fake) invitations.
+        inactive = sum(1 for u in invited if int(u.get("daily_count", 0) or 0) == 0 and not u.get("wallet"))
+        detail_user = self._admin_user(user)
+        detail_user["referral_quality"] = {"invited": len(invited), "inactive": inactive,
+                                           "inactive_percent": round(100 * inactive / len(invited)) if invited else 0}
+        return {"user": detail_user, "history": recent("portal_history"),
                 "payments": recent("portal_payments"), "mining": self.mining_status(user_id, user),
                 "submissions": recent("portal_submissions"), "referrals": referrals}
     def admin_user_action(self, admin_id, user_id, payload):

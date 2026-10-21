@@ -3,6 +3,7 @@ import json
 import logging
 import re
 import secrets
+import threading
 import time
 from datetime import datetime, timezone
 from urllib.parse import urlencode, urlsplit
@@ -34,6 +35,25 @@ def earned(user):
     return base + int(user.get("daily_count", 0)) * DAILY_REWARD + int(user.get("bonus_tokens", 0)) + int(user.get("manual_bonus_tokens", 0))
 
 MIN_WITHDRAWAL = 20_000
+# A confirmed channel membership is reused for page views for this long.
+# Reward, wallet and payment actions still ask Telegram directly.
+MEMBER_CACHE_SECONDS = 600
+# The running reward total is recounted from all users this often, which also
+# absorbs changes made by legacy bot paths outside the portal service.
+CREDIT_REBUILD_SECONDS = 300
+EARNED_FIELDS = ("user_id", "ref_count", "daily_count", "bonus_tokens", "manual_bonus_tokens")
+BOARD_FIELDS = EARNED_FIELDS + ("verified", "portal_suspended")
+
+
+# Wallet payouts: wait this long after signing starts before a cancel, so a
+# transaction that was just broadcast has time to be mined, and search at most
+# this many blocks back for a transfer whose hash the browser lost.
+PAYOUT_CANCEL_SETTLE_SECONDS = 90
+PAYOUT_SCAN_MAX_BLOCKS = 400_000
+
+
+def _expires(seconds_from_epoch):
+    return datetime.fromtimestamp(seconds_from_epoch, timezone.utc)
 
 
 def _telegram_error(payload, http_status=0):
@@ -96,9 +116,13 @@ def telegram_membership(settings, user_id):
 
 
 class PortalService(PhaseTwoMixin):
-    def __init__(self, store, settings, member_check=None, clock=time.time):
+    def __init__(self, store, settings, member_check=None, clock=time.time, cache_seconds=60):
         self.store, self.settings, self.clock = store, settings, clock
         self.member_check = member_check or (lambda uid: telegram_membership(settings, uid))
+        # Per-process leaderboard snapshot; 0 disables caching (demo and tests).
+        self.cache_seconds = cache_seconds
+        self._board = None
+        self._board_lock = threading.Lock()
 
     def now(self):
         return int(self.clock())
@@ -129,18 +153,63 @@ class PortalService(PhaseTwoMixin):
         if setting and setting.get("status") == "off":
             raise PortalError("campaign_paused", 403)
 
-    def _member(self, user_id):
-        if not self.member_check(user_id):
-            raise PortalError("membership_required", 403)
+    def _member(self, user_id, fresh=True):
+        """Check channel membership.
 
-    def _credit_lock(self, tx, amount):
-        # Serializes new daily/mission awards across both bot and web workers.
-        lock = tx.get("portal_state", "credit_lock") or {"sequence": 0}
-        lock["sequence"] += 1
-        tx.put("portal_state", "credit_lock", lock)
+        fresh=False (every page view) reuses a recent positive answer so the
+        site does not call Telegram on each request with the bot's own token.
+        Reward and payment actions keep fresh=True.
+        """
+        now = self.now()
+        if not fresh:
+            cached = self.store.get("portal_member_cache", user_id)
+            if cached and int(cached.get("until", 0)) > now:
+                return
+        if not self.member_check(user_id):
+            self.store.delete("portal_member_cache", user_id)
+            raise PortalError("membership_required", 403)
+        until = now + MEMBER_CACHE_SECONDS
+        self.store.put("portal_member_cache", user_id, {"until": until, "expires_at": _expires(until)})
+
+    def _credit_lock(self, tx, amount, commit=True):
+        """Check (and by default record) new rewards against the campaign cap.
+
+        One counter document replaces the old full scan of every user inside
+        each reward transaction. All awards still serialize on this document,
+        so the cap cannot be overshot by concurrent bot and web workers.
+        """
+        now = self.now()
+        counter = tx.get("portal_state", "credit_total")
+        if not counter or now - int(counter.get("rebuilt_at", 0)) >= CREDIT_REBUILD_SECONDS:
+            counter = {"total": sum(earned(u) for u in tx.scan("users", EARNED_FIELDS)), "rebuilt_at": now,
+                       "sequence": int((counter or {}).get("sequence", 0))}
         reserved = self.mining_config(tx)["reserved"]
-        if sum(earned(u) for u in tx.all("users")) + reserved + amount > MAX_TOTAL_TOKENS_LIMIT:
+        if counter["total"] + reserved + amount > MAX_TOTAL_TOKENS_LIMIT:
             raise PortalError("campaign_budget_exhausted", 409)
+        if commit:
+            counter["total"] += amount
+        counter["sequence"] = int(counter.get("sequence", 0)) + 1
+        tx.put("portal_state", "credit_total", counter)
+
+    def _board_snapshot(self):
+        """Ranking, campaign total and top rows, recomputed at most once per cache window."""
+        with self._board_lock:
+            now = self.now()
+            if self._board and now - self._board["at"] < self.cache_seconds:
+                return self._board
+            users = [u for u in self.store.scan("users", BOARD_FIELDS) if u.get("user_id") is not None]
+            pool = sum(earned(u) for u in users)
+            ranked = sorted((u for u in users if not u.get("portal_suspended") and int(u.get("verified", 0) or 0) >= 1),
+                            key=lambda u: (-earned(u), -int(u.get("ref_count", 0) or 0), int(u["user_id"])))
+            ranks, top = {}, []
+            for index, user in enumerate(ranked):
+                ranks[user["user_id"]] = index + 1
+                if index < 20:
+                    top.append({"rank": index + 1, "label": f"PRS · {digest(str(user['user_id']))[:6].upper()}",
+                                "earned": earned(user), "referrals": int(user.get("ref_count", 0) or 0),
+                                "user_id": user["user_id"]})
+            self._board = {"at": now, "pool": pool, "ranks": ranks, "top": top}
+            return self._board
 
     def _history(self, tx, receipt, user_id, kind, amount, title):
         if tx.get("portal_history", receipt):
@@ -194,9 +263,8 @@ class PortalService(PhaseTwoMixin):
             self.store.delete("portal_sessions", digest(token))
 
     def leaderboard(self):
-        users = sorted([u for u in self.store.all("users") if not u.get("portal_suspended") and int(u.get("verified", 0)) >= 1], key=lambda u: (-earned(u), -int(u.get("ref_count", 0)), int(u["user_id"])))
-        return [{"rank": i + 1, "label": f"PRS · {digest(str(u['user_id']))[:6].upper()}",
-                 "earned": earned(u), "referrals": int(u.get("ref_count", 0)), "user_id": u["user_id"]} for i, u in enumerate(users)]
+        """Top 20 rows (with user_id) from the cached snapshot."""
+        return [dict(row) for row in self._board_snapshot()["top"]]
 
     def profile(self, user_id):
         self.check_access(user_id)
@@ -207,10 +275,10 @@ class PortalService(PhaseTwoMixin):
         user = user or {"user_id": user_id}
         total = earned(user)
         paid = min(total, max(0, int(user.get("paid_amount", 0))))
-        ranking = self.leaderboard()
-        pool = sum(earned(u) for u in self.store.all("users"))
-        history = sorted([h for h in self.store.all("portal_history") if h["user_id"] == user_id], key=lambda h: h["created_at"], reverse=True)[:30]
-        payments = sorted([p for p in self.store.all("portal_payments") if p["user_id"] == user_id], key=lambda p: p["created_at"], reverse=True)[:20]
+        board = self._board_snapshot()
+        pool = board["pool"]
+        history = self.store.find("portal_history", {"user_id": user_id}, sort=[("created_at", -1)], limit=30)
+        payments = self.store.find("portal_payments", {"user_id": user_id}, sort=[("created_at", -1)], limit=20)
         return {"user_id": user_id, "is_admin": admin, "language": user.get("lang", "fa"),
             "registered": int(user.get("verified", 0)) >= 1,
             "earned": total, "paid": paid, "unpaid": max(0, total - paid),
@@ -218,7 +286,7 @@ class PortalService(PhaseTwoMixin):
             "min_withdrawal": MIN_WITHDRAWAL,
             "daily_count": int(user.get("daily_count", 0)), "daily_reward": DAILY_REWARD,
             "daily_available_at": max(0, int(user.get("last_daily", 0)) + 86400) if user.get("last_daily") else 0,
-            "wallet": user.get("wallet") or "", "rank": next((r["rank"] for r in ranking if r["user_id"] == user_id), None),
+            "wallet": user.get("wallet") or "", "rank": board["ranks"].get(user_id),
             "instagram": user.get("instagram") or "", "twitter": user.get("twitter") or "",
             "wallet_edits_remaining": max(0, 2 - int(user.get("submitted", 0))),
             "referral_link": f"https://t.me/{self.settings.bot_username}?start={user_id}",
@@ -229,10 +297,11 @@ class PortalService(PhaseTwoMixin):
             "withdrawals_enabled": self.campaign_controls()["withdrawals_enabled"],
             "timezone": CAMPAIGN_TIMEZONE, "mining": self.mining_status(user_id, user),
             "announcement": (self.store.get("portal_state", "announcement") or {}).get("text", ""),
-            "tickets": [self._public_ticket(t) for t in self.store.all("portal_tickets") if t["user_id"] == user_id]}
+            "tickets": [self._public_ticket(t) for t in self.store.find(
+                "portal_tickets", {"user_id": user_id}, sort=[("created_at", -1)], limit=50)]}
 
     def public_leaderboard(self, user_id):
-        return [{k: v for k, v in row.items() if k != "user_id"} | {"is_me": row["user_id"] == user_id} for row in self.leaderboard()[:20]]
+        return [{k: v for k, v in row.items() if k != "user_id"} | {"is_me": row["user_id"] == user_id} for row in self.leaderboard()]
 
     def claim_daily(self, user_id):
         self._member(user_id)
@@ -472,9 +541,31 @@ class PortalService(PhaseTwoMixin):
             submitted = int(user.get("submitted", 0))
             if submitted >= 2:
                 raise PortalError("wallet_edit_limit", 409)
-            user.update(wallet=wallet.strip(), submitted=1 if submitted == 0 else 2)
+            self._claim_wallet(tx, user, wallet.strip())
+            user.update(wallet=wallet.strip(), wallet_lc=wallet.strip().lower(), submitted=1 if submitted == 0 else 2)
             tx.put("users", user_id, user)
         self.store.transaction(operation)
+
+    def _claim_wallet(self, tx, user, wallet):
+        """One wallet per account: refuse an address another account already uses.
+
+        The claim document makes two simultaneous registrations of the same
+        address conflict inside MongoDB instead of both succeeding.
+        """
+        key = wallet.lower()
+        if (user.get("wallet") or "").lower() == key:
+            return
+        claim = tx.get("portal_wallet_claims", key)
+        if claim and claim.get("user_id") != user["user_id"]:
+            raise PortalError("wallet_in_use", 409)
+        if any(other.get("user_id") != user["user_id"] for other in tx.find("users", {"wallet_lc": key}, limit=5)):
+            raise PortalError("wallet_in_use", 409)
+        previous = (user.get("wallet") or "").lower()
+        if previous:
+            old_claim = tx.get("portal_wallet_claims", previous)
+            if old_claim and old_claim.get("user_id") == user["user_id"]:
+                tx.delete("portal_wallet_claims", previous)
+        tx.put("portal_wallet_claims", key, {"user_id": user["user_id"], "created_at": self.now()})
 
     def update_social_links(self, user_id, instagram, twitter):
         if not isinstance(instagram, str) or not isinstance(twitter, str) or len(instagram) > 300 or len(twitter) > 300:
@@ -552,6 +643,8 @@ class PortalService(PhaseTwoMixin):
             decimals = int(token.functions.decimals().call())
             if decimals != self.settings.prs_token_decimals:
                 raise ValueError("token decimals mismatch")
+            # Remember where to start looking on-chain if this attempt is later cancelled.
+            signing_block = int(w3.eth.block_number)
         except PortalError:
             raise
         except Exception:
@@ -574,7 +667,8 @@ class PortalService(PhaseTwoMixin):
             current = tx.get("portal_payments", payment_id)
             if not current or current.get("status") != "pending":
                 raise PortalError("already_reviewed", 409)
-            current.update(status="signing", signing_wallet=signer, signing_started_at=self.now())
+            current.update(status="signing", signing_wallet=signer, signing_started_at=self.now(),
+                           signing_block=signing_block)
             tx.put("portal_payments", payment_id, current)
             self._audit(tx, admin_id, "wallet_payout_prepared", payment_id,
                         {"amount": amount, "recipient": recipient, "signer": signer})
@@ -583,16 +677,98 @@ class PortalService(PhaseTwoMixin):
                 "payout_wallet": signer, "token_address": token_address, "chain_id": 56,
                 "transaction": {"from": signer, "to": token_address, "value": "0x0", "data": data, "chainId": "0x38"}}
 
-    def cancel_wallet_payout(self, admin_id, payment_id):
+    def cancel_wallet_payout(self, admin_id, payment_id, force=False, not_sent=False):
+        """Return a signing reservation to pending — but never after tokens left the treasury.
+
+        The browser can lose the transaction hash (for example when the phone
+        switches to Trust Wallet and the page reloads). Before allowing another
+        attempt, the chain is searched for a transfer from the treasury to this
+        recipient. A matching transfer is recorded instead of cancelled.
+        """
         self.require_admin(admin_id)
+        if type(force) is not bool or type(not_sent) is not bool:
+            raise PortalError("invalid_request")
+        payment = self.store.get("portal_payments", payment_id)
+        if not payment or payment.get("status") != "signing" or payment.get("tx_hash") or payment.get("submitted_tx_hash"):
+            raise PortalError("payment_not_cancellable", 409)
+        # not_sent: the payout page knows the transfer never reached a signature
+        # (wrong wallet, admin declined the summary, or the wallet returned
+        # "user rejected" 4001). Any other cancel searches the chain first.
+        if not not_sent:
+            found = self._find_sent_payout(payment, force)
+            if found:
+                result = self.confirm_wallet_payout(admin_id, payment_id, found)
+                return {"recovered": True, **result}
         def cancel(tx):
-            payment = tx.get("portal_payments", payment_id)
-            if not payment or payment.get("status") != "signing" or payment.get("tx_hash") or payment.get("submitted_tx_hash"):
+            current = tx.get("portal_payments", payment_id)
+            if not current or current.get("status") != "signing" or current.get("tx_hash") or current.get("submitted_tx_hash"):
                 raise PortalError("payment_not_cancellable", 409)
-            payment.update(status="pending", signing_wallet="", signing_started_at=0)
-            tx.put("portal_payments", payment_id, payment)
-            self._audit(tx, admin_id, "wallet_payout_cancelled", payment_id, {})
+            current.update(status="pending", signing_wallet="", signing_started_at=0, signing_block=None)
+            tx.put("portal_payments", payment_id, current)
+            self._audit(tx, admin_id, "wallet_payout_cancelled", payment_id,
+                        {"forced": force, "not_sent": not_sent})
         self.store.transaction(cancel)
+        return {"cancelled": True}
+
+    def _find_sent_payout(self, payment, force=False):
+        """Search BSC for an unrecorded PRS transfer treasury → recipient since signing began."""
+        waited = self.now() - int(payment.get("signing_started_at", 0))
+        if waited < PAYOUT_CANCEL_SETTLE_SECONDS:
+            raise PortalError("payout_cancel_too_soon", 409, remaining=PAYOUT_CANCEL_SETTLE_SECONDS - waited)
+        if self.settings.demo or not self.settings.bsc_rpc_url:
+            raise PortalError("payout_not_configured", 503)
+        try:
+            from web3 import Web3
+            w3 = Web3(Web3.HTTPProvider(self.settings.bsc_rpc_url, request_kwargs={"timeout": 20}))
+            if not w3.is_connected() or int(w3.eth.chain_id) != 56:
+                raise ValueError("wrong network")
+            signer = Web3.to_checksum_address(payment.get("signing_wallet") or self.settings.payout_wallet_address)
+            token_address = Web3.to_checksum_address(self.settings.prs_token_address)
+            recipient = Web3.to_checksum_address(payment.get("wallet", ""))
+            # A treasury transaction still waiting in the mempool may be this payout.
+            if int(w3.eth.get_transaction_count(signer, "pending")) > int(w3.eth.get_transaction_count(signer, "latest")):
+                raise PortalError("payout_tx_pending", 409)
+            latest = int(w3.eth.block_number)
+        except PortalError:
+            raise
+        except Exception:
+            raise PortalError("payout_check_unavailable", 503) from None
+        start = payment.get("signing_block")
+        if type(start) is not int or latest - start > PAYOUT_SCAN_MAX_BLOCKS:
+            # Too old (or prepared by an older version) to search automatically.
+            # Only an admin who has checked BscScan by hand may force the cancel.
+            if not force:
+                raise PortalError("payout_check_too_old", 409)
+            return None
+        def topic(address):
+            return "0x" + address[2:].lower().rjust(64, "0")
+        transfer = "0x" + bytes(w3.keccak(text="Transfer(address,address,uint256)")).hex()
+        units = int(payment["amount"]) * (10 ** self.settings.prs_token_decimals)
+        block, window = max(0, start - 5), 5000
+        while block <= latest:
+            end = min(latest, block + window - 1)
+            try:
+                logs = w3.eth.get_logs({"address": token_address, "fromBlock": block, "toBlock": end,
+                                        "topics": [transfer, topic(signer), topic(recipient)]})
+            except Exception:
+                if window > 250:
+                    window //= 4
+                    continue
+                raise PortalError("payout_check_unavailable", 503) from None
+            for log in logs:
+                raw_hash = log.get("transactionHash")
+                tx_hash = raw_hash if isinstance(raw_hash, str) else "0x" + bytes(raw_hash).hex()
+                tx_hash = tx_hash if tx_hash.startswith("0x") else "0x" + tx_hash
+                if self.store.get("portal_payment_receipts", tx_hash.lower()):
+                    continue  # already recorded for another payment
+                data = log.get("data", "0x0")
+                value = int(data, 16) if isinstance(data, str) else int.from_bytes(bytes(data), "big")
+                if value != units:
+                    # Tokens went to this wallet with a different amount: stop and let a human look.
+                    raise PortalError("payout_transfer_found", 409, tx_hash=tx_hash)
+                return tx_hash
+            block = end + 1
+        return None
 
     def confirm_wallet_payout(self, admin_id, payment_id, tx_hash):
         self.require_admin(admin_id)
@@ -744,7 +920,8 @@ class PortalService(PhaseTwoMixin):
                 raise PortalError("registration_required", 404)
             if tx.get("portal_open_payments", user_id):
                 raise PortalError("wallet_locked", 409)
-            user.update(wallet=wallet.strip(), submitted=1)
+            self._claim_wallet(tx, user, wallet.strip())
+            user.update(wallet=wallet.strip(), wallet_lc=wallet.strip().lower(), submitted=1)
             tx.put("users", user_id, user)
             self._audit(tx, admin_id, "update_wallet", user_id, {"wallet": wallet.strip()})
         self.store.transaction(operation)
@@ -835,28 +1012,28 @@ class PortalService(PhaseTwoMixin):
 
     def admin_overview(self, user_id):
         self.require_admin(user_id)
-        users = self.store.all("users")
-        payments = self.store.all("portal_payments")
+        users = self.store.scan("users", EARNED_FIELDS + ("verified", "portal_suspended", "paid_amount"))
         mining = self.mining_config()
         return {"missions": sorted(self.store.all("portal_missions"), key=lambda m: m["created_at"], reverse=True),
-            "submissions": [s for s in self.store.all("portal_submissions") if s["status"] == "pending"],
-            "payments": [p for p in self.store.all("portal_payments") if p["status"] in ("pending", "signing", "sending")],
-            "tickets": [t for t in self.store.all("portal_tickets") if t["status"] == "open"],
-            "users": len([u for u in users if int(u.get("verified", 0)) >= 1]),
-            "stats": {"earned": sum(earned(u) for u in users), "paid": sum(int(u.get("paid_amount", 0)) for u in users),
+            "submissions": self.store.find("portal_submissions", {"status": "pending"}, sort=[("created_at", 1)], limit=500),
+            "payments": self.store.find("portal_payments", {"status": {"$in": ["pending", "signing", "sending"]}},
+                                        sort=[("created_at", 1)], limit=500),
+            "tickets": self.store.find("portal_tickets", {"status": "open"}, sort=[("created_at", 1)], limit=500),
+            "users": len([u for u in users if int(u.get("verified", 0) or 0) >= 1]),
+            "stats": {"earned": sum(earned(u) for u in users), "paid": sum(int(u.get("paid_amount", 0) or 0) for u in users),
                       "suspended": sum(bool(u.get("portal_suspended")) for u in users),
-                      "active_mining": sum(c.get("status") == "active" for c in self.store.all("portal_mining")),
+                      "active_mining": len(self.store.find("portal_mining", {"status": "active"})),
                       "mining_spent": mining["spent"], "mining_reserved": mining["reserved"],
                       "campaign_limit": MAX_TOTAL_TOKENS_LIMIT},
             "controls": self.campaign_controls(), "user_page": self.admin_users(user_id),
-            "recent_payments": sorted(payments, key=lambda p: p["created_at"], reverse=True)[:50],
-            "audit": sorted(self.store.all("portal_audit"), key=lambda a: a["created_at"], reverse=True)[:50]}
+            "recent_payments": self.store.find("portal_payments", {}, sort=[("created_at", -1)], limit=50),
+            "audit": self.store.find("portal_audit", {}, sort=[("created_at", -1)], limit=50)}
 
 
 def build_service(settings=None, database=None, member_check=None):
     settings = settings or Settings.from_env()
     if settings.demo:
-        return PortalService(MemoryStore(), settings, lambda uid: True)
+        return PortalService(MemoryStore(), settings, lambda uid: True, cache_seconds=0)
     if database is None:
         if not settings.mongo_url:
             raise RuntimeError("MONGO_URL is required")

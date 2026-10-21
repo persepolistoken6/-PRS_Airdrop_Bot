@@ -41,6 +41,11 @@ class BotBridge:
             "wallet_edit_limit": ("دفعات مجاز ثبت و اصلاح کیف پول تمام شده است.", "Your wallet registration/edit limit has been reached."),
             "invalid_wallet": ("آدرس کیف پول معتبر نیست.", "The wallet address is invalid."),
             "account_suspended": ("حساب شما تعلیق شده است.", "Your account is suspended."),
+            "wallet_in_use": ("این آدرس کیف پول قبلاً برای حساب دیگری ثبت شده است.", "This wallet address is already registered to another account."),
+            "mining_expired": ("این دوره ماین بیش از ۷ روز دریافت نشد و منقضی شد.", "This mining cycle was not collected within 7 days and expired."),
+            "payment_pending": ("یک درخواست پرداخت باز وجود دارد؛ ابتدا آن را بررسی کن.", "A payment request is still open; review it first."),
+            "onchain_payment_recorded": ("برای این کاربر پرداخت روی بلاکچین ثبت شده؛ «پرداخت نشده» کردن مجاز نیست.", "This user has an on-chain payment recorded; it cannot be marked unpaid."),
+            "user_not_found": ("کاربر پیدا نشد.", "User not found."),
         }
         pair = messages.get(error.code, ("سرویس موقتاً در دسترس نیست؛ کمی بعد تلاش کن.", "The service is temporarily unavailable. Try again shortly."))
         return self.text(uid, *pair)

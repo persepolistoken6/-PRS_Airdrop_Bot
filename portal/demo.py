@@ -8,7 +8,8 @@ def seed_demo(service: PortalService):
         uid = 1001 + index
         service.store.put("users", uid, {"user_id": uid, "ref_count": refs, "daily_count": daily,
             "manual_bonus_tokens": bonus, "bonus_tokens": 0, "paid_amount": paid, "verified": 2,
-            "lang": "fa", "last_daily": now - 90000, "wallet": "0x" + f"{uid:040x}", "submitted": 1})
+            "lang": "fa", "last_daily": now - 90000, "wallet": "0x" + f"{uid:040x}",
+            "wallet_lc": "0x" + f"{uid:040x}", "submitted": 1})
     admin = service.settings.admins[0]
     definitions = [
         {"title": "قدم اول؛ PRS را بشناس", "title_en": "Your first step into PRS", "description": "معرفی پروژه را مرور کن و به یک سؤال کوتاه پاسخ بده.", "description_en": "Explore the project introduction and answer one short question.", "kind": "quiz", "reward": 250, "budget": 25000, "max_claims": 100, "recurrence": "once", "url": "https://prstoken.com/home/", "question": "توکن فعلی PRS روی کدام شبکه است؟", "question_en": "Which network hosts the current PRS token?", "options": ["BNB Chain", "TON", "Solana"], "options_en": ["BNB Chain", "TON", "Solana"], "answer": 0},
