@@ -93,7 +93,9 @@ CHALLENGE_QUIZ = [
     }
 ]
 
-bot = TeleBot(TOKEN, threaded=True)
+# Six handler threads instead of the library default of two, so a burst of
+# registrations does not queue behind a few slow Telegram/MongoDB calls.
+bot = TeleBot(TOKEN, threaded=True, num_threads=int(os.getenv("BOT_THREADS", "6")))
 
 # ----------------- سیستم چندزبانه (فارسی / انگلیسی) -----------------
 LANG = {
@@ -644,8 +646,8 @@ def notify_portal_bonus_recipients(operation_id, amount, target_uid=None):
             if target_uid is not None:
                 recipients = [target_uid]
             else:
-                recipients = [u["user_id"] for u in portal_service.store.all("users")
-                              if operation_id in u.get("bonus_operation_ids", [])]
+                recipients = [u["user_id"] for u in portal_service.store.scan("users", ("user_id", "bonus_operation_ids"))
+                              if operation_id in (u.get("bonus_operation_ids") or [])]
             for uid in recipients:
                 try:
                     bot.send_message(uid, f"🎁 پاداش جدید PRS\n\n🪙 {amount:,} PRS به حساب شما اضافه شد.\nبرای مشاهده موجودی وارد پنل ایردراپ شوید.")
@@ -1208,8 +1210,44 @@ def save_submission(user_id, wallet, current_submitted_status):
     new_status = 1 if current_submitted_status == 0 else 2
     users_col.update_one(
         {"user_id": user_id},
-        {"$set": {"submitted": new_status, "wallet": wallet}}
+        {"$set": {"submitted": new_status, "wallet": wallet, "wallet_lc": wallet.lower()}}
     )
+
+
+def wallet_used_by_other(user_id, wallet):
+    """Legacy (portal off) path: one wallet address per account."""
+    return users_col.find_one({"wallet_lc": wallet.strip().lower(), "user_id": {"$ne": user_id}}, {"_id": 1}) is not None
+
+
+# ---- Captcha attempt limit: a wrong answer no longer gives unlimited new tries ----
+CAPTCHA_MAX_ATTEMPTS = 5
+CAPTCHA_LOCK_SECONDS = 600
+
+
+def captcha_lock_remaining(proof):
+    return max(0, int((proof or {}).get("locked_until", 0)) - int(time.time()))
+
+
+def register_captcha_failure(user_id):
+    """Count a wrong answer; after CAPTCHA_MAX_ATTEMPTS lock the captcha for a while.
+
+    Returns the remaining lock time in seconds (0 when the user may try again).
+    """
+    proof = captcha_col.find_one_and_update(
+        {"user_id": user_id}, {"$inc": {"attempts": 1}}, return_document=ReturnDocument.AFTER) or {}
+    if int(proof.get("attempts", 0)) >= CAPTCHA_MAX_ATTEMPTS:
+        captcha_col.update_one({"user_id": user_id},
+                               {"$set": {"attempts": 0, "locked_until": int(time.time()) + CAPTCHA_LOCK_SECONDS}})
+        return CAPTCHA_LOCK_SECONDS
+    return 0
+
+
+def send_captcha_locked(chat_id, user_id, remaining):
+    minutes = max(1, (remaining + 59) // 60)
+    lang = (users_col.find_one({"user_id": user_id}, {"lang": 1}) or {}).get("lang", "fa")
+    text = (f"⛔ Too many wrong answers. Try again in {minutes} minute(s)." if lang == "en"
+            else f"⛔ تعداد پاسخ‌های اشتباه زیاد بود. {minutes} دقیقه دیگر دوباره امتحان کن.")
+    bot.send_message(chat_id, text)
 
 def normalize_social_handle(value, platform):
     value = (value or "").strip()
@@ -1706,58 +1744,91 @@ def send_language_selection(chat_id, referrer_id):
     )
 
 def send_captcha(chat_id, user_id, referrer_id):
-    num1 = random.randint(1, 10)
-    num2 = random.randint(1, 10)
+    existing = captcha_col.find_one({"user_id": user_id})
+    remaining = captcha_lock_remaining(existing)
+    if remaining:
+        send_captcha_locked(chat_id, user_id, remaining)
+        return
+    num1 = random.randint(11, 49)
+    num2 = random.randint(2, 9)
     correct_ans = num1 + num2
 
-    captcha_col.replace_one(
+    # Keep the attempt counter and lock across new questions; replacing the
+    # whole document used to reset them.
+    captcha_col.update_one(
         {"user_id": user_id},
-        {"user_id": user_id, "num1": num1, "num2": num2, "answer": correct_ans,
-         "pending_referrer": referrer_id, "solved_at": 0},
+        {"$set": {"num1": num1, "num2": num2, "answer": correct_ans,
+                  "pending_referrer": referrer_id, "solved_at": 0},
+         "$setOnInsert": {"attempts": 0, "locked_until": 0}},
         upsert=True
     )
 
     text = get_msg(user_id, "captcha_title", num1, num2)
     bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=get_main_reply_markup(user_id))
 
+BACKUP_MAX_BYTES = 45 * 1024 * 1024  # Telegram bots can upload at most 50 MB
+
+
+def build_database_backup(prefix):
+    """Compressed JSON of the users collection, or None when it is too large for Telegram."""
+    import gzip
+    all_users = list(users_col.find({}, {"_id": 0}))
+    if not all_users:
+        return None, 0
+    raw = json.dumps(all_users, ensure_ascii=False, default=str, separators=(",", ":")).encode("utf-8")
+    packed = gzip.compress(raw, compresslevel=9)
+    if len(packed) > BACKUP_MAX_BYTES:
+        return "too_large", len(all_users)
+    file_bytes = io.BytesIO(packed)
+    file_bytes.name = f"{prefix}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.json.gz"
+    return file_bytes, len(all_users)
+
+
 def send_database_backup(target_chat_id):
     try:
-        all_users = list(users_col.find({}, {"_id": 0}))
-        if not all_users:
+        file_bytes, count = build_database_backup("manual_backup")
+        if file_bytes is None:
             bot.send_message(target_chat_id, "⚠️ دیتابیس خالی است و کاربری برای بک‌آپ وجود ندارد.", reply_markup=get_admin_reply_markup())
             return
-        
-        json_data = json.dumps(all_users, ensure_ascii=False, indent=4)
-        file_bytes = io.BytesIO(json_data.encode('utf-8'))
-        file_bytes.name = f"manual_backup_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.json"
-        
+        if file_bytes == "too_large":
+            bot.send_message(target_chat_id, "⚠️ حجم بک‌آپ از سقف ارسال تلگرام بیشتر است. از بک‌آپ خود MongoDB (مثلاً Atlas) استفاده کن.", reply_markup=get_admin_reply_markup())
+            return
         bot.send_document(
-            target_chat_id, 
-            file_bytes, 
-            caption="⚙️ **فایل پشتیبان کامل دیتابیس (آماده برای ایمپورت در لیارا)**", 
-            reply_markup=get_admin_reply_markup(),
-            parse_mode="Markdown"
+            target_chat_id,
+            file_bytes,
+            caption=f"⚙️ فایل پشتیبان فشرده کاربران ({count:,} نفر) · شامل کیف پول‌ها؛ آن را جایی امن نگه دار و برای کسی نفرست.",
+            reply_markup=get_admin_reply_markup()
         )
     except Exception as e:
-        bot.send_message(target_chat_id, f"❌ خطا در تهیه بک‌آپ:\n`{e}`", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
+        bot.send_message(target_chat_id, f"❌ خطا در تهیه بک‌آپ ({type(e).__name__}).", reply_markup=get_admin_reply_markup())
 
 def auto_backup_scheduler():
     while True:
         time.sleep(86400)
         try:
-            all_users = list(users_col.find({}, {"_id": 0}))
-            if all_users:
-                json_data = json.dumps(all_users, ensure_ascii=False, indent=4)
-                file_bytes = io.BytesIO(json_data.encode('utf-8'))
-                file_bytes.name = f"auto_backup_{datetime.now().strftime('%Y-%m-%d')}.json"
+            file_bytes, count = build_database_backup("auto_backup")
+            if file_bytes == "too_large":
+                bot.send_message(ADMIN_CHAT_ID, "⚠️ بک‌آپ خودکار ارسال نشد: حجم از سقف تلگرام بیشتر است. از بک‌آپ MongoDB استفاده کن.")
+            elif file_bytes is not None:
                 bot.send_document(
-                    ADMIN_CHAT_ID, 
-                    file_bytes, 
-                    caption="⚙️ **پشتیبان‌گیری خودکار روزانه دیتابیس**", 
-                    parse_mode="Markdown"
+                    ADMIN_CHAT_ID,
+                    file_bytes,
+                    caption=f"⚙️ پشتیبان‌گیری خودکار روزانه ({count:,} کاربر) · فایل فشرده؛ شامل کیف پول‌ها."
                 )
         except Exception as e:
-            print(f"Auto backup error: {e}")
+            print(f"Auto backup error: {type(e).__name__}", flush=True)
+
+
+def portal_maintenance_scheduler():
+    """Every 10 minutes: return unclaimed, expired mining reservations to the budget."""
+    while True:
+        time.sleep(600)
+        try:
+            released = portal_service.expire_mining_cycles()
+            if released:
+                print(f"PORTAL MAINTENANCE: released {released} expired mining cycle(s)", flush=True)
+        except Exception as e:
+            print(f"PORTAL MAINTENANCE failed: {type(e).__name__}", flush=True)
 
 
 def portal_payment_notification_scheduler():
@@ -1896,6 +1967,8 @@ def send_portal_entry(user_id):
         if pending:
             if pending.get("solved_at"):
                 ask_to_join(user_id, pending["pending_referrer"] or 0, user_id)
+            elif captcha_lock_remaining(pending):
+                send_captcha_locked(user_id, user_id, captcha_lock_remaining(pending))
             else:
                 bot.send_message(user_id, get_msg(user_id, "captcha_title", pending["num1"], pending["num2"]))
         else:
@@ -1936,7 +2009,15 @@ def gateway_captcha_reply(message):
     if not proof:
         send_portal_entry(uid)
         return
+    remaining = captcha_lock_remaining(proof)
+    if remaining:
+        send_captcha_locked(uid, uid, remaining)
+        return
     if not re.fullmatch(r"[0-9]{1,3}", text) or int(text) != proof["answer"]:
+        locked = register_captcha_failure(uid)
+        if locked:
+            send_captcha_locked(uid, uid, locked)
+            return
         send_captcha(uid, uid, proof.get("pending_referrer") or 0)
         return
     captcha_col.update_one({"user_id": uid}, {"$set": {"solved_at": int(time.time())}})
@@ -2484,72 +2565,161 @@ def show_main_menu(chat_id, user_id, message_id=None, edit=False):
     except Exception as e:
         print(f"Error sending reply markup: {e}")
 
+PAYMENT_UPLOAD_WAIT_SECONDS = 600
+PAYMENT_UPLOAD_MAX_ROWS = 5000
+
+
+def _payment_upload_table(file_bytes, file_name):
+    """Return the uploaded table as rows of strings (CSV with , or ; — or .xlsx)."""
+    if (file_name or "").lower().endswith(".xlsx"):
+        from openpyxl import load_workbook
+        sheet = load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True).active
+        return [["" if cell is None else str(cell) for cell in row] for row in sheet.iter_rows(values_only=True)]
+    text = file_bytes.decode("utf-8-sig", errors="ignore")
+    first = next((line for line in text.splitlines() if line.strip()), "")
+    delimiter = ";" if first.count(";") > first.count(",") else ","
+    return list(csv.reader(io.StringIO(text), delimiter=delimiter))
+
+
+def parse_payment_upload(table):
+    """Strict format: a "User ID" column is required, "Total Tokens" is optional.
+
+    Other numbers in the file (amounts, referral counts...) are never read as
+    user IDs. Returns (rows, skipped); each row is [user_id, paid_total or None].
+    """
+    header = None
+    uid_index = total_index = None
+    rows, skipped, seen = [], 0, set()
+    for record in table:
+        cells = [str(c).strip().lstrip("\ufeff") for c in record]
+        if not any(cells):
+            continue
+        if header is None:
+            lowered = [c.lower() for c in cells]
+            if "user id" not in lowered:
+                raise ValueError("missing_user_id_column")
+            header = lowered
+            uid_index = lowered.index("user id")
+            total_index = lowered.index("total tokens") if "total tokens" in lowered else None
+            continue
+        uid_text = cells[uid_index] if uid_index < len(cells) else ""
+        if uid_text.endswith(".0"):
+            uid_text = uid_text[:-2]
+        if not uid_text.isdigit() or int(uid_text) in seen:
+            skipped += 1
+            continue
+        paid_total = None
+        if total_index is not None:
+            total_text = (cells[total_index] if total_index < len(cells) else "").replace(",", "")
+            if total_text.endswith(".0"):
+                total_text = total_text[:-2]
+            if not total_text.isdigit():
+                skipped += 1
+                continue
+            paid_total = int(total_text)
+        seen.add(int(uid_text))
+        rows.append([int(uid_text), paid_total])
+    if header is None:
+        raise ValueError("missing_user_id_column")
+    return rows, skipped
+
+
+def payment_upload_target(user, paid_total):
+    """New paid_amount: the file's total (never above what the user earned, never lowering it)."""
+    total = calculate_total_tokens(int(user.get("ref_count", 0) or 0), int(user.get("daily_count", 0) or 0),
+                                   int(user.get("bonus_tokens", 0) or 0), int(user.get("manual_bonus_tokens", 0) or 0))
+    before = max(0, int(user.get("paid_amount", 0) or 0))
+    target = total if paid_total is None else min(total, max(before, paid_total))
+    return before, target, total
+
+
 @bot.message_handler(content_types=['document'])
 def handle_admin_documents(message):
     if not is_admin(message.from_user.id):
         return
-    
-    valid_users = {u["user_id"] for u in users_col.find({"submitted": {"$gt": 0}}, {"user_id": 1})}
-
+    admin_id = message.from_user.id
+    # A document only counts as a payment list right after the upload button.
+    # Forwarding a report or any other file to the bot must never mark payments.
+    waiting = settings_col.find_one_and_delete({"key": "admin_payment_upload_wait", "admin_id": admin_id})
+    if not waiting or int(waiting.get("until", 0)) < int(time.time()):
+        bot.send_message(message.chat.id,
+            "ℹ️ این فایل به‌عنوان لیست پرداخت پردازش نشد.\nبرای ثبت پرداخت‌ها، اول دکمه «📁 آپلود اکسل پرداختی‌ها» را بزن و بعد فایل را بفرست.",
+            reply_markup=get_admin_reply_markup())
+        return
     try:
         file_info = bot.get_file(message.document.file_id)
         downloaded_file = bot.download_file(file_info.file_path)
-        file_text = downloaded_file.decode('utf-8', errors='ignore')
-        
-        lines = file_text.splitlines()
-        updated_count = 0
-        not_found_count = 0
-        pending_count = 0
-
-        for line in lines:
-            line = line.strip()
-            if not line or line.startswith("User") or line.startswith("user"):
-                continue
-            
-            parts = [p.strip() for p in line.replace(';', ',').split(',')]
-            target_id = None
-            
-            for part in parts:
-                if part.isdigit():
-                    val = int(part)
-                    if val in valid_users or val > 10000:
-                        target_id = val
-                        break
-            
-            if target_id:
-                usr = users_col.find_one({"user_id": target_id})
-                if usr:
-                    if BOT_PORTAL_ONLY:
-                        try:
-                            portal_service.admin_bot_payment(message.from_user.id, target_id, "yes")
-                            updated_count += 1
-                        except PortalError:
-                            pending_count += 1
-                        continue
-                    r_cnt = usr.get("ref_count", 0)
-                    d_cnt = usr.get("daily_count", 0)
-                    tot = calculate_total_tokens(
-                        r_cnt, d_cnt, usr.get("bonus_tokens", 0), usr.get("manual_bonus_tokens", 0)
-                    )
-                    users_col.update_one({"user_id": target_id}, {"$set": {"paid": 1, "paid_amount": tot}})
-                    updated_count += 1
-                else:
-                    not_found_count += 1
-            else:
-                not_found_count += 1
-
-        bot.send_message(
-            message.chat.id,
-            f"✅ **فایل پرداختی با موفقیت پردازش شد!**\n\n"
-            f"🟢 تعداد کاربرانی که وضعیت‌شان به «پرداخت‌شده» تغییر یافت و موجودی‌شان ثبت شد: `{updated_count}` نفر\n"
-            f"⚠️ شناسایی‌نشده یا نامعتبر: `{not_found_count}` مورد",
-            reply_markup=get_admin_reply_markup(),
-            parse_mode="Markdown"
-        )
-        if pending_count:
-            bot.send_message(message.chat.id, f"⚠️ {pending_count} ردیف ثبت نشد؛ درخواست‌های پرداخت باز را در سایت بررسی کنید.", reply_markup=get_admin_reply_markup())
+        rows, skipped = parse_payment_upload(_payment_upload_table(downloaded_file, message.document.file_name))
+    except ValueError:
+        bot.send_message(message.chat.id,
+            "❌ ستون «User ID» در فایل پیدا نشد؛ هیچ تغییری ثبت نشد.\nخروجی «🟡 اکسل در انتظار پرداخت» را مبنا قرار بده (CSV یا XLSX).",
+            reply_markup=get_admin_reply_markup())
+        return
     except Exception as e:
-        bot.send_message(message.chat.id, f"❌ خطا در پردازش فایل اکسل/متنی:\n`{e}`", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
+        bot.send_message(message.chat.id, f"❌ خواندن فایل ممکن نشد ({type(e).__name__})؛ هیچ تغییری ثبت نشد.",
+                         reply_markup=get_admin_reply_markup())
+        return
+    if not rows:
+        bot.send_message(message.chat.id, "⚠️ هیچ ردیف معتبری در فایل نبود؛ هیچ تغییری ثبت نشد.", reply_markup=get_admin_reply_markup())
+        return
+    if len(rows) > PAYMENT_UPLOAD_MAX_ROWS:
+        bot.send_message(message.chat.id, f"⚠️ فایل بیش از {PAYMENT_UPLOAD_MAX_ROWS:,} ردیف دارد؛ آن را چند بخش کن.",
+                         reply_markup=get_admin_reply_markup())
+        return
+
+    found = {u["user_id"]: u for u in users_col.find(
+        {"user_id": {"$in": [uid for uid, _ in rows]}},
+        {"user_id": 1, "ref_count": 1, "daily_count": 1, "bonus_tokens": 1, "manual_bonus_tokens": 1, "paid_amount": 1})}
+    newly_paid, missing = 0, 0
+    for uid, paid_total in rows:
+        user = found.get(uid)
+        if not user:
+            missing += 1
+            continue
+        before, target, _ = payment_upload_target(user, paid_total)
+        newly_paid += max(0, target - before)
+
+    operation_id = uuid4().hex[:16]
+    settings_col.delete_many({"key": "admin_payment_upload", "admin_id": admin_id})
+    settings_col.insert_one({"key": "admin_payment_upload", "admin_id": admin_id, "operation_id": operation_id,
+                             "rows": rows, "created_at": int(time.time())})
+    markup = InlineKeyboardMarkup()
+    markup.row(InlineKeyboardButton("✅ تأیید و ثبت پرداخت‌ها", callback_data=f"admin_payupload_confirm_{operation_id}"),
+               InlineKeyboardButton("❌ انصراف", callback_data=f"admin_payupload_cancel_{operation_id}"))
+    amount_note = ("مبلغ هر نفر از ستون «Total Tokens» خوانده شد." if rows[0][1] is not None else
+                   "⚠️ ستون «Total Tokens» نبود؛ کل موجودی فعلی هر کاربر پرداخت‌شده ثبت می‌شود.")
+    bot.send_message(message.chat.id,
+        f"📋 پیش‌نمایش فایل پرداختی:\n\n"
+        f"👥 ردیف‌های معتبر: {len(rows):,}\n"
+        f"❓ آیدی‌های پیدانشده: {missing:,}\n"
+        f"⏭ ردیف‌های ردشده (نامعتبر/تکراری): {skipped:,}\n"
+        f"🪙 مجموع PRS که پرداخت‌شده ثبت می‌شود: {newly_paid:,}\n\n"
+        f"{amount_note}\nتا تأیید نکنی، هیچ تغییری ثبت نمی‌شود.",
+        reply_markup=markup)
+
+
+def apply_payment_upload(admin_id, rows):
+    updated = missing = blocked = 0
+    for uid, paid_total in rows:
+        if BOT_PORTAL_ONLY:
+            try:
+                portal_service.admin_bot_payment(admin_id, uid, "yes", paid_total=paid_total)
+                updated += 1
+            except PortalError as error:
+                if error.code == "user_not_found":
+                    missing += 1
+                else:
+                    blocked += 1
+            continue
+        user = users_col.find_one({"user_id": uid})
+        if not user:
+            missing += 1
+            continue
+        _, target, total = payment_upload_target(user, paid_total)
+        users_col.update_one({"user_id": uid}, {"$set": {"paid": int(target >= total), "paid_amount": target}})
+        updated += 1
+    return updated, missing, blocked
+
 
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
@@ -2654,7 +2824,7 @@ def handle_all_messages(message):
                         bot.send_message(chat_id, portal_bridge.error_text(error, user_id), reply_markup=get_admin_reply_markup())
                         return
                 else:
-                    users_col.update_one({"user_id": target_uid}, {"$set": {"wallet": text, "submitted": 1}})
+                    users_col.update_one({"user_id": target_uid}, {"$set": {"wallet": text, "wallet_lc": text.lower(), "submitted": 1}})
                 bot.send_message(chat_id, f"✅ ولت کاربر `{target_uid}` با موفقیت به مقدار جدید تغییر یافت:\n`{text}`", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
                 return
 
@@ -2957,7 +3127,18 @@ def handle_all_messages(message):
             bot.send_message(chat_id, "🔍 برای جستجو، دستور زیر را ارسال کنید:\n`/search [نام کاربری، آیدی عددی یا بخشی از ولت]`", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
             return
         elif text == "📁 آپلود اکسل پرداختی‌ها":
-            bot.send_message(chat_id, "📁 لطفاً فایل خروجی پرداختی خود (فرمت CSV یا متنی حاوی آیدی یا ولت کاربران) را مستقیماً در همین چت آپلود کنید تا وضعیت آن‌ها اتوماتیک به «پرداخت‌شده» تغییر يابد.", reply_markup=get_admin_reply_markup())
+            settings_col.replace_one(
+                {"key": "admin_payment_upload_wait", "admin_id": user_id},
+                {"key": "admin_payment_upload_wait", "admin_id": user_id,
+                 "until": int(time.time()) + PAYMENT_UPLOAD_WAIT_SECONDS},
+                upsert=True)
+            bot.send_message(chat_id,
+                "📁 فایل CSV پرداختی را در ۱۰ دقیقه آینده همین‌جا بفرست.\n\n"
+                "• فایل باید ستون «User ID» داشته باشد (مثل خروجی «🟡 اکسل در انتظار پرداخت»).\n"
+                "• فقط ردیف کاربرانی را نگه دار که واقعاً پرداخت کرده‌ای.\n"
+                "• اگر ستون «Total Tokens» باشد، فقط همان مبلغ پرداخت‌شده ثبت می‌شود؛ پاداش‌هایی که بعد از تهیه فایل گرفته‌اند پرداخت‌نشده باقی می‌ماند.\n\n"
+                "قبل از ثبت، خلاصه را می‌بینی و باید تأیید کنی.",
+                reply_markup=get_admin_reply_markup())
             return
         elif text == "🟢 اکسل پرداخت‌شده‌ها":
             send_status_excel_report(chat_id, status_filter=1)
@@ -3054,6 +3235,11 @@ def handle_all_messages(message):
         correct_ans = captcha_data["answer"]
         referrer_id = captcha_data["pending_referrer"]
 
+        remaining = captcha_lock_remaining(captcha_data)
+        if remaining:
+            send_captcha_locked(chat_id, user_id, remaining)
+            return
+
         if text.isdigit() and int(text) == correct_ans:
             captcha_col.update_one({"user_id": user_id}, {"$set": {"solved_at": int(time.time())}})
             
@@ -3067,8 +3253,12 @@ def handle_all_messages(message):
             captcha_col.delete_one({"user_id": user_id})
             show_main_menu(chat_id, user_id)
         else:
-            new_n1 = random.randint(1, 10)
-            new_n2 = random.randint(1, 10)
+            locked = register_captcha_failure(user_id)
+            if locked:
+                send_captcha_locked(chat_id, user_id, locked)
+                return
+            new_n1 = random.randint(11, 49)
+            new_n2 = random.randint(2, 9)
             new_correct_ans = new_n1 + new_n2
 
             captcha_col.update_one(
@@ -3222,6 +3412,9 @@ def handle_all_messages(message):
                 bot.send_message(chat_id, portal_bridge.error_text(error, user_id))
                 return
         else:
+            if wallet_used_by_other(user_id, wallet_address):
+                bot.send_message(chat_id, portal_bridge.error_text(PortalError("wallet_in_use", 409), user_id))
+                return
             save_submission(user_id, wallet_address, submitted_status)
 
         if submitted_status == 0:
@@ -3333,6 +3526,30 @@ def handle_callbacks(call):
                 bot.answer_callback_query(call.id, "⚠️ این عملیات قبلاً انجام یا لغو شده است.", show_alert=True)
             return
 
+        if call.data.startswith("admin_payupload_"):
+            confirm = call.data.startswith("admin_payupload_confirm_")
+            operation_id = call.data.rsplit("_", 1)[-1]
+            pending = settings_col.find_one_and_delete({"key": "admin_payment_upload", "admin_id": user_id,
+                                                        "operation_id": operation_id})
+            try:
+                bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
+            except Exception:
+                pass
+            if not pending:
+                bot.answer_callback_query(call.id, "⚠️ این فایل قبلاً ثبت یا لغو شده است.", show_alert=True)
+                return
+            if not confirm:
+                bot.answer_callback_query(call.id, "❌ ثبت فایل پرداختی لغو شد.")
+                bot.send_message(chat_id, "❌ هیچ تغییری ثبت نشد.", reply_markup=get_admin_reply_markup())
+                return
+            bot.answer_callback_query(call.id, "⏳ در حال ثبت پرداخت‌ها...")
+            updated, missing, blocked = apply_payment_upload(user_id, pending.get("rows") or [])
+            bot.send_message(chat_id,
+                f"✅ فایل پرداختی ثبت شد.\n\n🟢 پرداخت‌شده ثبت شد: {updated:,} نفر\n❓ پیدانشده: {missing:,}"
+                + (f"\n⚠️ ثبت‌نشده (درخواست پرداخت باز در سایت دارند): {blocked:,} — آن‌ها را از سایت بررسی کن." if blocked else ""),
+                reply_markup=get_admin_reply_markup())
+            return
+
         if call.data.startswith("admin_pay_"):
             parts = call.data.split("_")
             target_uid = int(parts[2])
@@ -3351,6 +3568,7 @@ def handle_callbacks(call):
                         portal_service.admin_bot_payment(user_id, target_uid, action)
                     except PortalError as error:
                         text = "این کاربر درخواست پرداخت باز در سایت دارد؛ ابتدا همان درخواست را بررسی کنید." if error.code == "payment_pending" else portal_bridge.error_text(error, user_id)
+                        text = text[:190]  # Telegram alert text limit
                         bot.answer_callback_query(call.id, text, show_alert=True)
                         return
                 elif action == "yes":
@@ -3358,6 +3576,10 @@ def handle_callbacks(call):
                 elif action == "no":
                     users_col.update_one({"user_id": target_uid}, {"$set": {"paid": 0}})
                 elif action == "unpaid":
+                    if db.portal_payments.find_one({"user_id": target_uid, "status": "recorded"}, {"_id": 1}):
+                        bot.answer_callback_query(call.id, portal_bridge.error_text(
+                            PortalError("onchain_payment_recorded", 409), user_id), show_alert=True)
+                        return
                     users_col.update_one({"user_id": target_uid}, {"$set": {"paid": 0, "paid_amount": 0}})
             
             bot.answer_callback_query(call.id, f"✅ وضعیت کاربر {target_uid} به‌روز شد.")
@@ -3637,7 +3859,19 @@ if __name__ == "__main__":
     if PORTAL_ENABLED:
         if not portal_service.store.ready():
             raise RuntimeError("Portal requires MongoDB transaction support; keep PORTAL_ENABLED=0 until ready")
-        portal_service.store.ensure_indexes()
+        if not portal_service.store.ensure_indexes():
+            print("PORTAL WARNING: users.user_id unique index missing; run scripts/prepare_portal.py", flush=True)
+        try:
+            portal_service.store.backfill_wallet_keys()
+        except Exception as error:
+            print(f"PORTAL WARNING: wallet key backfill failed ({type(error).__name__})", flush=True)
+    else:
+        try:
+            users_col.create_index("wallet_lc")
+            users_col.update_many({"wallet": {"$type": "string"}, "wallet_lc": {"$exists": False}},
+                                  [{"$set": {"wallet_lc": {"$toLower": "$wallet"}}}])
+        except Exception as error:
+            print(f"WALLET INDEX WARNING: {type(error).__name__}", flush=True)
     print("PHASE 2: user website gateway and dual admin management starting..." if BOT_PORTAL_ONLY else "Bot is starting with MongoDB & Dual-Language Support...", flush=True)
     prepare_bot_polling()
     time.sleep(2)
@@ -3647,6 +3881,7 @@ if __name__ == "__main__":
     if PORTAL_ENABLED:
         payment_notice_thread = threading.Thread(target=portal_payment_notification_scheduler, daemon=True)
         payment_notice_thread.start()
+        threading.Thread(target=portal_maintenance_scheduler, daemon=True, name="prs-maintenance").start()
 
     while True:
         try:

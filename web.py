@@ -6,7 +6,7 @@ from functools import wraps
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from flask import Flask, Response, g, jsonify, render_template, request
+from flask import Flask, Response, g, jsonify, redirect, render_template, request
 from werkzeug.exceptions import HTTPException
 
 from portal.demo import seed_demo
@@ -54,6 +54,18 @@ def create_app(settings=None, service=None):
                 return function(*args, **kwargs)
             return wrapped
         return decorate
+
+    canonical_host = urlsplit(settings.base_url).netloc.lower() if settings.base_url and not settings.demo else ""
+
+    @app.before_request
+    def canonical_domain():
+        # Pages opened on another hostname (for example the old *.up.railway.app
+        # address after moving to app.prstoken.com) would fail every POST at the
+        # Origin check below. Send page visits to WEB_BASE_URL instead.
+        # Browsers keep the #token fragment across this redirect.
+        if (canonical_host and request.method == "GET" and request.path in ("/", "/login")
+                and request.host.lower() != canonical_host):
+            return redirect(settings.base_url + request.full_path.rstrip("?"), code=302)
 
     @app.before_request
     def check_origin():
@@ -321,8 +333,9 @@ def create_app(settings=None, service=None):
     @app.post("/api/admin/payments/<payment_id>/cancel-wallet-payout")
     @protected(admin=True)
     def cancel_wallet_payout(payment_id):
-        service.cancel_wallet_payout(g.user_id, payment_id)
-        return jsonify(ok=True)
+        data = body()
+        return jsonify(ok=True, **service.cancel_wallet_payout(
+            g.user_id, payment_id, force=data.get("force", False), not_sent=data.get("not_sent", False)))
 
     @app.post("/api/admin/tickets/<ticket_id>/reply")
     @protected(admin=True)

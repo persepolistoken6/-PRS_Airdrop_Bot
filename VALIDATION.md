@@ -12,3 +12,10 @@ Tests cover the actual bot adapter and website sharing one reward store, simulta
 The test database is an isolated in-memory implementation. These results do not establish live connectivity or behavior with the user's MongoDB, Telegram, Railway, DNS, or payment transactions. Run `scripts/prepare_portal.py` and the deployment checks before enabling the real portal.
 
 Visual browser verification was unavailable in the build environment. No live website URL has been deployed. GitHub branch creation was rejected with HTTP 403 (`Resource not accessible by integration`); the existing repository branch and running services were not updated.
+
+## Fix package (security and performance)
+
+- `python -m unittest tests.test_fixes`: **26 passed** (membership cache, campaign counter, leaderboard cache, batched campaign bonus with resume, mining expiry, one wallet per account, payment-file totals, on-chain search before payout cancel, canonical-domain redirect).
+- `bot.py` exercised end to end with simulated Telegram and MongoDB: captcha lockout, registration and single referral credit, payment-file upload (button required, preview, confirm once, file totals), "unpaid" refused after on-chain payment, campaign bonus, duplicate wallets after backfill, compressed backup — 22/22 checks passed.
+- `python -m compileall`, `node --check static/app.js`: passed.
+- Not verified here: live MongoDB, Telegram, BNB Smart Chain RPC, Railway.
