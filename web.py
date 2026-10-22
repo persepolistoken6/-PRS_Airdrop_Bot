@@ -215,8 +215,7 @@ def create_app(settings=None, service=None):
     @protected()
     def social_links():
         data = body()
-        service.update_social_links(g.user_id, data.get("instagram", ""), data.get("twitter", ""))
-        return jsonify(ok=True)
+        return jsonify(ok=True, **service.update_social_links(g.user_id, data.get("instagram", ""), data.get("twitter", "")))
 
     @app.post("/api/payments")
     @protected()
@@ -262,6 +261,11 @@ def create_app(settings=None, service=None):
     @protected(admin=True)
     def admin_user_action(user_id):
         return jsonify(service.admin_user_action(g.user_id, user_id, body()))
+
+    @app.post("/api/admin/users/<int:user_id>/payment")
+    @protected(admin=True)
+    def admin_user_payment(user_id):
+        return jsonify(service.admin_start_payment(g.user_id, user_id))
 
     @app.post("/api/admin/users/<int:user_id>/wallet")
     @protected(admin=True)
