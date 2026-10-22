@@ -11,6 +11,9 @@ MAX_TOTAL_TOKENS_LIMIT = 300_000_000
 DEFAULT_ADMINS = (6661478622, 84460885)
 CAMPAIGN_TIMEZONE = "Asia/Tehran"
 MINING_SECONDS = 8 * 3600
+# Registration captcha: wrong answers allowed before a temporary lock.
+CAPTCHA_MAX_ATTEMPTS = 5
+CAPTCHA_LOCK_SECONDS = 600
 MINING_DEFAULT_BUDGET = 135_000_000
 TIERS = (
     {"id": "bronze", "name": "برنز", "name_en": "Bronze", "referrals": 0, "balance": 0, "reward": 500},

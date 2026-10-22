@@ -128,6 +128,7 @@ class MongoStore:
         self.database.portal_tickets.create_index([("user_id", 1), ("created_at", -1)])
         self.database.portal_tickets.create_index([("status", 1)])
         self.database.portal_payment_notifications.create_index([("status", 1), ("retry_at", 1), ("created_at", 1)])
+        self.database.portal_messages.create_index([("status", 1), ("retry_at", 1), ("created_at", 1)])
         self.database.portal_mining.create_index([("status", 1), ("ends_at", 1)])
         self.database.portal_audit.create_index([("created_at", -1)])
         self.database.users.create_index("referred_by")

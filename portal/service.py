@@ -12,8 +12,8 @@ from urllib.request import urlopen
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from .settings import (BASE_REWARD, DAILY_REWARD, EXTRA_REWARD, MAX_TOTAL_TOKENS_LIMIT,
-                       REQUIRED_REFERRALS, Settings)
+from .settings import (BASE_REWARD, CAPTCHA_LOCK_SECONDS, CAPTCHA_MAX_ATTEMPTS, DAILY_REWARD, EXTRA_REWARD,
+                       MAX_TOTAL_TOKENS_LIMIT, MINING_SECONDS, REQUIRED_REFERRALS, Settings)
 from .store import MemoryStore, MongoStore
 from .features import PhaseTwoMixin
 from .settings import CAMPAIGN_TIMEZONE
@@ -50,6 +50,27 @@ BOARD_FIELDS = EARNED_FIELDS + ("verified", "portal_suspended")
 # this many blocks back for a transfer whose hash the browser lost.
 PAYOUT_CANCEL_SETTLE_SECONDS = 90
 PAYOUT_SCAN_MAX_BLOCKS = 400_000
+# Every withdrawal keeps back this share as the user's token-burn share. It is
+# never sent or withdrawable; the team burns the whole pool at the end.
+WITHDRAWAL_BURN_PERCENT = 3
+
+
+def burn_split(amount):
+    """(amount sent to the user, amount kept for the burn) for a withdrawal."""
+    amount = int(amount)
+    burn = amount * WITHDRAWAL_BURN_PERCENT // 100
+    return amount - burn, burn
+
+
+def with_burn(payment):
+    """Payment for display, with net/burn filled in for records made before the burn share."""
+    if not payment or "burn_amount" in payment:
+        return payment
+    if payment.get("status") == "pending":   # will be paid with the burn share deducted
+        net, burn = burn_split(payment.get("amount", 0))
+    else:                                     # already paid/in flight under the old rules
+        net, burn = int(payment.get("amount", 0)), 0
+    return {**payment, "net_amount": net, "burn_amount": burn}
 
 
 def _expires(seconds_from_epoch):
@@ -266,6 +287,19 @@ class PortalService(PhaseTwoMixin):
             self._board = {"at": now, "pool": pool, "ranks": ranks, "top": top}
             return self._board
 
+    def _queue_message(self, tx, chat_id, text, key=None):
+        """Durable Telegram outbox: the bot worker sends it after this transaction commits."""
+        message_id = key or uuid4().hex
+        if tx.get("portal_messages", message_id):
+            return
+        now = self.now()
+        tx.put("portal_messages", message_id, {"id": message_id, "chat_id": int(chat_id), "text": text[:3900],
+                                              "status": "pending", "attempts": 0, "created_at": now, "retry_at": now})
+
+    @staticmethod
+    def _lang(user, fa, en):
+        return en if (user or {}).get("lang") == "en" else fa
+
     def _history(self, tx, receipt, user_id, kind, amount, title):
         if tx.get("portal_history", receipt):
             raise PortalError("already_completed", 409)
@@ -333,7 +367,9 @@ class PortalService(PhaseTwoMixin):
         board = self._board_snapshot()
         pool = board["pool"]
         history = self.store.find("portal_history", {"user_id": user_id}, sort=[("created_at", -1)], limit=30)
-        payments = self.store.find("portal_payments", {"user_id": user_id}, sort=[("created_at", -1)], limit=20)
+        payments = [with_burn(p) for p in self.store.find("portal_payments", {"user_id": user_id},
+                                                         sort=[("created_at", -1)], limit=20)]
+        open_burn = sum(int(p.get("burn_amount", 0)) for p in payments if p.get("status") in ("pending", "signing", "sending"))
         return {"user_id": user_id, "is_admin": admin, "language": user.get("lang", "fa"),
             "registered": int(user.get("verified", 0)) >= 1,
             "earned": total, "paid": paid, "unpaid": max(0, total - paid),
@@ -349,11 +385,24 @@ class PortalService(PhaseTwoMixin):
             "campaign_total": pool, "campaign_limit": MAX_TOTAL_TOKENS_LIMIT,
             "paused": (self.store.get("bot_settings", "bot_status") or {}).get("status") == "off",
             "history": history, "payments": payments, "server_time": self.now(),
+            "burn": {"share": int(user.get("burn_share", 0) or 0), "pending": open_burn,
+                     "percent": WITHDRAWAL_BURN_PERCENT},
+            "rules": self.rules(),
             "withdrawals_enabled": self.campaign_controls()["withdrawals_enabled"],
             "timezone": CAMPAIGN_TIMEZONE, "mining": self.mining_status(user_id, user),
             "announcement": (self.store.get("portal_state", "announcement") or {}).get("text", ""),
             "tickets": [self._public_ticket(t) for t in self.store.find(
                 "portal_tickets", {"user_id": user_id}, sort=[("created_at", -1)], limit=50)]}
+
+    def rules(self):
+        """Campaign numbers for the rules page, taken from the code that enforces them."""
+        from .features import MINING_CLAIM_WINDOW
+        return {"required_referrals": REQUIRED_REFERRALS, "base_reward": BASE_REWARD, "extra_reward": EXTRA_REWARD,
+                "daily_reward": DAILY_REWARD, "min_withdrawal": MIN_WITHDRAWAL, "burn_percent": WITHDRAWAL_BURN_PERCENT,
+                "campaign_limit": MAX_TOTAL_TOKENS_LIMIT, "mining_hours": MINING_SECONDS // 3600,
+                "mining_claim_days": MINING_CLAIM_WINDOW // 86400, "captcha_attempts": CAPTCHA_MAX_ATTEMPTS,
+                "captcha_lock_minutes": CAPTCHA_LOCK_SECONDS // 60, "login_minutes": self.settings.login_ttl // 60,
+                "channel": self.settings.channel, "bot": self.settings.bot_username}
 
     def public_leaderboard(self, user_id):
         return [{k: v for k, v in row.items() if k != "user_id"} | {"is_me": row["user_id"] == user_id} for row in self.leaderboard()]
@@ -687,14 +736,22 @@ class PortalService(PhaseTwoMixin):
                 raise PortalError("full_balance_required", 400)
             requested = balance
             pid = uuid4().hex
+            net, burn = burn_split(requested)
             payment = {"id": pid, "user_id": user_id, "amount": requested, "wallet": user["wallet"],
-                       "status": "pending", "created_at": self.now(), "tx_hash": "", "reason": ""}
+                       "status": "pending", "created_at": self.now(), "tx_hash": "", "reason": "",
+                       "net_amount": net, "burn_amount": burn, "burn_percent": WITHDRAWAL_BURN_PERCENT}
             # A real write to the same user document makes a simultaneous wallet
             # edit conflict/retry, avoiding snapshot-isolation write skew.
             user["portal_payment_version"] = int(user.get("portal_payment_version", 0)) + 1
             tx.put("users", user_id, user)
             tx.put("portal_payments", pid, payment)
             tx.put("portal_open_payments", user_id, {"payment_id": pid})
+            name = user.get("telegram_username") or ""
+            for admin in self.settings.admins:
+                self._queue_message(tx, admin, (
+                    f"💸 درخواست برداشت جدید\n\n👤 کاربر: {user_id} {name}\n🪙 مبلغ کل: {requested:,} PRS\n"
+                    f"📤 ارسال به کاربر: {net:,} PRS\n🔥 سهم توکن‌سوزی: {burn:,} PRS\n👝 کیف پول: {user['wallet']}\n\n"
+                    f"برای پرداخت یا لغو، وارد مدیریت سایت شوید."), key=f"admin-request:{pid}:{admin}")
             return payment
         return self.store.transaction(operation)
 
@@ -716,7 +773,7 @@ class PortalService(PhaseTwoMixin):
             if open_payment:
                 payment = tx.get("portal_payments", open_payment.get("payment_id"))
                 if payment and payment.get("status") == "pending":
-                    return {"payment": payment, "created": False}
+                    return {"payment": with_burn(payment), "created": False}
                 raise PortalError("payment_in_progress", 409)
             if int(user.get("verified", 0) or 0) < 1:
                 raise PortalError("registration_required", 403)
@@ -729,8 +786,10 @@ class PortalService(PhaseTwoMixin):
             if balance < MIN_WITHDRAWAL:
                 raise PortalError("nothing_to_pay", 409)
             pid = uuid4().hex
+            net, burn = burn_split(balance)
             payment = {"id": pid, "user_id": user_id, "amount": balance, "wallet": wallet,
                        "status": "pending", "created_at": self.now(), "tx_hash": "", "reason": "",
+                       "net_amount": net, "burn_amount": burn, "burn_percent": WITHDRAWAL_BURN_PERCENT,
                        "source": "admin", "created_by": admin_id}
             user["portal_payment_version"] = int(user.get("portal_payment_version", 0)) + 1
             tx.put("users", user_id, user)
@@ -738,6 +797,82 @@ class PortalService(PhaseTwoMixin):
             tx.put("portal_open_payments", user_id, {"payment_id": pid})
             self._audit(tx, admin_id, "admin_payment_created", user_id, {"amount": balance, "payment_id": pid})
             return {"payment": payment, "created": True}
+        return self.store.transaction(operation)
+
+    def update_referral_membership(self, invitee_id, is_member):
+        """An invited user left (or rejoined) the official channel: remove (or restore) the referral.
+
+        The inviter's referral count and reward change together, the inviter is told
+        in Telegram, and a withdrawal request the new balance no longer covers is
+        cancelled. While one of the inviter's payouts is being signed or confirmed
+        nothing changes ("deferred"); the next membership check applies it.
+        Returns a summary dict, "deferred", or None when nothing changed.
+        """
+        if type(is_member) is not bool or type(invitee_id) is not int:
+            raise PortalError("invalid_request")
+
+        def operation(tx):
+            invitee = tx.get("users", invitee_id)
+            if not invitee or int(invitee.get("verified", 0) or 0) < 1:
+                return None
+            inviter_id = invitee.get("referred_by")
+            if type(inviter_id) is not int or inviter_id <= 0 or inviter_id == invitee_id:
+                return None
+            if (invitee.get("referral_active", True) is not False) == is_member:
+                return None
+            inviter = tx.get("users", inviter_id)
+            if not inviter:
+                invitee["referral_active"] = is_member
+                tx.put("users", invitee_id, invitee)
+                return None
+            open_ref = tx.get("portal_open_payments", inviter_id)
+            open_payment = tx.get("portal_payments", open_ref.get("payment_id")) if open_ref else None
+            if open_payment and open_payment.get("status") in ("signing", "sending"):
+                return "deferred"
+            now = self.now()
+            before = earned(inviter)
+            refs = int(inviter.get("ref_count", 0) or 0)
+            inviter["ref_count"] = refs + 1 if is_member else max(0, refs - 1)
+            delta = earned(inviter) - before
+            self._credit_lock(tx, delta)          # lowers the campaign total on a leave
+            balance = earned(inviter) - int(inviter.get("paid_amount", 0) or 0)
+            cancelled = None
+            if open_payment and open_payment.get("status") == "pending" and int(open_payment["amount"]) > balance:
+                cancelled = open_payment
+                open_payment.update(status="rejected", reviewed_at=now, reviewed_by=0,
+                                    reason="خروج زیرمجموعه از کانال؛ موجودی از مبلغ درخواست کمتر شد · Referral left the channel")
+                tx.put("portal_payments", open_payment["id"], open_payment)
+                tx.delete("portal_open_payments", inviter_id)
+            tx.put("users", inviter_id, inviter)
+            invitee["referral_active"] = is_member
+            invitee["referral_left_at" if not is_member else "referral_rejoined_at"] = now
+            tx.put("users", invitee_id, invitee)
+            event = "back" if is_member else "left"
+            self._history(tx, f"referral-{event}:{invitee_id}:{now}", inviter_id, "referral", delta,
+                          "بازگشت زیرمجموعه به کانال · Referral rejoined the channel" if is_member
+                          else "خروج زیرمجموعه از کانال · Referral left the channel")
+            count = inviter["ref_count"]
+            change = f"{delta:+,}" if delta else "0"
+            if is_member:
+                text = self._lang(inviter,
+                    f"✅ زیرمجموعه‌ات دوباره عضو کانال رسمی شد و دعوتش برگشت.\n\n👥 دعوت‌های فعلی: {count}\n🪙 تغییر موجودی: {change} PRS",
+                    f"✅ Your referral rejoined the official channel and was restored.\n\n👥 Referrals: {count}\n🪙 Balance change: {change} PRS")
+            else:
+                text = self._lang(inviter,
+                    f"⚠️ یکی از زیرمجموعه‌هایت از کانال رسمی خارج شد و دعوتش از حسابت کم شد.\n\n👥 دعوت‌های فعلی: {count}\n"
+                    f"🪙 تغییر موجودی: {change} PRS\n\nاگر دوباره عضو کانال شود، دعوت و پاداشش برمی‌گردد.",
+                    f"⚠️ One of your referrals left the official channel, so it was removed from your account.\n\n"
+                    f"👥 Referrals: {count}\n🪙 Balance change: {change} PRS\n\nIf they rejoin, the referral is restored.")
+            self._queue_message(tx, inviter_id, text, key=f"referral-{event}:{invitee_id}:{now}")
+            if cancelled:
+                self._queue_message(tx, inviter_id, self._lang(inviter,
+                    f"❌ درخواست برداشت {int(cancelled['amount']):,} PRS لغو شد، چون با خروج زیرمجموعه موجودی‌ات کمتر از مبلغ درخواست شد.\n"
+                    f"می‌توانی با موجودی جدید دوباره درخواست بدهی.",
+                    f"❌ Your {int(cancelled['amount']):,} PRS withdrawal request was cancelled because a referral left and your "
+                    f"balance is now lower than the request. You can request again with the new balance."),
+                    key=f"payment-cancel:{cancelled['id']}")
+            return {"inviter": inviter_id, "delta": delta, "ref_count": count,
+                    "cancelled_payment": cancelled["id"] if cancelled else None}
         return self.store.transaction(operation)
 
     def admin_cancel_payment(self, admin_id, payment_id, reason, force=False):
@@ -803,20 +938,30 @@ class PortalService(PhaseTwoMixin):
         amount = int(payment.get("amount", 0))
         if amount < MIN_WITHDRAWAL:
             raise PortalError("invalid_request")
-        amount_units = amount * (10 ** decimals)
+        # Applies to every unpaid request, including ones made before the burn share existed.
+        net, burn = burn_split(amount)
+        amount_units = net * (10 ** decimals)
         data = "0xa9059cbb" + recipient[2:].lower().rjust(64, "0") + format(amount_units, "064x")
 
         def reserve(tx):
             current = tx.get("portal_payments", payment_id)
             if not current or current.get("status") != "pending":
                 raise PortalError("already_reviewed", 409)
+            owner = tx.get("users", current["user_id"])
+            # The balance can drop after the request (e.g. a referral left the channel).
+            if not owner or int(current["amount"]) > earned(owner) - int(owner.get("paid_amount", 0) or 0):
+                raise PortalError("payment_balance_changed", 409)
             current.update(status="signing", signing_wallet=signer, signing_started_at=self.now(),
-                           signing_block=signing_block)
+                           signing_block=signing_block, net_amount=net, burn_amount=burn,
+                           burn_percent=WITHDRAWAL_BURN_PERCENT)
             tx.put("portal_payments", payment_id, current)
             self._audit(tx, admin_id, "wallet_payout_prepared", payment_id,
-                        {"amount": amount, "recipient": recipient, "signer": signer})
+                        {"amount": amount, "net_amount": net, "burn_amount": burn,
+                         "recipient": recipient, "signer": signer})
         self.store.transaction(reserve)
-        return {"payment_id": payment_id, "amount": amount, "recipient": Web3.to_checksum_address(recipient),
+        # "amount" is what leaves the treasury now; the burn share stays behind.
+        return {"payment_id": payment_id, "amount": net, "gross_amount": amount, "burn_amount": burn,
+                "recipient": Web3.to_checksum_address(recipient),
                 "payout_wallet": signer, "token_address": token_address, "chain_id": 56,
                 "transaction": {"from": signer, "to": token_address, "value": "0x0", "data": data, "chainId": "0x38"}}
 
@@ -886,7 +1031,7 @@ class PortalService(PhaseTwoMixin):
         def topic(address):
             return "0x" + address[2:].lower().rjust(64, "0")
         transfer = "0x" + bytes(w3.keccak(text="Transfer(address,address,uint256)")).hex()
-        units = int(payment["amount"]) * (10 ** self.settings.prs_token_decimals)
+        units = self._payout_net(payment) * (10 ** self.settings.prs_token_decimals)
         block, window = max(0, start - 5), 5000
         while block <= latest:
             end = min(latest, block + window - 1)
@@ -955,7 +1100,7 @@ class PortalService(PhaseTwoMixin):
             raise PortalError("payout_unavailable", 503) from None
 
         recipient = Web3.to_checksum_address(payment.get("wallet", ""))
-        amount_units = int(payment["amount"]) * (10 ** self.settings.prs_token_decimals)
+        amount_units = self._payout_net(payment) * (10 ** self.settings.prs_token_decimals)
         expected_data = "0xa9059cbb" + recipient[2:].lower().rjust(64, "0") + format(amount_units, "064x")
         if (int(tx.get("chainId", 0)) != 56 or str(tx.get("from", "")).lower() != signer.lower()
                 or str(tx.get("to", "")).lower() != token_address.lower()
@@ -999,6 +1144,11 @@ class PortalService(PhaseTwoMixin):
         self._finalize_onchain_payment(admin_id, payment_id, tx_hash, int(receipt.blockNumber))
         return {"payment_id": payment_id, "status": "paid", "tx_hash": tx_hash}
 
+    @staticmethod
+    def _payout_net(payment):
+        """PRS actually sent for this payment (older records: the full amount)."""
+        return int(payment.get("net_amount", payment["amount"]))
+
     def payout_payments(self, admin_id, payment_ids):
         """Legacy server-signing payout is intentionally disabled."""
         self.require_admin(admin_id)
@@ -1030,11 +1180,15 @@ class PortalService(PhaseTwoMixin):
             if tx.get("portal_payment_receipts", receipt):
                 raise PortalError("transaction_used", 409)
             tx.put("portal_payment_receipts", receipt, {"payment_id": payment_id})
+            net, burn = self._payout_net(payment), int(payment.get("burn_amount", 0) or 0)
+            # The whole request leaves the withdrawable balance: net was sent,
+            # the burn share is kept on the user's burn page (not withdrawable).
             user["paid_amount"] = int(user.get("paid_amount", 0)) + int(payment["amount"])
+            user["burn_share"] = int(user.get("burn_share", 0) or 0) + burn
             user["paid"] = int(user["paid_amount"] >= earned(user))
             tx.put("users", user["user_id"], user)
             payment.update(status="recorded", tx_hash=tx_hash, reviewed_at=self.now(),
-                           block_number=block_number)
+                           block_number=block_number, net_amount=net, burn_amount=burn)
             tx.put("portal_payments", payment_id, payment)
             tx.delete("portal_open_payments", payment["user_id"])
             # Durable outbox: the bot worker sends the success notice after the
@@ -1044,13 +1198,17 @@ class PortalService(PhaseTwoMixin):
             if not tx.get("portal_payment_notifications", notification_id):
                 tx.put("portal_payment_notifications", notification_id, {
                     "id": notification_id, "payment_id": payment_id,
-                    "user_id": user["user_id"], "amount": int(payment["amount"]),
+                    "user_id": user["user_id"], "amount": net, "burn_amount": burn,
                     "tx_hash": tx_hash, "status": "pending", "attempts": 0,
                     "created_at": self.now(), "retry_at": self.now(),
                 })
-            self._history(tx, f"payment:{payment_id}", user["user_id"], "payment", -int(payment["amount"]), "پرداخت تأییدشده روی بلاکچین · On-chain payment confirmed")
+            self._history(tx, f"payment:{payment_id}", user["user_id"], "payment", -net, "پرداخت تأییدشده روی بلاکچین · On-chain payment confirmed")
+            if burn:
+                self._history(tx, f"payment-burn:{payment_id}", user["user_id"], "burn", -burn,
+                              f"سهم توکن‌سوزی ({WITHDRAWAL_BURN_PERCENT}٪) · Token burn share")
             self._audit(tx, admin_id, "payout_confirmed", payment_id,
-                        {"amount": payment["amount"], "tx_hash": tx_hash, "block_number": block_number})
+                        {"amount": payment["amount"], "net_amount": net, "burn_amount": burn,
+                         "tx_hash": tx_hash, "block_number": block_number})
         self.store.transaction(operation)
 
     def admin_update_wallet(self, admin_id, user_id, wallet):
@@ -1096,6 +1254,13 @@ class PortalService(PhaseTwoMixin):
                 self._history(tx, f"payment:{payment_id}", user["user_id"], "payment", -payment["amount"], "ثبت پرداخت · Payment recorded")
             else:
                 payment.update(status="rejected", reason=reason.strip())
+                owner = tx.get("users", payment["user_id"]) or {}
+                self._queue_message(tx, payment["user_id"], self._lang(owner,
+                    f"❌ درخواست برداشت شما لغو شد.\n\n🪙 مبلغ درخواست: {int(payment['amount']):,} PRS\n"
+                    f"📝 دلیل: {reason.strip()}\n\nموجودی شما کم نشد و می‌توانید دوباره درخواست برداشت ثبت کنید.",
+                    f"❌ Your withdrawal request was cancelled.\n\n🪙 Requested: {int(payment['amount']):,} PRS\n"
+                    f"📝 Reason: {reason.strip()}\n\nYour balance was not reduced and you can request again."),
+                    key=f"payment-cancel:{payment_id}")
             payment.update(reviewed_at=self.now(), reviewed_by=admin_id)
             tx.put("portal_payments", payment_id, payment)
             tx.delete("portal_open_payments", payment["user_id"])
@@ -1155,12 +1320,20 @@ class PortalService(PhaseTwoMixin):
 
     def admin_overview(self, user_id):
         self.require_admin(user_id)
-        users = self.store.scan("users", EARNED_FIELDS + ("verified", "portal_suspended", "paid_amount"))
+        users = self.store.scan("users", EARNED_FIELDS + ("verified", "portal_suspended", "paid_amount", "burn_share"))
         mining = self.mining_config()
+        burn_holders = [u for u in users if int(u.get("burn_share", 0) or 0) > 0]
+        burn = {"total": sum(int(u["burn_share"]) for u in burn_holders), "users": len(burn_holders),
+                "percent": WITHDRAWAL_BURN_PERCENT,
+                "pending": sum(int(with_burn(p).get("burn_amount", 0)) for p in self.store.find(
+                    "portal_payments", {"status": {"$in": ["pending", "signing", "sending"]}})),
+                "top": sorted(({"user_id": u["user_id"], "burn_share": int(u["burn_share"])} for u in burn_holders),
+                              key=lambda row: -row["burn_share"])[:50]}
         return {"missions": sorted(self.store.all("portal_missions"), key=lambda m: m["created_at"], reverse=True),
             "submissions": self.store.find("portal_submissions", {"status": "pending"}, sort=[("created_at", 1)], limit=500),
-            "payments": self.store.find("portal_payments", {"status": {"$in": ["pending", "signing", "sending"]}},
-                                        sort=[("created_at", 1)], limit=500),
+            "payments": [with_burn(p) for p in self.store.find(
+                "portal_payments", {"status": {"$in": ["pending", "signing", "sending"]}},
+                sort=[("created_at", 1)], limit=500)],
             "tickets": self.store.find("portal_tickets", {"status": "open"}, sort=[("created_at", 1)], limit=500),
             "users": len([u for u in users if int(u.get("verified", 0) or 0) >= 1]),
             "stats": {"earned": sum(earned(u) for u in users), "paid": sum(int(u.get("paid_amount", 0) or 0) for u in users),
@@ -1170,7 +1343,8 @@ class PortalService(PhaseTwoMixin):
                       "campaign_limit": MAX_TOTAL_TOKENS_LIMIT},
             "controls": self.campaign_controls(), "user_page": self.admin_users(user_id),
             "recent_payments": self.store.find("portal_payments", {}, sort=[("created_at", -1)], limit=50),
-            "audit": self.store.find("portal_audit", {}, sort=[("created_at", -1)], limit=50)}
+            "audit": self.store.find("portal_audit", {}, sort=[("created_at", -1)], limit=50),
+            "burn": burn}
 
 
 def build_service(settings=None, database=None, member_check=None):

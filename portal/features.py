@@ -13,7 +13,7 @@ ADMIN_USER_FIELDS = ("user_id", "wallet", "paid_amount", "ref_count", "daily_cou
                      "manual_bonus_tokens", "verified", "portal_suspended", "telegram_username", "lang",
                      "registered_at", "referred_by", "last_daily", "submitted", "instagram", "instagram_id",
                      "twitter", "twitter_id", "social_registered", "social_registered_at", "social_updated_at",
-                     "mining_total", "challenge_quiz_attempts", "challenge_quiz_passed")
+                     "mining_total", "challenge_quiz_attempts", "challenge_quiz_passed", "burn_share")
 # A finished mining cycle must be claimed within this window. After it, the
 # reserved reward returns to the mining budget instead of staying locked forever.
 MINING_CLAIM_WINDOW = 7 * 86400
@@ -387,6 +387,7 @@ class PhaseTwoMixin:
                 "social_updated_at": user.get("social_updated_at"),
                 "suspended": suspended, "eligible": eligible,
                 "mining_total": int(user.get("mining_total", 0)),
+                "burn_share": int(user.get("burn_share", 0) or 0),
                 "challenge_quiz_attempts": int(user.get("challenge_quiz_attempts", 0)),
                 "challenge_quiz_passed": bool(user.get("challenge_quiz_passed", False))}
 
@@ -431,7 +432,8 @@ class PhaseTwoMixin:
         recent = lambda name: self.store.find(name, {"user_id": user_id}, sort=[("created_at", -1)], limit=100)
         invited = self.store.find("users", {"referred_by": user_id})
         referrals = [{"user_id": u["user_id"], "registered": int(u.get("verified", 0)) >= 1,
-                      "telegram_username": u.get("telegram_username") or ""} for u in invited]
+                      "telegram_username": u.get("telegram_username") or "",
+                      "active": u.get("referral_active", True) is not False} for u in invited]
         # Referral quality: accounts that never claimed a daily reward and never
         # saved a wallet are a common sign of farmed (fake) invitations.
         inactive = sum(1 for u in invited if int(u.get("daily_count", 0) or 0) == 0 and not u.get("wallet"))
@@ -498,8 +500,10 @@ class PhaseTwoMixin:
             rows = [self._admin_user(u) for u in self.store.all("users")]
             fields = ["user_id", "registered", "referrals", "referred_by", "earned", "paid", "unpaid", "wallet", "suspended", "mining_total"]
         elif kind == "payments":
-            rows = self.store.all("portal_payments")
-            fields = ["id", "user_id", "amount", "wallet", "status", "tx_hash", "reason", "created_at", "reviewed_at", "reviewed_by"]
+            from .service import with_burn
+            rows = [with_burn(p) for p in self.store.all("portal_payments")]
+            fields = ["id", "user_id", "amount", "net_amount", "burn_amount", "wallet", "status", "tx_hash", "reason",
+                      "created_at", "reviewed_at", "reviewed_by"]
         elif kind == "audit":
             rows = [{**row, "details": str(row.get("details", {}))} for row in self.store.all("portal_audit")]
             fields = ["id", "admin_id", "action", "target", "details", "created_at"]
@@ -527,9 +531,12 @@ class PhaseTwoMixin:
         from .service import PortalError
         self.require_admin(admin_id)
         if kind == "paid":
-            rows = [p for p in self.store.all("portal_payments") if p.get("status") == "recorded"]
-            fields = ["tx_hash", "user_id", "amount", "wallet", "status", "block_number", "created_at", "reviewed_at", "reviewed_by"]
-            headers = ["Transaction hash", "Telegram numeric ID", "PRS paid", "Wallet", "Status", "Block", "Requested at", "Paid at", "Admin ID"]
+            from .service import with_burn
+            rows = [with_burn(p) for p in self.store.all("portal_payments") if p.get("status") == "recorded"]
+            fields = ["tx_hash", "user_id", "net_amount", "burn_amount", "amount", "wallet", "status", "block_number",
+                      "created_at", "reviewed_at", "reviewed_by"]
+            headers = ["Transaction hash", "Telegram numeric ID", "PRS sent", "PRS burn share", "PRS total", "Wallet",
+                       "Status", "Block", "Requested at", "Paid at", "Admin ID"]
         elif kind == "social":
             rows = [self._admin_user(u) for u in self.store.all("users")]
             fields = ["user_id", "instagram", "twitter"]
