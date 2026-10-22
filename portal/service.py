@@ -740,6 +740,32 @@ class PortalService(PhaseTwoMixin):
             return {"payment": payment, "created": True}
         return self.store.transaction(operation)
 
+    def admin_cancel_payment(self, admin_id, payment_id, reason, force=False):
+        """Cancel a user's open payment request from the admin panel.
+
+        The request is marked rejected with the reason (the user sees it in
+        their account) and the user may request again later. A request that
+        is being signed is first checked on-chain: if the transfer already
+        happened it is recorded as paid instead, and nothing is cancelled.
+        """
+        self.require_admin(admin_id)
+        if not isinstance(payment_id, str) or not 1 <= len(payment_id) <= 64 or type(force) is not bool:
+            raise PortalError("invalid_request")
+        if not isinstance(reason, str) or not 3 <= len(reason.strip()) <= 400:
+            raise PortalError("reason_required")
+        payment = self.store.get("portal_payments", payment_id)
+        if not payment:
+            raise PortalError("payment_not_found", 404)
+        status = payment.get("status")
+        if status == "signing":
+            result = self.cancel_wallet_payout(admin_id, payment_id, force=force)
+            if result.get("recovered"):
+                return {"cancelled": False, "recovered": True, "tx_hash": result.get("tx_hash")}
+        elif status != "pending":
+            raise PortalError("payment_not_cancellable", 409)
+        self.review_payment(admin_id, payment_id, False, reason=reason.strip())
+        return {"cancelled": True}
+
     def prepare_wallet_payout(self, admin_id, payment_id):
         """Reserve one withdrawal and return the exact BSC token transfer for wallet signing."""
         self.require_admin(admin_id)
