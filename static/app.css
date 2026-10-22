@@ -356,3 +356,20 @@ html[data-motion=off] .heritage-atmosphere span,html[data-motion=off] .heritage-
 .user-card-wallet{overflow-wrap:anywhere;word-break:break-all;font-size:11px;margin:0 0 6px}
 .user-card .detail-line strong{min-width:0;overflow-wrap:anywhere;text-align:end}
 .user-card-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:flex-end;margin-top:12px}
+
+/* Phone bottom bar: more items than fit, so it scrolls sideways */
+@media(max-width:640px){.sidebar nav{overflow-x:auto;flex-shrink:0;justify-content:flex-start;scrollbar-width:none;overscroll-behavior-x:contain}.sidebar nav::-webkit-scrollbar{display:none}.sidebar nav .nav-item{flex:0 0 auto;min-width:68px}}
+/* Stake: coming soon */
+.coming-soon{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:12px;min-height:260px}
+.coming-soon h2{font-size:28px;color:var(--gold)}
+.coming-soon p{color:var(--muted);font-size:12px}
+/* Burn share */
+.burn-card p,.burn-admin p{font-size:11px;color:var(--muted);line-height:2}
+.burn-card .hero-amount,.burn-admin .hero-amount{color:var(--gold)}
+/* Rules page */
+.rules-section{margin-bottom:16px}
+.rules-section h2{display:flex;align-items:center;gap:10px;font-size:16px;margin-bottom:12px}
+.rules-number{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:9px;background:var(--red-soft);color:var(--gold);font-size:12px;flex-shrink:0}
+.rules-section ul{margin:0;padding-inline-start:20px;display:flex;flex-direction:column;gap:8px}
+.rules-section li{font-size:12px;line-height:2;color:var(--muted)}
+.rules-section li::marker{color:var(--gold)}
