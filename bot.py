@@ -12,7 +12,8 @@ from zoneinfo import ZoneInfo
 from telebot import TeleBot
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from pymongo import MongoClient, ReturnDocument
-from portal.settings import Settings, REQUIRED_REFERRALS, BASE_REWARD, EXTRA_REWARD, DAILY_REWARD, MAX_TOTAL_TOKENS_LIMIT
+from portal.settings import (Settings, REQUIRED_REFERRALS, BASE_REWARD, EXTRA_REWARD, DAILY_REWARD, MAX_TOTAL_TOKENS_LIMIT,
+                             CAPTCHA_MAX_ATTEMPTS, CAPTCHA_LOCK_SECONDS)
 from portal.service import build_service, PortalError
 from portal.bot_bridge import BotBridge, PANEL_LABELS, MISSION_LABELS
 
@@ -1219,9 +1220,7 @@ def wallet_used_by_other(user_id, wallet):
     return users_col.find_one({"wallet_lc": wallet.strip().lower(), "user_id": {"$ne": user_id}}, {"_id": 1}) is not None
 
 
-# ---- Captcha attempt limit: a wrong answer no longer gives unlimited new tries ----
-CAPTCHA_MAX_ATTEMPTS = 5
-CAPTCHA_LOCK_SECONDS = 600
+# ---- Captcha attempt limit (values in portal/settings.py, also shown on the rules page) ----
 
 
 def captcha_lock_remaining(proof):
@@ -1819,6 +1818,116 @@ def auto_backup_scheduler():
             print(f"Auto backup error: {type(e).__name__}", flush=True)
 
 
+def portal_message_scheduler():
+    """Send queued Telegram messages: withdrawal alerts to admins, cancellations and referral changes to users."""
+    messages = db.portal_messages
+    while True:
+        item = None
+        now = int(time.time())
+        try:
+            messages.update_many({"status": "sending", "updated_at": {"$lt": now - 120}},
+                                 {"$set": {"status": "pending", "retry_at": now}})
+            item = messages.find_one_and_update(
+                {"status": "pending", "retry_at": {"$lte": now}},
+                {"$set": {"status": "sending", "updated_at": now}, "$inc": {"attempts": 1}},
+                sort=[("created_at", 1)], return_document=ReturnDocument.AFTER)
+            if not item:
+                time.sleep(3)
+                continue
+            bot.send_message(item["chat_id"], item["text"], disable_web_page_preview=True)
+            messages.update_one({"_id": item["_id"], "status": "sending"},
+                                {"$set": {"status": "sent", "sent_at": int(time.time())}})
+            time.sleep(0.05)
+        except Exception as error:
+            if item:
+                attempts = int(item.get("attempts", 1))
+                # A user who blocked the bot will never receive it: stop retrying.
+                failed = is_blocked_api_error(error) or attempts >= 8
+                update = ({"status": "failed", "failed_at": int(time.time())} if failed else
+                          {"status": "pending", "retry_at": int(time.time()) + min(3600, 30 * (2 ** (attempts - 1)))})
+                try:
+                    messages.update_one({"_id": item["_id"], "status": "sending"}, {"$set": update})
+                except Exception:
+                    pass
+            print(f"Portal message delivery failed: {bot_failure_label(error)}", flush=True)
+            time.sleep(2)
+
+
+def is_campaign_channel(chat):
+    channel = CHANNEL_ID.strip()
+    if channel.startswith("@"):
+        return (getattr(chat, "username", "") or "").casefold() == channel[1:].casefold()
+    return str(getattr(chat, "id", "")) == channel
+
+
+def channel_member_state(member):
+    """True / False from a Telegram ChatMember; None when the status is unclear."""
+    status = getattr(member, "status", "")
+    if status in ("member", "administrator", "creator"):
+        return True
+    if status == "restricted":
+        return bool(getattr(member, "is_member", False))
+    if status in ("left", "kicked"):
+        return False
+    return None
+
+
+def channel_membership(user_id):
+    """Strict check for referral deductions: any Telegram error is "unknown" (None), never "left"."""
+    try:
+        return channel_member_state(bot.get_chat_member(CHANNEL_ID, user_id))
+    except Exception:
+        return None
+
+
+REFERRAL_CHECK_DELAY = 0.25        # 4 Telegram lookups per second
+REFERRAL_SWEEP_PAUSE = 1800        # 30 minutes between full passes
+
+
+def bot_is_channel_admin():
+    try:
+        me = bot.get_me()
+        return getattr(bot.get_chat_member(CHANNEL_ID, me.id), "status", "") in ("administrator", "creator")
+    except Exception:
+        return False
+
+
+def referral_membership_scheduler():
+    """Check every invited user's channel membership; leaves remove the inviter's referral reward."""
+    time.sleep(60)
+    last_warning = 0
+    while True:
+        try:
+            if not bot_is_channel_admin():
+                # Without admin rights Telegram's answers are unreliable: change nothing.
+                if time.time() - last_warning > 86400:
+                    last_warning = time.time()
+                    print("REFERRAL CHECK PAUSED: the bot is not an administrator of the channel", flush=True)
+                    for admin_id in ADMIN_IDS:
+                        try:
+                            bot.send_message(admin_id, "⚠️ بررسی خروج زیرمجموعه‌ها متوقف است: ربات ادمین کانال نیست. "
+                                                       "ربات را در کانال ادمین کنید.")
+                        except Exception:
+                            pass
+            else:
+                invitees = [u["user_id"] for u in users_col.find(
+                    {"referred_by": {"$gt": 0}, "verified": {"$gte": 1}}, {"user_id": 1})]
+                changed = 0
+                for uid in invitees:
+                    state = channel_membership(uid)
+                    if state is not None:
+                        try:
+                            result = portal_service.update_referral_membership(uid, state)
+                            changed += isinstance(result, dict)
+                        except Exception as error:
+                            print(f"Referral check failed: {type(error).__name__}", flush=True)
+                    time.sleep(REFERRAL_CHECK_DELAY)
+                print(f"REFERRAL CHECK: {len(invitees)} checked, {changed} changed", flush=True)
+        except Exception as error:
+            print(f"REFERRAL CHECK error: {type(error).__name__}", flush=True)
+        time.sleep(REFERRAL_SWEEP_PAUSE)
+
+
 def portal_maintenance_scheduler():
     """Every 10 minutes: return unclaimed, expired mining reservations to the budget."""
     while True:
@@ -2133,6 +2242,20 @@ if BOT_PORTAL_ONLY:
         bot.answer_callback_query(call.id, portal_bridge.text(uid,
             "فعالیت‌ها از پنل سایت انجام می‌شوند.", "Please use the website portal."))
         send_portal_entry(uid)
+
+if PORTAL_ENABLED:
+    @bot.chat_member_handler()
+    def channel_member_update(update):
+        try:
+            if not is_campaign_channel(update.chat):
+                return
+            member = update.new_chat_member
+            state = channel_member_state(member)
+            if state is not None:
+                portal_service.update_referral_membership(member.user.id, state)
+        except Exception as error:
+            print(f"Channel member update failed: {type(error).__name__}", flush=True)
+
 
 def claim_bot_daily(user_id):
     if PORTAL_ENABLED:
@@ -3849,10 +3972,10 @@ def prepare_bot_polling():
 def poll_bot_updates():
     # Telegram retains a previous allowed_updates filter when it is omitted.
     # Request both update types used by this bot explicitly on every poll.
-    print("BOT POLLING: message and callback_query enabled", flush=True)
+    print("BOT POLLING: message, callback_query and chat_member enabled", flush=True)
     return bot.infinity_polling(timeout=30, long_polling_timeout=30,
                                 skip_pending=not BOT_PORTAL_ONLY,
-                                allowed_updates=["message", "callback_query"])
+                                allowed_updates=["message", "callback_query", "chat_member"])
 
 
 if __name__ == "__main__":
@@ -3882,6 +4005,8 @@ if __name__ == "__main__":
         payment_notice_thread = threading.Thread(target=portal_payment_notification_scheduler, daemon=True)
         payment_notice_thread.start()
         threading.Thread(target=portal_maintenance_scheduler, daemon=True, name="prs-maintenance").start()
+        threading.Thread(target=portal_message_scheduler, daemon=True, name="prs-messages").start()
+        threading.Thread(target=referral_membership_scheduler, daemon=True, name="prs-referrals").start()
 
     while True:
         try:
