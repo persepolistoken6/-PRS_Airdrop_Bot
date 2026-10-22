@@ -334,6 +334,13 @@ def create_app(settings=None, service=None):
         data = body()
         return jsonify(service.confirm_wallet_payout(g.user_id, payment_id, data.get("tx_hash")))
 
+    @app.post("/api/admin/payments/<payment_id>/cancel")
+    @protected(admin=True)
+    def admin_cancel_payment(payment_id):
+        data = body()
+        return jsonify(service.admin_cancel_payment(g.user_id, payment_id, data.get("reason", ""),
+                                                    force=data.get("force", False)))
+
     @app.post("/api/admin/payments/<payment_id>/cancel-wallet-payout")
     @protected(admin=True)
     def cancel_wallet_payout(payment_id):
