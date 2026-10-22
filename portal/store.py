@@ -132,6 +132,8 @@ class MongoStore:
         self.database.portal_audit.create_index([("created_at", -1)])
         self.database.users.create_index("referred_by")
         self.database.users.create_index("wallet_lc")
+        self.database.users.create_index("instagram_id_normalized")
+        self.database.users.create_index("twitter_id_normalized")
         return self.ensure_unique_users()
 
     def ensure_unique_users(self):

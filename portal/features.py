@@ -9,6 +9,11 @@ from zoneinfo import ZoneInfo
 from .settings import CAMPAIGN_TIMEZONE, MAX_TOTAL_TOKENS_LIMIT, MINING_DEFAULT_BUDGET, MINING_SECONDS, REQUIRED_REFERRALS, TIERS
 
 BONUS_BATCH_SIZE = 200
+ADMIN_USER_FIELDS = ("user_id", "wallet", "paid_amount", "ref_count", "daily_count", "bonus_tokens",
+                     "manual_bonus_tokens", "verified", "portal_suspended", "telegram_username", "lang",
+                     "registered_at", "referred_by", "last_daily", "submitted", "instagram", "instagram_id",
+                     "twitter", "twitter_id", "social_registered", "social_registered_at", "social_updated_at",
+                     "mining_total", "challenge_quiz_attempts", "challenge_quiz_passed")
 # A finished mining cycle must be claimed within this window. After it, the
 # reserved reward returns to the mining budget instead of staying locked forever.
 MINING_CLAIM_WINDOW = 7 * 86400
@@ -352,7 +357,7 @@ class PhaseTwoMixin:
 
     @staticmethod
     def _admin_user(user):
-        from .service import MIN_WITHDRAWAL, earned
+        from .service import MIN_WITHDRAWAL, earned, social_url
         wallet = user.get("wallet") or ""
         paid = int(user.get("paid_amount", 0))
         referrals = int(user.get("ref_count", 0))
@@ -375,8 +380,8 @@ class PhaseTwoMixin:
                 "last_daily": user.get("last_daily", 0),
                 "level": level_for(user), "wallet": wallet,
                 "wallet_registered": bool(wallet), "submitted": int(user.get("submitted", 0)),
-                "instagram": user.get("instagram") or user.get("instagram_id") or "",
-                "twitter": user.get("twitter") or user.get("twitter_id") or "",
+                "instagram": social_url(user, "instagram") or user.get("instagram_id") or "",
+                "twitter": social_url(user, "twitter") or user.get("twitter_id") or "",
                 "social_registered": bool(user.get("social_registered") or user.get("instagram_id") or user.get("twitter_id")),
                 "social_registered_at": user.get("social_registered_at"),
                 "social_updated_at": user.get("social_updated_at"),
@@ -393,7 +398,8 @@ class PhaseTwoMixin:
         query = query.strip().lower()
         normalized_query = query.lstrip("@")
         users = []
-        for raw_user in self.store.all("users"):
+        # Only the fields shown in the admin list (skips large bonus history arrays).
+        for raw_user in self.store.scan("users", ADMIN_USER_FIELDS):
             user = self._admin_user(raw_user)
             if eligible_only and not user["eligible"]:
                 continue
@@ -404,7 +410,15 @@ class PhaseTwoMixin:
             users.append(user)
         users.sort(key=lambda u: u["user_id"], reverse=True)
         total = len(users)
-        return {"users": users[(page - 1) * 50:page * 50], "total": total,
+        page_users = users[(page - 1) * 50:page * 50]
+        for user in page_users:
+            # Shown on the card so the admin sees a payment already in progress.
+            open_payment = self.store.get("portal_open_payments", user["user_id"])
+            if open_payment:
+                payment = self.store.get("portal_payments", open_payment.get("payment_id")) or {}
+                user["open_payment"] = {"id": payment.get("id"), "status": payment.get("status"),
+                                        "amount": payment.get("amount")}
+        return {"users": page_users, "total": total,
                 "page": page, "page_size": 50, "eligible_only": bool(eligible_only),
                 "minimum_withdrawal": MIN_WITHDRAWAL if eligible_only else None}
 
@@ -422,6 +436,11 @@ class PhaseTwoMixin:
         # saved a wallet are a common sign of farmed (fake) invitations.
         inactive = sum(1 for u in invited if int(u.get("daily_count", 0) or 0) == 0 and not u.get("wallet"))
         detail_user = self._admin_user(user)
+        open_payment = self.store.get("portal_open_payments", user_id)
+        if open_payment:
+            payment = self.store.get("portal_payments", open_payment.get("payment_id")) or {}
+            detail_user["open_payment"] = {"id": payment.get("id"), "status": payment.get("status"),
+                                           "amount": payment.get("amount")}
         detail_user["referral_quality"] = {"invited": len(invited), "inactive": inactive,
                                            "inactive_percent": round(100 * inactive / len(invited)) if invited else 0}
         return {"user": detail_user, "history": recent("portal_history"),

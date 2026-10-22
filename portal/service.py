@@ -56,6 +56,61 @@ def _expires(seconds_from_epoch):
     return datetime.fromtimestamp(seconds_from_epoch, timezone.utc)
 
 
+SOCIAL_RULES = {
+    "instagram": {
+        "hosts": {"instagram.com", "www.instagram.com", "m.instagram.com", "instagr.am", "www.instagr.am"},
+        "pattern": re.compile(r"[A-Za-z0-9._]{1,30}"), "base": "https://instagram.com/",
+        "reserved": {"p", "reel", "reels", "explore", "stories", "accounts", "direct", "tv", "about", "legal"},
+    },
+    "twitter": {
+        "hosts": {"x.com", "www.x.com", "mobile.x.com", "twitter.com", "www.twitter.com", "mobile.twitter.com"},
+        "pattern": re.compile(r"[A-Za-z0-9_]{1,15}"), "base": "https://x.com/",
+        "reserved": {"i", "home", "search", "explore", "intent", "share", "hashtag", "settings", "messages",
+                     "notifications", "compose", "login", "signup", "tos", "privacy"},
+    },
+}
+
+
+def normalize_social(value, platform):
+    """Accept "@name", "name" or a profile link in one box.
+
+    Returns (canonical_url, handle), or ("", "") for an empty box.
+    Raises ValueError for anything that is not a profile of that platform.
+    """
+    rule = SOCIAL_RULES[platform]
+    text = (value or "").strip().strip("‎‏‌‪‫‬⁦⁧⁨⁩ ")
+    if not text:
+        return "", ""
+    lowered = text.lower()
+    if "/" in text or lowered.startswith(("http:", "https:")) or any(lowered.startswith(host) for host in rule["hosts"]):
+        candidate = text if lowered.startswith(("http://", "https://")) else "https://" + text.lstrip("/")
+        parts = urlsplit(candidate)
+        if (parts.hostname or "").lower() not in rule["hosts"] or parts.username or parts.password:
+            raise ValueError("not a profile link")
+        segments = [segment for segment in parts.path.split("/") if segment]
+        if not segments:
+            raise ValueError("profile name missing")
+        handle = segments[0]
+    else:
+        handle = text
+    handle = handle.lstrip("@")
+    if not rule["pattern"].fullmatch(handle) or handle.lower() in rule["reserved"]:
+        raise ValueError("invalid profile name")
+    if platform == "instagram" and (handle.startswith(".") or handle.endswith(".") or ".." in handle):
+        raise ValueError("invalid profile name")
+    return rule["base"] + handle, handle
+
+
+def social_url(user, platform):
+    """Profile URL for display: portal link, or one built from a handle saved by the bot."""
+    if user.get(platform):
+        return user[platform]
+    try:
+        return normalize_social(user.get(f"{platform}_id") or "", platform)[0]
+    except ValueError:
+        return ""
+
+
 def _telegram_error(payload, http_status=0):
     code = payload.get("error_code", http_status)
     description = str(payload.get("description", "")).lower()
@@ -287,7 +342,7 @@ class PortalService(PhaseTwoMixin):
             "daily_count": int(user.get("daily_count", 0)), "daily_reward": DAILY_REWARD,
             "daily_available_at": max(0, int(user.get("last_daily", 0)) + 86400) if user.get("last_daily") else 0,
             "wallet": user.get("wallet") or "", "rank": board["ranks"].get(user_id),
-            "instagram": user.get("instagram") or "", "twitter": user.get("twitter") or "",
+            "instagram": social_url(user, "instagram"), "twitter": social_url(user, "twitter"),
             "wallet_edits_remaining": max(0, 2 - int(user.get("submitted", 0))),
             "referral_link": f"https://t.me/{self.settings.bot_username}?start={user_id}",
             "channel_link": f"https://t.me/{self.settings.channel.lstrip('@')}",
@@ -568,26 +623,46 @@ class PortalService(PhaseTwoMixin):
         tx.put("portal_wallet_claims", key, {"user_id": user["user_id"], "created_at": self.now()})
 
     def update_social_links(self, user_id, instagram, twitter):
+        """Save Instagram and X profiles. Each box takes "@name", "name" or a profile link."""
         if not isinstance(instagram, str) or not isinstance(twitter, str) or len(instagram) > 300 or len(twitter) > 300:
             raise PortalError("invalid_request")
-        def valid(value, hosts):
-            if not value.strip():
-                return True
-            from urllib.parse import urlsplit
-            candidate = value.strip()
-            if not candidate.startswith(("https://", "http://")):
-                candidate = "https://" + candidate.lstrip("/")
-            parts = urlsplit(candidate)
-            return parts.scheme == "https" and (parts.hostname or "").lower() in hosts and bool(parts.path.strip("/")) and not parts.username and not parts.password
-        if not valid(instagram, {"instagram.com", "www.instagram.com"}) or not valid(twitter, {"x.com", "www.x.com", "twitter.com", "www.twitter.com"}):
-            raise PortalError("invalid_request")
+        links = {}
+        for platform, value in (("instagram", instagram), ("twitter", twitter)):
+            try:
+                links[platform] = normalize_social(value, platform)
+            except ValueError:
+                raise PortalError(f"invalid_{platform}") from None
         self._member(user_id)
+
         def operation(tx):
             user = self._user(tx, user_id)
-            user["instagram"] = instagram.strip()
-            user["twitter"] = twitter.strip()
+            now = self.now()
+            for platform, (url, handle) in links.items():
+                key = handle.lower()
+                previous = (user.get(f"{platform}_id_normalized") or "").lower()
+                if key and key != previous:
+                    # Same rule as the bot's social registration: one profile per account.
+                    claim = tx.get("portal_social_claims", f"{platform}:{key}")
+                    if claim and claim.get("user_id") != user_id:
+                        raise PortalError(f"{platform}_in_use", 409)
+                    if any(other.get("user_id") != user_id
+                           for other in tx.find("users", {f"{platform}_id_normalized": key}, limit=5)):
+                        raise PortalError(f"{platform}_in_use", 409)
+                    tx.put("portal_social_claims", f"{platform}:{key}", {"user_id": user_id, "created_at": now})
+                if previous and previous != key:
+                    old_claim = tx.get("portal_social_claims", f"{platform}:{previous}")
+                    if old_claim and old_claim.get("user_id") == user_id:
+                        tx.delete("portal_social_claims", f"{platform}:{previous}")
+                # Keep the bot's fields in step so /search and bot reports show the same profile.
+                user.update({platform: url, f"{platform}_id": f"@{handle}" if handle else "",
+                             f"{platform}_id_normalized": key})
+            user["social_registered"] = bool(user.get("instagram") or user.get("twitter"))
+            user["social_updated_at"] = now
+            if user["social_registered"] and not user.get("social_registered_at"):
+                user["social_registered_at"] = now
             tx.put("users", user_id, user)
         self.store.transaction(operation)
+        return {"instagram": links["instagram"][0], "twitter": links["twitter"][0]}
 
     def request_payment(self, user_id, amount=None):
         # Full-balance requests only. Reject partial amounts even from old clients.
@@ -621,6 +696,48 @@ class PortalService(PhaseTwoMixin):
             tx.put("portal_payments", pid, payment)
             tx.put("portal_open_payments", user_id, {"payment_id": pid})
             return payment
+        return self.store.transaction(operation)
+
+    def admin_start_payment(self, admin_id, user_id):
+        """Admin "pay this user" from search: open a full-balance payment the Trust Wallet flow can pay.
+
+        Reuses the user's own pending request when there is one. Same rules as a
+        user request (3 referrals, valid wallet, at least MIN_WITHDRAWAL unpaid).
+        """
+        self.require_admin(admin_id)
+
+        def operation(tx):
+            user = tx.get("users", user_id)
+            if not user:
+                raise PortalError("user_not_found", 404)
+            if user.get("portal_suspended"):
+                raise PortalError("account_suspended", 403)
+            open_payment = tx.get("portal_open_payments", user_id)
+            if open_payment:
+                payment = tx.get("portal_payments", open_payment.get("payment_id"))
+                if payment and payment.get("status") == "pending":
+                    return {"payment": payment, "created": False}
+                raise PortalError("payment_in_progress", 409)
+            if int(user.get("verified", 0) or 0) < 1:
+                raise PortalError("registration_required", 403)
+            if int(user.get("ref_count", 0) or 0) < REQUIRED_REFERRALS:
+                raise PortalError("referrals_required", 403, required=REQUIRED_REFERRALS)
+            wallet = (user.get("wallet") or "").strip()
+            if not re.fullmatch(r"0x[a-fA-F0-9]{40}", wallet) or int(wallet, 16) == 0:
+                raise PortalError("wallet_required")
+            balance = earned(user) - int(user.get("paid_amount", 0) or 0)
+            if balance < MIN_WITHDRAWAL:
+                raise PortalError("nothing_to_pay", 409)
+            pid = uuid4().hex
+            payment = {"id": pid, "user_id": user_id, "amount": balance, "wallet": wallet,
+                       "status": "pending", "created_at": self.now(), "tx_hash": "", "reason": "",
+                       "source": "admin", "created_by": admin_id}
+            user["portal_payment_version"] = int(user.get("portal_payment_version", 0)) + 1
+            tx.put("users", user_id, user)
+            tx.put("portal_payments", pid, payment)
+            tx.put("portal_open_payments", user_id, {"payment_id": pid})
+            self._audit(tx, admin_id, "admin_payment_created", user_id, {"amount": balance, "payment_id": pid})
+            return {"payment": payment, "created": True}
         return self.store.transaction(operation)
 
     def prepare_wallet_payout(self, admin_id, payment_id):
