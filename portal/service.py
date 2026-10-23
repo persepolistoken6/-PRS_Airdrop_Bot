@@ -1,6 +1,4 @@
-import base64
 import hashlib
-import hmac
 import json
 import logging
 import re
@@ -8,14 +6,14 @@ import secrets
 import threading
 import time
 from datetime import datetime, timezone
-from urllib.parse import parse_qsl, urlencode, urlsplit
+from urllib.parse import urlencode, urlsplit
 from urllib.error import HTTPError
 from urllib.request import urlopen
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from .settings import (BASE_REWARD, CAPTCHA_LOCK_SECONDS, CAPTCHA_MAX_ATTEMPTS, DAILY_REWARD, EXTRA_REWARD,
-                       MAX_TOTAL_TOKENS_LIMIT, MINING_SECONDS, PROTECTED_REFERRALS, REQUIRED_REFERRALS, Settings)
+                       MAX_TOTAL_TOKENS_LIMIT, MINING_SECONDS, REQUIRED_REFERRALS, Settings)
 from .store import MemoryStore, MongoStore
 from .features import PhaseTwoMixin
 from .settings import CAMPAIGN_TIMEZONE
@@ -37,13 +35,6 @@ def earned(user):
     return base + int(user.get("daily_count", 0)) * DAILY_REWARD + int(user.get("bonus_tokens", 0)) + int(user.get("manual_bonus_tokens", 0))
 
 MIN_WITHDRAWAL = 20_000
-# Opening the panel inside Telegram (Mini App). Telegram signs the user data it
-# passes from inline and menu buttons; accept it for this long after launch.
-TELEGRAM_INIT_DATA_MAX_AGE = 86400
-# Telegram passes no user data from a reply-keyboard button, so that button's
-# address carries a personal key signed with a secret derived from the bot token.
-# Every keyboard the bot sends has a fresh key; an old one stops working after this.
-PANEL_KEY_TTL = 30 * 86400
 # A confirmed channel membership is reused for page views for this long.
 # Reward, wallet and payment actions still ask Telegram directly.
 MEMBER_CACHE_SECONDS = 600
@@ -92,24 +83,6 @@ def _hex(value):
 
 def _expires(seconds_from_epoch):
     return datetime.fromtimestamp(seconds_from_epoch, timezone.utc)
-
-
-def _referral_order(user):
-    """Sort key for numbering an inviter's referrals, oldest credit first.
-
-    Referrals credited from now on store referral_credited_at. Earlier site
-    registrations have registered_at (set in the same moment), and accounts from
-    the first bot version fall back to the creation time inside their MongoDB _id.
-    """
-    at = user.get("referral_credited_at") or user.get("registered_at")
-    if not at:
-        created = getattr(user.get("_id"), "generation_time", None)
-        at = created.timestamp() if created else 0
-    try:
-        at = int(at)
-    except (TypeError, ValueError):
-        at = 0
-    return at, int(user.get("user_id") or 0)
 
 
 SOCIAL_RULES = {
@@ -386,98 +359,6 @@ class PortalService(PhaseTwoMixin):
         if token:
             self.store.delete("portal_sessions", digest(token))
 
-    # ---- Opening the panel directly from the bot (Telegram Mini App) ----
-
-    def webapp_url(self):
-        """Mini App address for inline and menu buttons: Telegram adds signed user data itself."""
-        if not self.settings.base_url:
-            raise PortalError("portal_not_configured", 503)
-        return f"{self.settings.base_url}/tg"
-
-    def panel_url(self, user_id):
-        """Mini App address for the bot's reply-keyboard button, with a fresh personal key."""
-        if not self.settings.base_url:
-            raise PortalError("portal_not_configured", 503)
-        user = self.store.get("users", user_id) or {}
-        issued = self.now()
-        signature = self._panel_signature(user_id, issued, int(user.get("panel_key_version", 0) or 0))
-        return f"{self.settings.base_url}/tg?k={user_id}.{issued}.{signature}"
-
-    def _panel_signature(self, user_id, issued, version):
-        token = (self.settings.bot_token or "").strip()
-        if not token:
-            raise PortalError("portal_not_configured", 503)
-        secret = hmac.new(b"PRS-panel-key", token.encode(), hashlib.sha256).digest()
-        mac = hmac.new(secret, f"{user_id}.{issued}.{version}".encode(), hashlib.sha256).digest()
-        return base64.urlsafe_b64encode(mac).decode().rstrip("=")
-
-    def _verify_panel_key(self, key):
-        match = re.fullmatch(r"([1-9][0-9]{0,15})\.([0-9]{9,11})\.([A-Za-z0-9_-]{43})", key or "")
-        if not match:
-            raise PortalError("invalid_login", 401)
-        user_id, issued = int(match[1]), int(match[2])
-        user = self.store.get("users", user_id) or {}
-        expected = self._panel_signature(user_id, issued, int(user.get("panel_key_version", 0) or 0))
-        if not hmac.compare_digest(expected, match[3]):
-            raise PortalError("panel_key_expired", 401)    # e.g. made before a bot token change
-        age = self.now() - issued
-        if age < -300:
-            raise PortalError("invalid_login", 401)
-        if age > PANEL_KEY_TTL:
-            raise PortalError("panel_key_expired", 401)
-        return user_id
-
-    def _verify_init_data(self, init_data):
-        """Telegram.WebApp.initData, checked as Telegram documents it (HMAC with the bot token)."""
-        if not isinstance(init_data, str) or not 0 < len(init_data) <= 8192:
-            raise PortalError("invalid_login", 401)
-        try:
-            pairs = parse_qsl(init_data, keep_blank_values=True, strict_parsing=True)
-        except ValueError:
-            raise PortalError("invalid_login", 401) from None
-        fields = dict(pairs)
-        received = fields.pop("hash", "")
-        if len(fields) + 1 != len(pairs) or not re.fullmatch(r"[0-9a-f]{64}", received):
-            raise PortalError("invalid_login", 401)
-        token = (self.settings.bot_token or "").strip()
-        if not token:
-            raise PortalError("portal_not_configured", 503)
-        secret = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
-        check = "\n".join(f"{key}={value}" for key, value in sorted(fields.items()))
-        if not hmac.compare_digest(hmac.new(secret, check.encode(), hashlib.sha256).hexdigest(), received):
-            raise PortalError("invalid_login", 401)
-        try:
-            age = self.now() - int(fields.get("auth_date", ""))
-            user = json.loads(fields.get("user", ""))
-        except ValueError:
-            raise PortalError("invalid_login", 401) from None
-        if age < -300 or age > TELEGRAM_INIT_DATA_MAX_AGE:
-            raise PortalError("login_expired", 401)
-        user_id = user.get("id") if isinstance(user, dict) else None
-        if type(user_id) is not int or user_id <= 0:
-            raise PortalError("invalid_login", 401)
-        return user_id
-
-    def telegram_login(self, init_data=None, panel_key=None):
-        """Sign in from inside Telegram without a link: signed Mini App data or the keyboard key."""
-        if init_data:
-            user_id = self._verify_init_data(init_data)
-        elif panel_key:
-            user_id = self._verify_panel_key(panel_key)
-        else:
-            raise PortalError("invalid_login", 401)
-        self.limit(f"telegram-login:{user_id}", 30, 300)
-        if (self.store.get("users", user_id) or {}).get("portal_suspended"):
-            raise PortalError("account_suspended", 403)
-        if user_id not in self.settings.admins:
-            self._user(self.store, user_id)       # registration finished in the bot
-        self.check_access(user_id)                # still a member of the official channel
-        session_token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(24)
-        until = self.now() + self.settings.session_ttl
-        self.store.put("portal_sessions", digest(session_token), {"user_id": user_id, "csrf": csrf, "until": until,
-            "expires_at": datetime.fromtimestamp(until, timezone.utc), "via": "telegram"})
-        return {"token": session_token, "csrf": csrf}
-
     def leaderboard(self):
         """Top 20 rows (with user_id) from the cached snapshot."""
         return [dict(row) for row in self._board_snapshot()["top"]]
@@ -529,7 +410,6 @@ class PortalService(PhaseTwoMixin):
                 "campaign_limit": MAX_TOTAL_TOKENS_LIMIT, "mining_hours": MINING_SECONDS // 3600,
                 "mining_claim_days": MINING_CLAIM_WINDOW // 86400, "captcha_attempts": CAPTCHA_MAX_ATTEMPTS,
                 "captcha_lock_minutes": CAPTCHA_LOCK_SECONDS // 60, "login_minutes": self.settings.login_ttl // 60,
-                "protected_referrals": PROTECTED_REFERRALS,
                 "channel": self.settings.channel, "bot": self.settings.bot_username}
 
     def public_leaderboard(self, user_id):
@@ -927,46 +807,14 @@ class PortalService(PhaseTwoMixin):
             return {"payment": payment, "created": True}
         return self.store.transaction(operation)
 
-    def _number_referrals(self, tx, inviter_id, inviter):
-        """Give each credited referral of this inviter a fixed order number (1, 2, 3, ...).
-
-        Referrals credited from now on get their number at registration. This
-        fills in older ones once, oldest first. A number never changes afterwards.
-        Returns {invitee_id: number}.
-        """
-        invited = [u for u in tx.find("users", {"referred_by": inviter_id})
-                   if int(u.get("verified", 0) or 0) >= 1 and u.get("user_id") != inviter_id]
-        numbers = {u["user_id"]: u["referral_number"] for u in invited
-                   if type(u.get("referral_number")) is int and u["referral_number"] > 0}
-        last = max([int(inviter.get("referral_total", 0) or 0), *numbers.values()])
-        for user in sorted((u for u in invited if u["user_id"] not in numbers), key=_referral_order):
-            last += 1
-            user["referral_number"] = numbers[user["user_id"]] = last
-            tx.put("users", user["user_id"], user)
-        if inviter.get("referral_total") != last:
-            inviter["referral_total"] = last
-            tx.put("users", inviter_id, inviter)
-        return numbers
-
-    def _next_referral_number(self, tx, inviter_id, inviter):
-        """Order number for a referral being credited now (call inside the crediting transaction)."""
-        if type(inviter.get("referral_total")) is not int:
-            self._number_referrals(tx, inviter_id, inviter)   # number older referrals first, once
-        inviter["referral_total"] = int(inviter.get("referral_total", 0) or 0) + 1
-        return inviter["referral_total"]
-
     def update_referral_membership(self, invitee_id, is_member):
-        """An invited user left (or rejoined) the official channel.
+        """An invited user left (or rejoined) the official channel: remove (or restore) the referral.
 
-        Each inviter's first PROTECTED_REFERRALS referrals, in the order they were
-        credited, always stay counted: their leaving changes nothing. From the next
-        referral on, a leave removes the referral and its reward and a rejoin
-        restores it. The inviter's referral count and reward change together, the
-        inviter is told in Telegram, and a withdrawal request the new balance no
-        longer covers is cancelled. A protected referral that an earlier version
-        removed is restored. While one of the inviter's payouts is being signed or
-        confirmed nothing changes ("deferred"); the next membership check applies it.
-        Returns a summary dict, "deferred", or None when the referral count did not change.
+        The inviter's referral count and reward change together, the inviter is told
+        in Telegram, and a withdrawal request the new balance no longer covers is
+        cancelled. While one of the inviter's payouts is being signed or confirmed
+        nothing changes ("deferred"); the next membership check applies it.
+        Returns a summary dict, "deferred", or None when nothing changed.
         """
         if type(is_member) is not bool or type(invitee_id) is not int:
             raise PortalError("invalid_request")
@@ -978,37 +826,21 @@ class PortalService(PhaseTwoMixin):
             inviter_id = invitee.get("referred_by")
             if type(inviter_id) is not int or inviter_id <= 0 or inviter_id == invitee_id:
                 return None
-            now = self.now()
-            counted = invitee.get("referral_active", True) is not False
-            # Last channel state seen for this referral (shown to admins); older records only know "counted".
-            in_channel = invitee.get("referral_in_channel", counted) is not False
+            if (invitee.get("referral_active", True) is not False) == is_member:
+                return None
             inviter = tx.get("users", inviter_id)
             if not inviter:
-                if counted != is_member or in_channel != is_member:
-                    invitee.update(referral_active=is_member, referral_in_channel=is_member)
-                    tx.put("users", invitee_id, invitee)
-                return None
-            number = invitee.get("referral_number")
-            if type(number) is not int or number <= 0:
-                number = self._number_referrals(tx, inviter_id, inviter).get(invitee_id, 0)
-                if number:
-                    invitee["referral_number"] = number   # keep the copy written below in step
-            protected = 0 < number <= PROTECTED_REFERRALS
-            should_count = protected or is_member
-            if should_count == counted:
-                # The referral count stays as it is; only remember the channel state.
-                if in_channel != is_member:
-                    invitee["referral_in_channel"] = is_member
-                    invitee["referral_left_at" if not is_member else "referral_rejoined_at"] = now
-                    tx.put("users", invitee_id, invitee)
+                invitee["referral_active"] = is_member
+                tx.put("users", invitee_id, invitee)
                 return None
             open_ref = tx.get("portal_open_payments", inviter_id)
             open_payment = tx.get("portal_payments", open_ref.get("payment_id")) if open_ref else None
             if open_payment and open_payment.get("status") in ("signing", "sending"):
                 return "deferred"
+            now = self.now()
             before = earned(inviter)
             refs = int(inviter.get("ref_count", 0) or 0)
-            inviter["ref_count"] = refs + 1 if should_count else max(0, refs - 1)
+            inviter["ref_count"] = refs + 1 if is_member else max(0, refs - 1)
             delta = earned(inviter) - before
             self._credit_lock(tx, delta)          # lowers the campaign total on a leave
             balance = earned(inviter) - int(inviter.get("paid_amount", 0) or 0)
@@ -1020,38 +852,25 @@ class PortalService(PhaseTwoMixin):
                 tx.put("portal_payments", open_payment["id"], open_payment)
                 tx.delete("portal_open_payments", inviter_id)
             tx.put("users", inviter_id, inviter)
-            invitee["referral_active"] = should_count
-            if in_channel != is_member:
-                invitee["referral_left_at" if not is_member else "referral_rejoined_at"] = now
-            invitee["referral_in_channel"] = is_member
+            invitee["referral_active"] = is_member
+            invitee["referral_left_at" if not is_member else "referral_rejoined_at"] = now
             tx.put("users", invitee_id, invitee)
-            event = "protected" if protected else "back" if is_member else "left"
-            self._history(tx, f"referral-{event}:{invitee_id}:{now}", inviter_id, "referral", delta, {
-                "protected": "بازگشت دعوت؛ سه دعوت اول همیشه حساب می‌شوند · Referral restored: your first three always count",
-                "back": "بازگشت زیرمجموعه به کانال · Referral rejoined the channel",
-                "left": "خروج زیرمجموعه از کانال · Referral left the channel"}[event])
+            event = "back" if is_member else "left"
+            self._history(tx, f"referral-{event}:{invitee_id}:{now}", inviter_id, "referral", delta,
+                          "بازگشت زیرمجموعه به کانال · Referral rejoined the channel" if is_member
+                          else "خروج زیرمجموعه از کانال · Referral left the channel")
             count = inviter["ref_count"]
             change = f"{delta:+,}" if delta else "0"
-            if event == "protected":
-                text = self._lang(inviter,
-                    f"✅ سه دعوت اول هر کاربر همیشه حساب می‌شوند، حتی اگر بعداً از کانال خارج شوند. "
-                    f"یکی از این سه دعوت که قبلاً از حسابت کم شده بود، برگشت.\n\n👥 دعوت‌های فعلی: {count}\n🪙 تغییر موجودی: {change} PRS",
-                    f"✅ Every user's first three referrals always count, even if they later leave the channel. "
-                    f"One of yours that was removed earlier has been restored.\n\n👥 Referrals: {count}\n🪙 Balance change: {change} PRS")
-            elif event == "back":
+            if is_member:
                 text = self._lang(inviter,
                     f"✅ زیرمجموعه‌ات دوباره عضو کانال رسمی شد و دعوتش برگشت.\n\n👥 دعوت‌های فعلی: {count}\n🪙 تغییر موجودی: {change} PRS",
                     f"✅ Your referral rejoined the official channel and was restored.\n\n👥 Referrals: {count}\n🪙 Balance change: {change} PRS")
             else:
                 text = self._lang(inviter,
-                    f"⚠️ یکی از زیرمجموعه‌هایت (دعوت شمارهٔ {number}) از کانال رسمی خارج شد و دعوتش از حسابت کم شد.\n\n"
-                    f"👥 دعوت‌های فعلی: {count}\n🪙 تغییر موجودی: {change} PRS\n\n"
-                    f"سه دعوت اولت همیشه حساب می‌شوند؛ کسر فقط از دعوت چهارم به بعد است. "
-                    f"اگر این زیرمجموعه دوباره عضو کانال شود، دعوت و پاداشش برمی‌گردد.",
-                    f"⚠️ One of your referrals (referral #{number}) left the official channel, so it was removed from your account.\n\n"
-                    f"👥 Referrals: {count}\n🪙 Balance change: {change} PRS\n\n"
-                    f"Your first three referrals always count; only referral 4 onward is removed when they leave. "
-                    f"If they rejoin, the referral is restored.")
+                    f"⚠️ یکی از زیرمجموعه‌هایت از کانال رسمی خارج شد و دعوتش از حسابت کم شد.\n\n👥 دعوت‌های فعلی: {count}\n"
+                    f"🪙 تغییر موجودی: {change} PRS\n\nاگر دوباره عضو کانال شود، دعوت و پاداشش برمی‌گردد.",
+                    f"⚠️ One of your referrals left the official channel, so it was removed from your account.\n\n"
+                    f"👥 Referrals: {count}\n🪙 Balance change: {change} PRS\n\nIf they rejoin, the referral is restored.")
             self._queue_message(tx, inviter_id, text, key=f"referral-{event}:{invitee_id}:{now}")
             if cancelled:
                 self._queue_message(tx, inviter_id, self._lang(inviter,
@@ -1060,8 +879,8 @@ class PortalService(PhaseTwoMixin):
                     f"❌ Your {int(cancelled['amount']):,} PRS withdrawal request was cancelled because a referral left and your "
                     f"balance is now lower than the request. You can request again with the new balance."),
                     key=f"payment-cancel:{cancelled['id']}")
-            return {"inviter": inviter_id, "delta": delta, "ref_count": count, "number": number,
-                    "protected": protected, "cancelled_payment": cancelled["id"] if cancelled else None}
+            return {"inviter": inviter_id, "delta": delta, "ref_count": count,
+                    "cancelled_payment": cancelled["id"] if cancelled else None}
         return self.store.transaction(operation)
 
     def admin_cancel_payment(self, admin_id, payment_id, reason, force=False):
@@ -1112,6 +931,9 @@ class PortalService(PhaseTwoMixin):
                 raise ValueError("token decimals mismatch")
             # Remember where to start looking on-chain if this attempt is later cancelled.
             signing_block = int(w3.eth.block_number)
+            # Treasury transaction count now: if it is unchanged at cancel time, nothing was sent.
+            # This works on public RPC nodes, where eth_getLogs is disabled.
+            signing_nonce = int(w3.eth.get_transaction_count(signer, "latest"))
         except PortalError:
             raise
         except Exception:
@@ -1143,7 +965,7 @@ class PortalService(PhaseTwoMixin):
             owner["portal_payment_version"] = int(owner.get("portal_payment_version", 0)) + 1
             tx.put("users", owner["user_id"], owner)
             current.update(status="signing", signing_wallet=signer, signing_started_at=self.now(),
-                           signing_block=signing_block, net_amount=net, burn_amount=burn,
+                           signing_block=signing_block, signing_nonce=signing_nonce, net_amount=net, burn_amount=burn,
                            burn_percent=WITHDRAWAL_BURN_PERCENT)
             tx.put("portal_payments", payment_id, current)
             self._audit(tx, admin_id, "wallet_payout_prepared", payment_id,
@@ -1196,7 +1018,7 @@ class PortalService(PhaseTwoMixin):
             # A submitted hash reaches this point only after the chain search found no transfer
             # (and no treasury transaction waiting in the mempool), so it moved no tokens.
             current.update(status="pending", signing_wallet="", signing_started_at=0, signing_block=None,
-                           submitted_tx_hash="")
+                           signing_nonce=None, submitted_tx_hash="")
             tx.put("portal_payments", payment_id, current)
             self._audit(tx, admin_id, "wallet_payout_cancelled", payment_id,
                         {"forced": force, "not_sent": not_sent})
@@ -1219,13 +1041,17 @@ class PortalService(PhaseTwoMixin):
             token_address = Web3.to_checksum_address(self.settings.prs_token_address)
             recipient = Web3.to_checksum_address(payment.get("wallet", ""))
             # A treasury transaction still waiting in the mempool may be this payout.
-            if int(w3.eth.get_transaction_count(signer, "pending")) > int(w3.eth.get_transaction_count(signer, "latest")):
+            latest_nonce = int(w3.eth.get_transaction_count(signer, "latest"))
+            if int(w3.eth.get_transaction_count(signer, "pending")) > latest_nonce:
                 raise PortalError("payout_tx_pending", 409)
             latest = int(w3.eth.block_number)
         except PortalError:
             raise
         except Exception:
             raise PortalError("payout_check_unavailable", 503) from None
+        start_nonce = payment.get("signing_nonce")
+        if type(start_nonce) is int and latest_nonce <= start_nonce:
+            return None   # the treasury has sent no transaction at all since this payout was prepared
         start = payment.get("signing_block")
         if type(start) is not int or latest - start > PAYOUT_SCAN_MAX_BLOCKS:
             # Too old (or prepared by an older version) to search automatically.
@@ -1247,7 +1073,11 @@ class PortalService(PhaseTwoMixin):
                 if window > 250:
                     window //= 4
                     continue
-                raise PortalError("payout_check_unavailable", 503) from None
+                # Public BSC nodes have eth_getLogs disabled. Only an admin who has looked at the
+                # treasury's history (Trust Wallet / BscScan) may then confirm nothing was sent.
+                if force:
+                    return None
+                raise PortalError("payout_check_manual", 409) from None
             for log in logs:
                 raw_hash = log.get("transactionHash")
                 tx_hash = raw_hash if isinstance(raw_hash, str) else "0x" + bytes(raw_hash).hex()
