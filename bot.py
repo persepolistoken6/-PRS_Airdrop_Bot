@@ -8,9 +8,15 @@ import threading
 import re
 from uuid import uuid4
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from telebot import TeleBot
-from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
-from pymongo import MongoClient
+from telebot.types import (InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
+                           WebAppInfo, MenuButtonWebApp)
+from pymongo import MongoClient, ReturnDocument
+from portal.settings import (Settings, REQUIRED_REFERRALS, BASE_REWARD, EXTRA_REWARD, DAILY_REWARD, MAX_TOTAL_TOKENS_LIMIT,
+                             CAPTCHA_MAX_ATTEMPTS, CAPTCHA_LOCK_SECONDS)
+from portal.service import build_service, PortalError, with_burn
+from portal.bot_bridge import BotBridge, PANEL_LABELS, PANEL_BUTTON_LABELS, MISSION_LABELS
 
 TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
@@ -22,24 +28,25 @@ if not MONGO_URL:
 
 # اتصال به MongoDB با تعیین صریح نام دیتابیس
 mongo_client = MongoClient(MONGO_URL)
-db = mongo_client["persepolis_db"]
+db = mongo_client[os.getenv("MONGO_DB", "persepolis_db")]
 users_col = db.users
 captcha_col = db.captcha
 settings_col = db.bot_settings
+PORTAL_ENABLED = os.getenv("PORTAL_ENABLED", "0") == "1"
+BOT_PORTAL_ONLY = PORTAL_ENABLED and os.getenv("BOT_PORTAL_ONLY", "1") == "1"
 
-BOT_USERNAME = "PRS_Airdrop_Bot"
-CHANNEL_ID = "@persepolisToken6"
+BOT_USERNAME = os.getenv("BOT_USERNAME", "PRS_Airdrop_Bot")
+CHANNEL_ID = os.getenv("CHANNEL_ID", "@persepolisToken6")
 TWITTER_URL = "https://x.com/PersepolisPRS"
 INSTAGRAM_URL = "https://www.instagram.com/persepolistoken6?igsh=eHBwbzdtd2ZoaWI5"
 
-ADMIN_IDS = [6661478622, 84460885]
-ADMIN_CHAT_ID = 6661478622
+ADMIN_IDS = list(Settings.from_env().admins)
+ADMIN_CHAT_ID = ADMIN_IDS[0] if ADMIN_IDS else None
 
-REQUIRED_REFERRALS = 3
 
 # شرایط مستقل چالش جدید (بدون تغییر در حد نصاب ایردراپ اصلی)
 CHALLENGE_REQUIRED_REFERRALS = 10
-CHALLENGE_QUIZ_MAX_ATTEMPTS = 2
+CHALLENGE_QUIZ_MAX_ATTEMPTS = 1
 CHALLENGE_QUIZ_PASS_SCORE = 3
 
 # برای ارسال مستقیم فایل، PDF را کنار bot.py قرار دهید یا FILE_ID تلگرام را
@@ -51,10 +58,6 @@ WHITEPAPER_LOCAL_PATH = os.getenv(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "PRS_Whitepaper_v1.2_FA_EN-3.pdf")
 )
 
-BASE_REWARD = 2000
-EXTRA_REWARD = 5000
-DAILY_REWARD = 1000
-MAX_TOTAL_TOKENS_LIMIT = 300_000_000
 
 BANNER_FILE_ID = "AgACAgQAAxkBAAMfamINNXWkFr-wk1ONFWAEHF2z-vGAAsgNaxtnhwABU-cbUHZe_7c6AQADAgADeQADPQQ"
 
@@ -92,7 +95,9 @@ CHALLENGE_QUIZ = [
     }
 ]
 
-bot = TeleBot(TOKEN, threaded=True)
+# Six handler threads instead of the library default of two, so a burst of
+# registrations does not queue behind a few slow Telegram/MongoDB calls.
+bot = TeleBot(TOKEN, threaded=True, num_threads=int(os.getenv("BOT_THREADS", "6")))
 
 # ----------------- سیستم چندزبانه (فارسی / انگلیسی) -----------------
 LANG = {
@@ -436,19 +441,22 @@ def get_msg(user_id_or_lang, key, *args, **kwargs):
     return text
 
 def get_main_reply_markup(user_id):
-    lang = "fa"
+    """One persistent user shortcut; existing commands and admin controls remain intact.
+
+    With the website configured, the button opens the user's panel directly inside
+    Telegram (Mini App): no link is shown and nothing is typed into the chat.
+    """
     user = users_col.find_one({"user_id": user_id})
-    if user and user.get("lang"):
-        lang = user.get("lang")
-    
-    markup = ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row(get_msg(lang, "main_kb_status"), get_msg(lang, "main_kb_ref"))
-    markup.row(get_msg(lang, "main_kb_daily"), get_msg(lang, "main_kb_wallet"))
-    markup.row(get_msg(lang, "main_kb_guide"), get_msg(lang, "main_kb_leaderboard"))
-    markup.row(get_msg(lang, "main_kb_social"))
-    markup.row(get_msg(lang, "main_kb_challenge_quiz"))
-    markup.row(get_msg(lang, "main_kb_refresh"), get_msg(lang, "main_kb_channel"))
-    markup.row(get_msg(lang, "main_kb_twitter"), get_msg(lang, "main_kb_instagram"))
+    lang = (user or {}).get("lang", "fa")
+    index = 0 if lang == "fa" else 1
+    markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=1, is_persistent=True, one_time_keyboard=False)
+    if PORTAL_ENABLED and os.getenv("WEB_BASE_URL", "").strip():
+        try:
+            markup.row(KeyboardButton(PANEL_BUTTON_LABELS[index], web_app=WebAppInfo(portal_service.panel_url(user_id))))
+            return markup
+        except Exception as error:
+            print(f"PANEL BUTTON unavailable: {type(error).__name__}", flush=True)
+    markup.row(KeyboardButton(PANEL_LABELS[index]))
     return markup
 
 def is_admin(user_id):
@@ -459,6 +467,130 @@ def is_bot_globally_disabled():
     if setting and setting.get("status") == "off":
         return True
     return False
+
+
+def get_admin_reports_markup():
+    """Separate portal exports from legacy bot reports to avoid button collisions."""
+    markup = ReplyKeyboardMarkup(resize_keyboard=True, is_persistent=True, row_width=2)
+    markup.row("👥 کاربران پنل سایت (CSV)", "💳 پرداخت‌های پنل سایت (CSV)")
+    markup.row("✅ پرداخت‌های موفق سایت (Excel)", "🌐 آیدی‌های اجتماعی سایت (Excel)")
+    markup.row("🧾 سوابق مدیریت سایت (CSV)")
+    markup.row("↩️ بازگشت به پنل مدیریت")
+    return markup
+
+
+def _portal_report_csv_value(value, field=""):
+    if value is None:
+        return ""
+    if field.endswith("_at") and isinstance(value, (int, float)) and value:
+        try:
+            value = datetime.fromtimestamp(value, ZoneInfo("Asia/Tehran")).isoformat()
+        except (OverflowError, OSError, ValueError):
+            pass
+    elif isinstance(value, (dict, list, tuple)):
+        value = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    text_value = str(value)
+    if text_value.lstrip().startswith(("=", "+", "-", "@", "\t", "\r")):
+        text_value = "'" + text_value
+    return text_value
+
+
+def send_portal_csv_report(chat_id, report_kind):
+    reports = {
+        "users": ("گزارش کاربران پنل سایت", "portal_site_users.csv", list(db.users.find({})),
+                  ["user_id", "telegram_username", "registered", "referrals", "referred_by", "earned", "paid", "unpaid", "wallet", "instagram", "twitter", "suspended", "mining_total"]),
+        "payments": ("گزارش درخواست‌ها و پرداخت‌های سایت", "portal_site_payments.csv",
+                     [with_burn(p) for p in db.portal_payments.find({})],
+                     ["id", "user_id", "amount", "net_amount", "burn_amount", "wallet", "status", "tx_hash", "block_number",
+                      "reason", "created_at", "reviewed_at", "reviewed_by"]),
+        "audit": ("گزارش سوابق مدیریت سایت", "portal_site_admin_audit.csv", list(db.portal_audit.find({})),
+                  ["id", "admin_id", "action", "target", "details", "created_at"]),
+    }
+    if report_kind not in reports:
+        return
+    title, filename, rows, fields = reports[report_kind]
+    if report_kind == "users":
+        prepared = []
+        for user in rows:
+            total = calculate_total_tokens(user.get("ref_count", 0), user.get("daily_count", 0),
+                                           user.get("bonus_tokens", 0), user.get("manual_bonus_tokens", 0))
+            paid = int(user.get("paid_amount", 0) or 0)
+            prepared.append({
+                "user_id": user.get("user_id"), "telegram_username": user.get("telegram_username", ""),
+                "registered": int(user.get("verified", 0) or 0) >= 1,
+                "referrals": user.get("ref_count", 0), "referred_by": user.get("referred_by", ""),
+                "earned": total, "paid": paid, "unpaid": max(0, total - paid),
+                "wallet": user.get("wallet", ""), "instagram": user.get("instagram") or user.get("instagram_id", ""),
+                "twitter": user.get("twitter") or user.get("twitter_id", ""),
+                "suspended": bool(user.get("portal_suspended")), "mining_total": user.get("mining_total", 0),
+            })
+        rows = prepared
+    output = io.StringIO(newline="")
+    writer = csv.writer(output)
+    writer.writerow(fields)
+    for row in rows:
+        writer.writerow([_portal_report_csv_value(row.get(field, ""), field) for field in fields])
+    file_bytes = io.BytesIO(("\ufeff" + output.getvalue()).encode("utf-8"))
+    file_bytes.name = filename
+    bot.send_document(chat_id, file_bytes, caption=f"📁 {title} · {len(rows):,} ردیف", reply_markup=get_admin_reports_markup())
+
+
+def send_portal_xlsx_report(chat_id, report_kind):
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    if report_kind == "paid":
+        rows = [with_burn(p) for p in db.portal_payments.find({"status": "recorded"})]
+        headers = ["هش تراکنش", "آیدی عددی تلگرام", "PRS ارسال‌شده", "سهم توکن‌سوزی PRS", "مبلغ کل PRS", "کیف پول", "وضعیت",
+                   "بلاک", "زمان درخواست", "زمان پرداخت", "آیدی مدیر"]
+        fields = ["tx_hash", "user_id", "net_amount", "burn_amount", "amount", "wallet", "status", "block_number",
+                  "created_at", "reviewed_at", "reviewed_by"]
+        filename, title, sheet_title = "portal_site_paid_transactions.xlsx", "پرداخت‌های موفق سایت", "پرداخت‌های موفق"
+    elif report_kind == "social":
+        rows = list(db.users.find({}))
+        headers = ["آیدی عددی تلگرام", "نام کاربری تلگرام", "Instagram", "X / Twitter", "کیف پول"]
+        fields = ["user_id", "telegram_username", "instagram", "twitter", "wallet"]
+        filename, title, sheet_title = "portal_site_social_profiles.xlsx", "آیدی‌های اجتماعی کاربران سایت", "پروفایل‌های اجتماعی"
+    else:
+        return
+    book = Workbook()
+    sheet = book.active
+    sheet.title = sheet_title
+    sheet.append(headers)
+    for cell in sheet[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="8B1E2D")
+    if report_kind == "social":
+        rows.sort(key=lambda row: int(row.get("user_id", 0) or 0), reverse=True)
+    else:
+        rows.sort(key=lambda row: row.get("reviewed_at", 0) or 0, reverse=True)
+    for row in rows:
+        values = []
+        for field in fields:
+            if report_kind == "social" and field == "instagram":
+                value = row.get("instagram") or row.get("instagram_id", "")
+            elif report_kind == "social" and field == "twitter":
+                value = row.get("twitter") or row.get("twitter_id", "")
+            else:
+                value = row.get(field, "")
+            if field.endswith("_at") and value:
+                try:
+                    value = datetime.fromtimestamp(value, ZoneInfo("Asia/Tehran")).strftime("%Y-%m-%d %H:%M:%S")
+                except (TypeError, OverflowError, OSError, ValueError):
+                    value = str(value)
+            if isinstance(value, (dict, list, tuple)):
+                value = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+            values.append(value if value is not None else "")
+        sheet.append(values)
+    for col_index in range(1, len(headers) + 1):
+        width = min(60, max(16, max((len(str(sheet.cell(row, col_index).value or "")) for row in range(1, min(sheet.max_row, 150) + 1)), default=12) + 2))
+        sheet.column_dimensions[get_column_letter(col_index)].width = width
+    output = io.BytesIO()
+    book.save(output)
+    output.seek(0)
+    output.name = filename
+    bot.send_document(chat_id, output, caption=f"📁 {title} · {len(rows):,} ردیف", reply_markup=get_admin_reports_markup())
 
 def get_user_data(user_id):
     user = users_col.find_one({"user_id": user_id})
@@ -507,6 +639,11 @@ def get_global_total_distributed_tokens():
 def is_airdrop_finished():
     return get_global_total_distributed_tokens() >= MAX_TOTAL_TOKENS_LIMIT
 
+def remaining_reward_capacity():
+    reserved = portal_service.mining_config()["reserved"] if BOT_PORTAL_ONLY else 0
+    return max(0, MAX_TOTAL_TOKENS_LIMIT - get_global_total_distributed_tokens() - reserved)
+
+
 def get_bonus_eligible_filter(operation_id=None):
     query = {
         "ref_count": {"$gte": REQUIRED_REFERRALS},
@@ -517,7 +654,39 @@ def get_bonus_eligible_filter(operation_id=None):
         query["bonus_operation_ids"] = {"$ne": operation_id}
     return query
 
+def notify_portal_bonus_recipients(operation_id, amount, target_uid=None):
+    """Best-effort Telegram delivery after the DB commit; never credits twice."""
+    import threading
+    def worker():
+        import time as _time
+        try:
+            if target_uid is not None:
+                recipients = [target_uid]
+            else:
+                recipients = [u["user_id"] for u in portal_service.store.scan("users", ("user_id", "bonus_operation_ids"))
+                              if operation_id in (u.get("bonus_operation_ids") or [])]
+            for uid in recipients:
+                try:
+                    bot.send_message(uid, f"🎁 پاداش جدید PRS\n\n🪙 {amount:,} PRS به حساب شما اضافه شد.\nبرای مشاهده موجودی وارد پنل ایردراپ شوید.")
+                except Exception:
+                    pass  # blocked users and Telegram outages must not roll back rewards
+                _time.sleep(0.05)
+        except Exception:
+            pass
+    threading.Thread(target=worker, daemon=True, name="prs-bonus-notify").start()
+
 def execute_global_bonus(admin_chat_id, operation_id, amount):
+    if BOT_PORTAL_ONLY:
+        try:
+            result = portal_service.admin_bot_bonus(admin_chat_id, operation_id, amount)
+            if not result.get("already_completed"):
+                notify_portal_bonus_recipients(operation_id, amount)
+            bot.send_message(admin_chat_id,
+                f"✅ پاداش همگانی ثبت شد.\n👥 تعداد: {result['count']:,}\n🎁 هر نفر: {amount:,} PRS\n🪙 مجموع: {result['total']:,} PRS\nنتیجه در حساب سایت کاربران نمایش داده می‌شود.",
+                reply_markup=get_admin_reply_markup())
+        except PortalError as error:
+            bot.send_message(admin_chat_id, portal_bridge.error_text(error, admin_chat_id), reply_markup=get_admin_reply_markup())
+        return
     eligible_users = list(users_col.find(
         get_bonus_eligible_filter(operation_id),
         {"user_id": 1, "lang": 1}
@@ -535,7 +704,7 @@ def execute_global_bonus(admin_chat_id, operation_id, amount):
     total_cost = amount * eligible_count
     current_total = get_global_total_distributed_tokens()
     if current_total + total_cost > MAX_TOTAL_TOKENS_LIMIT:
-        remaining_capacity = max(0, MAX_TOTAL_TOKENS_LIMIT - current_total)
+        remaining_capacity = remaining_reward_capacity()
         bot.send_message(
             admin_chat_id,
             f"❌ عملیات انجام نشد؛ مجموع پاداش از سقف ۳۰۰ میلیون عبور می‌کند.\n\n"
@@ -657,6 +826,16 @@ def update_user_delivery_status(user_id, success, error=None):
     return blocked
 
 def execute_manual_bonus(admin_chat_id, target_uid, operation_id, amount):
+    if BOT_PORTAL_ONLY:
+        try:
+            result = portal_service.admin_bot_bonus(admin_chat_id, operation_id, amount, target_uid)
+            if not result.get("already_completed"):
+                notify_portal_bonus_recipients(operation_id, amount, target_uid)
+            text = "این عملیات قبلاً ثبت شده است." if result["already_completed"] else f"✅ پاداش {amount:,} PRS برای کاربر {target_uid} ثبت شد.\nنتیجه در حساب سایت کاربر نمایش داده می‌شود."
+            bot.send_message(admin_chat_id, text, reply_markup=get_admin_reply_markup())
+        except PortalError as error:
+            bot.send_message(admin_chat_id, portal_bridge.error_text(error, admin_chat_id), reply_markup=get_admin_reply_markup())
+        return
     user = users_col.find_one({"user_id": target_uid})
     if not user:
         bot.send_message(
@@ -667,7 +846,7 @@ def execute_manual_bonus(admin_chat_id, target_uid, operation_id, amount):
         return
 
     current_total = get_global_total_distributed_tokens()
-    remaining_capacity = max(0, MAX_TOTAL_TOKENS_LIMIT - current_total)
+    remaining_capacity = remaining_reward_capacity()
     if amount > remaining_capacity:
         bot.send_message(
             admin_chat_id,
@@ -941,9 +1120,14 @@ def check_membership(user_id):
     return False
 
 def get_admin_reply_markup():
-    markup = ReplyKeyboardMarkup(resize_keyboard=True)
+    markup = ReplyKeyboardMarkup(
+        resize_keyboard=True, is_persistent=True, one_time_keyboard=False,
+        input_field_placeholder="یکی از دکمه‌های مدیریت را بزن",
+    )
+    if PORTAL_ENABLED and os.getenv("WEB_BASE_URL", "").strip():
+        markup.row("🌐 مدیریت سایت" if BOT_PORTAL_ONLY else PANEL_LABELS[0])
     markup.row("👝 مدیریت و تایید ولت‌ها", "📊 گزارش کلی توکن‌ها")
-    markup.row("🔍 جستجوی کاربر (آیدی یا ولت)", "✏️ ویرایش ولت کاربر با آیدی")
+    markup.row("🔍 جستجوی کاربر (نام کاربری، آیدی یا ولت)", "✏️ ویرایش ولت کاربر با آیدی")
     markup.row("📁 آپلود اکسل پرداختی‌ها", "🟢 اکسل پرداخت‌شده‌ها")
     markup.row("🟡 اکسل در انتظار پرداخت", "📥 اکسل واجدین شرایط بی‌ولت")
     markup.row("📥 اکسل کاربران زیر حد نصاب (<3 دعوت)", "📊 گزارش تفکیکی کامل (فایل)")
@@ -951,13 +1135,15 @@ def get_admin_reply_markup():
     markup.row("🎁 پاداش همگانی واجدین شرایط")
     markup.row("🎯 پاداش دستی به کاربر", "📊 اکسل پاداش‌های دستی")
     markup.row("🚫 بررسی و خروجی بلاک‌کنندگان", "📣 پیام به واجدین بی‌ولت")
-    markup.row("🎟 گزارش آیدی‌های قرعه‌کشی")
+    markup.row("📂 گزارش‌های پنل سایت")
     markup.row("🔄 به‌روزرسانی پنل ادمین", "📢 ارسال همگانی پیام")
     markup.row("✉️ ارسال پیام شخصی به کاربر", "🔴 خاموش کردن ربات")
     markup.row("🟢 روشن کردن ربات", "🔙 خروج از حالت ادمین / منوی اصلی")
     return markup
 
 def register_user_after_verify(user_id, referrer_id):
+    if BOT_PORTAL_ONLY:
+        return portal_service.register_gateway_user(user_id, referrer_id)
     user = users_col.find_one({"user_id": user_id})
     valid_referrer = referrer_id if (referrer_id and referrer_id != user_id) else None
     
@@ -979,7 +1165,7 @@ def register_user_after_verify(user_id, referrer_id):
         })
         
         if valid_referrer:
-            users_col.update_one({"user_id": valid_referrer}, {"$inc": {"ref_count": 1}})
+            users_col.update_one({"user_id": valid_referrer}, {"$inc": {"ref_count": 1}}, upsert=True)
             try:
                 ref_user = users_col.find_one({"user_id": valid_referrer})
                 current_refs = ref_user.get("ref_count", 1) if ref_user else 1
@@ -1005,12 +1191,12 @@ def register_user_after_verify(user_id, referrer_id):
                 pass
     else:
         current_referred_by = user.get("referred_by")
-        if not current_referred_by and valid_referrer:
+        if not current_referred_by and valid_referrer and int(user.get("verified", 0)) < 1:
             users_col.update_one(
                 {"user_id": user_id}, 
                 {"$set": {"verified": 1, "referred_by": valid_referrer}}
             )
-            users_col.update_one({"user_id": valid_referrer}, {"$inc": {"ref_count": 1}})
+            users_col.update_one({"user_id": valid_referrer}, {"$inc": {"ref_count": 1}}, upsert=True)
             try:
                 ref_user = users_col.find_one({"user_id": valid_referrer})
                 current_refs = ref_user.get("ref_count", 1) if ref_user else 1
@@ -1041,8 +1227,42 @@ def save_submission(user_id, wallet, current_submitted_status):
     new_status = 1 if current_submitted_status == 0 else 2
     users_col.update_one(
         {"user_id": user_id},
-        {"$set": {"submitted": new_status, "wallet": wallet}}
+        {"$set": {"submitted": new_status, "wallet": wallet, "wallet_lc": wallet.lower()}}
     )
+
+
+def wallet_used_by_other(user_id, wallet):
+    """Legacy (portal off) path: one wallet address per account."""
+    return users_col.find_one({"wallet_lc": wallet.strip().lower(), "user_id": {"$ne": user_id}}, {"_id": 1}) is not None
+
+
+# ---- Captcha attempt limit (values in portal/settings.py, also shown on the rules page) ----
+
+
+def captcha_lock_remaining(proof):
+    return max(0, int((proof or {}).get("locked_until", 0)) - int(time.time()))
+
+
+def register_captcha_failure(user_id):
+    """Count a wrong answer; after CAPTCHA_MAX_ATTEMPTS lock the captcha for a while.
+
+    Returns the remaining lock time in seconds (0 when the user may try again).
+    """
+    proof = captcha_col.find_one_and_update(
+        {"user_id": user_id}, {"$inc": {"attempts": 1}}, return_document=ReturnDocument.AFTER) or {}
+    if int(proof.get("attempts", 0)) >= CAPTCHA_MAX_ATTEMPTS:
+        captcha_col.update_one({"user_id": user_id},
+                               {"$set": {"attempts": 0, "locked_until": int(time.time()) + CAPTCHA_LOCK_SECONDS}})
+        return CAPTCHA_LOCK_SECONDS
+    return 0
+
+
+def send_captcha_locked(chat_id, user_id, remaining):
+    minutes = max(1, (remaining + 59) // 60)
+    lang = (users_col.find_one({"user_id": user_id}, {"lang": 1}) or {}).get("lang", "fa")
+    text = (f"⛔ Too many wrong answers. Try again in {minutes} minute(s)." if lang == "en"
+            else f"⛔ تعداد پاسخ‌های اشتباه زیاد بود. {minutes} دقیقه دیگر دوباره امتحان کن.")
+    bot.send_message(chat_id, text)
 
 def normalize_social_handle(value, platform):
     value = (value or "").strip()
@@ -1539,57 +1759,256 @@ def send_language_selection(chat_id, referrer_id):
     )
 
 def send_captcha(chat_id, user_id, referrer_id):
-    num1 = random.randint(1, 10)
-    num2 = random.randint(1, 10)
+    existing = captcha_col.find_one({"user_id": user_id})
+    remaining = captcha_lock_remaining(existing)
+    if remaining:
+        send_captcha_locked(chat_id, user_id, remaining)
+        return
+    num1 = random.randint(11, 49)
+    num2 = random.randint(2, 9)
     correct_ans = num1 + num2
 
-    captcha_col.replace_one(
+    # Keep the attempt counter and lock across new questions; replacing the
+    # whole document used to reset them.
+    captcha_col.update_one(
         {"user_id": user_id},
-        {"user_id": user_id, "num1": num1, "num2": num2, "answer": correct_ans, "pending_referrer": referrer_id},
+        {"$set": {"num1": num1, "num2": num2, "answer": correct_ans,
+                  "pending_referrer": referrer_id, "solved_at": 0},
+         "$setOnInsert": {"attempts": 0, "locked_until": 0}},
         upsert=True
     )
 
     text = get_msg(user_id, "captcha_title", num1, num2)
-    bot.send_message(chat_id, text, parse_mode="Markdown")
+    bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=get_main_reply_markup(user_id))
+
+BACKUP_MAX_BYTES = 45 * 1024 * 1024  # Telegram bots can upload at most 50 MB
+
+
+def build_database_backup(prefix):
+    """Compressed JSON of the users collection, or None when it is too large for Telegram."""
+    import gzip
+    all_users = list(users_col.find({}, {"_id": 0}))
+    if not all_users:
+        return None, 0
+    raw = json.dumps(all_users, ensure_ascii=False, default=str, separators=(",", ":")).encode("utf-8")
+    packed = gzip.compress(raw, compresslevel=9)
+    if len(packed) > BACKUP_MAX_BYTES:
+        return "too_large", len(all_users)
+    file_bytes = io.BytesIO(packed)
+    file_bytes.name = f"{prefix}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.json.gz"
+    return file_bytes, len(all_users)
+
 
 def send_database_backup(target_chat_id):
     try:
-        all_users = list(users_col.find({}, {"_id": 0}))
-        if not all_users:
+        file_bytes, count = build_database_backup("manual_backup")
+        if file_bytes is None:
             bot.send_message(target_chat_id, "⚠️ دیتابیس خالی است و کاربری برای بک‌آپ وجود ندارد.", reply_markup=get_admin_reply_markup())
             return
-        
-        json_data = json.dumps(all_users, ensure_ascii=False, indent=4)
-        file_bytes = io.BytesIO(json_data.encode('utf-8'))
-        file_bytes.name = f"manual_backup_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.json"
-        
+        if file_bytes == "too_large":
+            bot.send_message(target_chat_id, "⚠️ حجم بک‌آپ از سقف ارسال تلگرام بیشتر است. از بک‌آپ خود MongoDB (مثلاً Atlas) استفاده کن.", reply_markup=get_admin_reply_markup())
+            return
         bot.send_document(
-            target_chat_id, 
-            file_bytes, 
-            caption="⚙️ **فایل پشتیبان کامل دیتابیس (آماده برای ایمپورت در لیارا)**", 
-            reply_markup=get_admin_reply_markup(),
-            parse_mode="Markdown"
+            target_chat_id,
+            file_bytes,
+            caption=f"⚙️ فایل پشتیبان فشرده کاربران ({count:,} نفر) · شامل کیف پول‌ها؛ آن را جایی امن نگه دار و برای کسی نفرست.",
+            reply_markup=get_admin_reply_markup()
         )
     except Exception as e:
-        bot.send_message(target_chat_id, f"❌ خطا در تهیه بک‌آپ:\n`{e}`", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
+        bot.send_message(target_chat_id, f"❌ خطا در تهیه بک‌آپ ({type(e).__name__}).", reply_markup=get_admin_reply_markup())
 
 def auto_backup_scheduler():
     while True:
         time.sleep(86400)
         try:
-            all_users = list(users_col.find({}, {"_id": 0}))
-            if all_users:
-                json_data = json.dumps(all_users, ensure_ascii=False, indent=4)
-                file_bytes = io.BytesIO(json_data.encode('utf-8'))
-                file_bytes.name = f"auto_backup_{datetime.now().strftime('%Y-%m-%d')}.json"
+            file_bytes, count = build_database_backup("auto_backup")
+            if file_bytes == "too_large":
+                bot.send_message(ADMIN_CHAT_ID, "⚠️ بک‌آپ خودکار ارسال نشد: حجم از سقف تلگرام بیشتر است. از بک‌آپ MongoDB استفاده کن.")
+            elif file_bytes is not None:
                 bot.send_document(
-                    ADMIN_CHAT_ID, 
-                    file_bytes, 
-                    caption="⚙️ **پشتیبان‌گیری خودکار روزانه دیتابیس**", 
-                    parse_mode="Markdown"
+                    ADMIN_CHAT_ID,
+                    file_bytes,
+                    caption=f"⚙️ پشتیبان‌گیری خودکار روزانه ({count:,} کاربر) · فایل فشرده؛ شامل کیف پول‌ها."
                 )
         except Exception as e:
-            print(f"Auto backup error: {e}")
+            print(f"Auto backup error: {type(e).__name__}", flush=True)
+
+
+def portal_message_scheduler():
+    """Send queued Telegram messages: withdrawal alerts to admins, cancellations and referral changes to users."""
+    messages = db.portal_messages
+    while True:
+        item = None
+        now = int(time.time())
+        try:
+            messages.update_many({"status": "sending", "updated_at": {"$lt": now - 120}},
+                                 {"$set": {"status": "pending", "retry_at": now}})
+            item = messages.find_one_and_update(
+                {"status": "pending", "retry_at": {"$lte": now}},
+                {"$set": {"status": "sending", "updated_at": now}, "$inc": {"attempts": 1}},
+                sort=[("created_at", 1)], return_document=ReturnDocument.AFTER)
+            if not item:
+                time.sleep(3)
+                continue
+            bot.send_message(item["chat_id"], item["text"], disable_web_page_preview=True)
+            messages.update_one({"_id": item["_id"], "status": "sending"},
+                                {"$set": {"status": "sent", "sent_at": int(time.time())}})
+            time.sleep(0.05)
+        except Exception as error:
+            if item:
+                attempts = int(item.get("attempts", 1))
+                # A user who blocked the bot will never receive it: stop retrying.
+                failed = is_blocked_api_error(error) or attempts >= 8
+                update = ({"status": "failed", "failed_at": int(time.time())} if failed else
+                          {"status": "pending", "retry_at": int(time.time()) + min(3600, 30 * (2 ** (attempts - 1)))})
+                try:
+                    messages.update_one({"_id": item["_id"], "status": "sending"}, {"$set": update})
+                except Exception:
+                    pass
+            print(f"Portal message delivery failed: {bot_failure_label(error)}", flush=True)
+            time.sleep(2)
+
+
+def is_campaign_channel(chat):
+    channel = CHANNEL_ID.strip()
+    if channel.startswith("@"):
+        return (getattr(chat, "username", "") or "").casefold() == channel[1:].casefold()
+    return str(getattr(chat, "id", "")) == channel
+
+
+def channel_member_state(member):
+    """True / False from a Telegram ChatMember; None when the status is unclear."""
+    status = getattr(member, "status", "")
+    if status in ("member", "administrator", "creator"):
+        return True
+    if status == "restricted":
+        return bool(getattr(member, "is_member", False))
+    if status in ("left", "kicked"):
+        return False
+    return None
+
+
+def channel_membership(user_id):
+    """Strict check for referral deductions: any Telegram error is "unknown" (None), never "left"."""
+    try:
+        return channel_member_state(bot.get_chat_member(CHANNEL_ID, user_id))
+    except Exception:
+        return None
+
+
+REFERRAL_CHECK_DELAY = 0.25        # 4 Telegram lookups per second
+REFERRAL_SWEEP_PAUSE = 1800        # 30 minutes between full passes
+
+
+def bot_is_channel_admin():
+    try:
+        me = bot.get_me()
+        return getattr(bot.get_chat_member(CHANNEL_ID, me.id), "status", "") in ("administrator", "creator")
+    except Exception:
+        return False
+
+
+def referral_membership_scheduler():
+    """Check every invited user's channel membership; leaves remove the inviter's referral reward."""
+    time.sleep(60)
+    last_warning = 0
+    while True:
+        try:
+            if not bot_is_channel_admin():
+                # Without admin rights Telegram's answers are unreliable: change nothing.
+                if time.time() - last_warning > 86400:
+                    last_warning = time.time()
+                    print("REFERRAL CHECK PAUSED: the bot is not an administrator of the channel", flush=True)
+                    for admin_id in ADMIN_IDS:
+                        try:
+                            bot.send_message(admin_id, "⚠️ بررسی خروج زیرمجموعه‌ها متوقف است: ربات ادمین کانال نیست. "
+                                                       "ربات را در کانال ادمین کنید.")
+                        except Exception:
+                            pass
+            else:
+                invitees = [u["user_id"] for u in users_col.find(
+                    {"referred_by": {"$gt": 0}, "verified": {"$gte": 1}}, {"user_id": 1})]
+                changed = 0
+                for uid in invitees:
+                    state = channel_membership(uid)
+                    if state is not None:
+                        try:
+                            result = portal_service.update_referral_membership(uid, state)
+                            changed += isinstance(result, dict)
+                        except Exception as error:
+                            print(f"Referral check failed: {type(error).__name__}", flush=True)
+                    time.sleep(REFERRAL_CHECK_DELAY)
+                print(f"REFERRAL CHECK: {len(invitees)} checked, {changed} changed", flush=True)
+        except Exception as error:
+            print(f"REFERRAL CHECK error: {type(error).__name__}", flush=True)
+        time.sleep(REFERRAL_SWEEP_PAUSE)
+
+
+def portal_maintenance_scheduler():
+    """Every 10 minutes: return unclaimed, expired mining reservations to the budget."""
+    while True:
+        time.sleep(600)
+        try:
+            released = portal_service.expire_mining_cycles()
+            if released:
+                print(f"PORTAL MAINTENANCE: released {released} expired mining cycle(s)", flush=True)
+        except Exception as e:
+            print(f"PORTAL MAINTENANCE failed: {type(e).__name__}", flush=True)
+
+
+def portal_payment_notification_scheduler():
+    """Deliver confirmed on-chain payment notices from the durable outbox."""
+    notifications = db.portal_payment_notifications
+    while True:
+        item = None
+        now = int(time.time())
+        try:
+            # Re-queue work left claimed by a process that stopped unexpectedly.
+            notifications.update_many(
+                {"status": "sending", "updated_at": {"$lt": now - 120}},
+                {"$set": {"status": "pending", "retry_at": now}},
+            )
+            item = notifications.find_one_and_update(
+                {"status": "pending", "retry_at": {"$lte": now}},
+                {"$set": {"status": "sending", "updated_at": now}, "$inc": {"attempts": 1}},
+                sort=[("created_at", 1)], return_document=ReturnDocument.AFTER,
+            )
+            if not item:
+                time.sleep(5)
+                continue
+            user = users_col.find_one({"user_id": item["user_id"]}, {"lang": 1}) or {}
+            if user.get("lang", "fa") == "en":
+                message = (
+                    f"✅ Your transaction was confirmed and {int(item['amount']):,} PRS "
+                    f"was sent to your wallet.\nTransaction hash: {item['tx_hash']}\n"
+                    f"https://bscscan.com/tx/{item['tx_hash']}"
+                )
+            else:
+                message = (
+                    f"✅ تراکنش با موفقیت ثبت شد و {int(item['amount']):,} PRS برای شما ارسال شد.\n"
+                    f"هش تراکنش: {item['tx_hash']}\n"
+                    f"https://bscscan.com/tx/{item['tx_hash']}"
+                )
+            bot.send_message(item["user_id"], message, disable_web_page_preview=True)
+            notifications.update_one(
+                {"_id": item["_id"], "status": "sending"},
+                {"$set": {"status": "sent", "sent_at": int(time.time())}},
+            )
+        except Exception:
+            # Do not log exception text; Telegram client errors can include URLs.
+            if item:
+                attempts = int(item.get("attempts", 1))
+                retry_at = int(time.time()) + min(3600, 30 * (2 ** min(attempts - 1, 7)))
+                try:
+                    notifications.update_one(
+                        {"_id": item["_id"], "status": "sending"},
+                        {"$set": {"status": "pending", "retry_at": retry_at,
+                                  "last_attempt_at": int(time.time())}},
+                    )
+                except Exception:
+                    pass
+            print("Payment notice delivery failed; queued for retry.", flush=True)
+            time.sleep(3)
 
 def send_eligible_no_wallet_excel(chat_id):
     rows = list(users_col.find({"ref_count": {"$gte": REQUIRED_REFERRALS}, "$or": [{"submitted": 0}, {"submitted": {"$exists": False}}]}).sort("ref_count", -1))
@@ -1651,14 +2070,259 @@ def send_under_threshold_excel(chat_id):
         parse_mode="Markdown"
     )
 
-@bot.message_handler(commands=['start', 'menu'])
+# Install before the legacy catch-all handlers. Both paths use the same service.
+portal_service = build_service(database=db, member_check=check_membership)
+portal_bridge = BotBridge(
+    bot, portal_service,
+    lambda uid: get_admin_reply_markup() if is_admin(uid) else get_main_reply_markup(uid),
+    [value for messages in LANG.values() for key, value in messages.items() if key.startswith("main_kb_")]
+)
+if PORTAL_ENABLED and not BOT_PORTAL_ONLY:
+    portal_bridge.install()
+
+
+def send_portal_entry(user_id, link=False):
+    """Registration steps first; then the panel button (or, with link=True, a personal sign-in link)."""
+    user = users_col.find_one({"user_id": user_id}) or {}
+    if user.get("portal_suspended"):
+        bot.send_message(user_id, "حساب شما تعلیق شده است. / Your account is suspended.", reply_markup=ReplyKeyboardRemove())
+        return
+    if int(user.get("verified", 0)) < 1:
+        pending = captcha_col.find_one({"user_id": user_id})
+        if pending:
+            if pending.get("solved_at"):
+                ask_to_join(user_id, pending["pending_referrer"] or 0, user_id)
+            elif captcha_lock_remaining(pending):
+                send_captcha_locked(user_id, user_id, captcha_lock_remaining(pending))
+            else:
+                bot.send_message(user_id, get_msg(user_id, "captcha_title", pending["num1"], pending["num2"]))
+        else:
+            send_captcha(user_id, user_id, user.get("registration_referrer") or 0)
+        return
+    if not check_membership(user_id):
+        ask_to_join(user_id, 0, user_id)
+        return
+    message = type("PrivateMessage", (), {
+        "from_user": type("User", (), {"id": user_id})(),
+        "chat": type("Chat", (), {"id": user_id, "type": "private"})(),
+    })()
+    (portal_bridge.send_link if link else portal_bridge.send_login)(message)
+
+
+def gateway_welcome(message):
+    uid = message.from_user.id
+    user = users_col.find_one({"user_id": uid}) or {}
+    telegram_username = getattr(message.from_user, "username", None)
+    if telegram_username:
+        users_col.update_one({"user_id": uid}, {"$set": {"telegram_username": f"@{telegram_username}"}})
+    args = (message.text or "").split()
+    ref = int(args[1]) if len(args) > 1 and len(args[1]) <= 20 and args[1].isdecimal() else 0
+    if ref == uid:
+        ref = 0
+    if ref and int(user.get("verified", 0)) < 1 and not user.get("registration_referrer") and not user.get("referred_by"):
+        users_col.update_one({"user_id": uid}, {"$set": {"registration_referrer": ref}}, upsert=True)
+    if not user.get("lang") and int(user.get("verified", 0)) < 1:
+        lang = "fa" if getattr(message.from_user, "language_code", "fa").startswith("fa") else "en"
+        users_col.update_one({"user_id": uid}, {"$set": {"lang": lang}}, upsert=True)
+    send_portal_entry(uid)
+
+
+def gateway_captcha_reply(message):
+    uid = message.from_user.id
+    proof = captcha_col.find_one({"user_id": uid})
+    text = (message.text or "").strip().translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
+    if not proof:
+        send_portal_entry(uid)
+        return
+    remaining = captcha_lock_remaining(proof)
+    if remaining:
+        send_captcha_locked(uid, uid, remaining)
+        return
+    if not re.fullmatch(r"[0-9]{1,3}", text) or int(text) != proof["answer"]:
+        locked = register_captcha_failure(uid)
+        if locked:
+            send_captcha_locked(uid, uid, locked)
+            return
+        send_captcha(uid, uid, proof.get("pending_referrer") or 0)
+        return
+    captcha_col.update_one({"user_id": uid}, {"$set": {"solved_at": int(time.time())}})
+    if not check_membership(uid):
+        ask_to_join(uid, proof.get("pending_referrer") or 0, uid)
+        return
+    register_user_after_verify(uid, proof.get("pending_referrer"))
+    if getattr(message.from_user, "username", None):
+        users_col.update_one({"user_id": uid}, {"$set": {"telegram_username": f"@{message.from_user.username}"}})
+    captcha_col.delete_one({"user_id": uid})
+    send_portal_entry(uid)
+
+
+def send_admin_website(user_id):
+    """Keep the admin reply menu visible while issuing a private site login."""
+    if not is_admin(user_id):
+        return send_portal_entry(user_id)
+    captcha_col.delete_one({"user_id": user_id})
+    try:
+        url = portal_service.issue_login(user_id)
+        keyboard = InlineKeyboardMarkup()
+        keyboard.add(InlineKeyboardButton("🌐 ورود به مدیریت سایت", url=url))
+        bot.send_message(user_id, "🔐 مدیریت سایت؛ لینک شخصی یک‌بارمصرف با اعتبار ۵ دقیقه.\nبرای مدیریت در ربات، منوی پایین همچنان فعال است.",
+                         reply_markup=keyboard, protect_content=False)
+    except PortalError as error:
+        bot.send_message(user_id, portal_bridge.error_text(error, user_id), reply_markup=get_admin_reply_markup())
+
+
+def route_admin_message(message):
+    """Only server-configured admins, only in their own private conversation."""
+    if not is_admin(message.from_user.id) or message.chat.type != "private" or message.chat.id != message.from_user.id:
+        return
+    uid = message.from_user.id
+    text = (message.text or "").strip()
+    parts = text.split()
+    command = parts[0].split("@")[0] if parts else ""
+    if (command in ("/panel", "/site") or text in (*PANEL_LABELS, *PANEL_BUTTON_LABELS, "🌐 مدیریت سایت")
+            or getattr(message, "content_type", "text") == "web_app_data"
+            or (command == "/start" and parts[1:] == ["portal"])):
+        send_admin_website(uid)
+    elif command in ("/start", "/menu", "/admin"):
+        captcha_col.delete_one({"user_id": uid})
+        admin_panel(message)
+    elif command == "/register":
+        gateway_welcome(message)
+    elif getattr(message, "content_type", "text") == "document":
+        handle_admin_documents(message)
+    elif text and not text.startswith("/") and captcha_col.find_one({"user_id": uid}):
+        gateway_captcha_reply(message)
+    else:
+        handle_all_messages(message)
+
+
+if BOT_PORTAL_ONLY:
+    # These handlers precede every legacy command, upload and reward handler.
+    @bot.message_handler(content_types=["text", "document", "photo", "video", "audio", "voice", "sticker", "contact", "location", "animation", "video_note", "web_app_data"])
+    def portal_only_message(message):
+        if message.chat.type != "private":
+            return
+        # Confirm receipt without recording chat IDs, answers or message text.
+        print("BOT UPDATE: private message received", flush=True)
+        if is_admin(message.from_user.id):
+            try:
+                route_admin_message(message)
+            except PortalError as error:
+                bot.send_message(message.from_user.id, portal_bridge.error_text(error, message.from_user.id), reply_markup=get_admin_reply_markup())
+            return
+        text = (message.text or "").strip()
+        command = text.split()[0].split("@")[0] if text else ""
+        if command in ("/start", "/menu", "/register"):
+            send_welcome(message)
+        elif text in PANEL_BUTTON_LABELS:
+            # Only a Telegram app too old to open the panel button sends its text: give a sign-in link.
+            send_portal_entry(message.from_user.id, link=True)
+        elif text and not text.startswith("/") and captcha_col.find_one({"user_id": message.from_user.id}):
+            # Only the registration captcha can consume a text reply here.
+            try:
+                gateway_captcha_reply(message)
+            except PortalError as error:
+                bot.send_message(message.from_user.id, portal_bridge.error_text(error, message.from_user.id))
+        else:
+            send_portal_entry(message.from_user.id)
+
+    @bot.callback_query_handler(func=lambda call: True)
+    def portal_only_callback(call):
+        uid = call.from_user.id
+        message = getattr(call, "message", None)
+        private = message and getattr(message.chat, "type", None) == "private" and message.chat.id == uid
+        if private:
+            print("BOT UPDATE: private callback received", flush=True)
+        data = call.data or ""
+        if is_admin(uid) and private and data.startswith("admin_"):
+            handle_callbacks(call)
+            return
+        if is_admin(uid) and private and data == "portal:open":
+            bot.answer_callback_query(call.id)
+            send_admin_website(uid)
+            return
+        if private and re.fullmatch(r"check_join_\d+", data):
+            user = users_col.find_one({"user_id": uid}) or {}
+            proof = captcha_col.find_one({"user_id": uid}) or {}
+            if int(user.get("verified", 0)) < 1 and (not proof.get("solved_at") or int(time.time()) - proof["solved_at"] > 900):
+                bot.answer_callback_query(call.id, "ابتدا کپچا را پاسخ بده. / Solve the captcha first.")
+                send_captcha(uid, uid, proof.get("pending_referrer") or user.get("registration_referrer") or 0)
+                return
+            if not check_membership(uid):
+                bot.answer_callback_query(call.id, portal_bridge.text(uid, "هنوز عضو کانال نشده‌ای.", "Please join the channel first."), show_alert=True)
+                return
+            bot.answer_callback_query(call.id)
+            try:
+                if int(user.get("verified", 0)) < 1:
+                    register_user_after_verify(uid, proof.get("pending_referrer"))
+                    captcha_col.delete_one({"user_id": uid})
+                send_portal_entry(uid)
+            except PortalError as error:
+                bot.send_message(uid, portal_bridge.error_text(error, uid))
+            return
+        bot.answer_callback_query(call.id, portal_bridge.text(uid,
+            "فعالیت‌ها از پنل سایت انجام می‌شوند.", "Please use the website portal."))
+        send_portal_entry(uid)
+
+if PORTAL_ENABLED:
+    @bot.chat_member_handler()
+    def channel_member_update(update):
+        try:
+            if not is_campaign_channel(update.chat):
+                return
+            member = update.new_chat_member
+            state = channel_member_state(member)
+            if state is not None:
+                portal_service.update_referral_membership(member.user.id, state)
+        except Exception as error:
+            print(f"Channel member update failed: {type(error).__name__}", flush=True)
+
+
+def claim_bot_daily(user_id):
+    if PORTAL_ENABLED:
+        return portal_service.claim_daily(user_id)
+    # Rollout remains opt-in; a legacy standalone MongoDB still supports this CAS.
+    if not check_membership(user_id):
+        raise PortalError("membership_required", 403)
+    user = users_col.find_one({"user_id": user_id})
+    if not user or user.get("ref_count", 0) < REQUIRED_REFERRALS:
+        raise PortalError("referrals_required", 403)
+    if is_bot_globally_disabled():
+        raise PortalError("campaign_paused", 403)
+    if is_airdrop_finished():
+        raise PortalError("campaign_budget_exhausted", 409)
+    current_time = int(time.time())
+    result = users_col.update_one(
+        {"user_id": user_id, "$or": [{"last_daily": {"$lte": current_time - 86400}}, {"last_daily": {"$exists": False}}]},
+        {"$set": {"last_daily": current_time}, "$inc": {"daily_count": 1}}
+    )
+    if not result.modified_count:
+        raise PortalError("daily_cooldown", 409)
+    return {"amount": DAILY_REWARD}
+
+@bot.message_handler(commands=['start', 'menu', 'register'])
 def send_welcome(message):
+    if BOT_PORTAL_ONLY:
+        if is_admin(message.from_user.id):
+            return route_admin_message(message)
+        return gateway_welcome(message)
     user_id = message.from_user.id
+    telegram_username = getattr(message.from_user, "username", None)
+    if telegram_username:
+        users_col.update_one({"user_id": user_id}, {"$set": {"telegram_username": f"@{telegram_username}"}})
+    command = (message.text or "").split()[0].split("@")[0]
+    registration_requested = command == "/register"
+
+    if (registration_requested or BOT_PORTAL_ONLY) and message.chat.type != "private":
+        bot.send_message(message.chat.id, "برای ثبت‌نام، در گفت‌وگوی خصوصی ربات /register را بفرست. / Send /register in the bot's private chat.")
+        return
     
-    if is_admin(user_id):
+    if is_admin(user_id) and not registration_requested and not BOT_PORTAL_ONLY:
+        # /start and /menu return to management and cancel a pending captcha.
+        captcha_col.delete_one({"user_id": user_id})
         bot.send_message(
             user_id, 
-            "👑 *به پنل مدیریت خوش آمدید.*\nاز دکمه‌های منوی پایین استفاده کنید.", 
+            "👑 *به پنل مدیریت خوش آمدید.*\nاز دکمه‌های منوی پایین استفاده کنید.\nبرای ثبت‌نام کاربری، /register را بفرستید.",
             reply_markup=get_admin_reply_markup(), 
             parse_mode="Markdown"
         )
@@ -1674,10 +2338,23 @@ def send_welcome(message):
 
     args = message.text.split()
     referrer_id = int(args[1]) if len(args) > 1 and args[1].isdigit() else None
+    if not referrer_id:
+        pending = captcha_col.find_one({"user_id": user_id})
+        if pending:
+            referrer_id = pending.get("pending_referrer") or None
+        if not referrer_id:
+            user = users_col.find_one({"user_id": user_id}) or {}
+            if int(user.get("verified", 0)) < 1:
+                referrer_id = user.get("registration_referrer") or None
     
     if referrer_id == user_id:
         bot.send_message(message.chat.id, get_msg(user_id, "self_ref"), parse_mode="Markdown")
         return
+
+    user = users_col.find_one({"user_id": user_id}) or {}
+    if referrer_id and int(user.get("verified", 0)) < 1 and not user.get("registration_referrer"):
+        # Preserve attribution if the user opens the website before selecting a language.
+        users_col.update_one({"user_id": user_id}, {"$set": {"registration_referrer": referrer_id}}, upsert=True)
 
     if message.text and message.text.startswith('/menu'):
         if not check_membership(user_id):
@@ -1687,10 +2364,19 @@ def send_welcome(message):
         return
 
     user_data = get_user_data(user_id)
-    if user_data and user_data[3] >= 2:
+    if PORTAL_ENABLED and len(args) > 1 and args[1] == "portal" and user_data and user_data[3] >= 1:
+        if BOT_PORTAL_ONLY:
+            send_portal_entry(user_id)
+        else:
+            portal_bridge.send_login(message)
+        return
+    if user_data and user_data[3] >= 1:
         if not check_membership(user_id):
             ask_to_join(message.chat.id, referrer_id if referrer_id else 0, user_id)
             return
+        if referrer_id:
+            # Keep the existing attribution rule for users without a referrer.
+            register_user_after_verify(user_id, referrer_id)
         show_main_menu(message.chat.id, user_id)
         return
 
@@ -1868,169 +2554,6 @@ def send_status_excel_report(chat_id, status_filter):
     caption_text = f"📁 فایل گزارش کاربران **{status_name}** (فرمت سازگار با اکسل/CSV)"
     bot.send_document(chat_id, file_bytes, caption=caption_text, reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
 
-def send_social_lottery_report(chat_id):
-    rows = list(users_col.find({
-        "$or": [
-            {"social_registered": True},
-            {"instagram_id": {"$regex": r"^@"}},
-            {"ref_count": {"$gte": CHALLENGE_REQUIRED_REFERRALS}},
-            {"challenge_quiz_attempts": {"$gt": 0}},
-            {"challenge_quiz_state": "in_progress"}
-        ]
-    }).sort([("ref_count", -1), ("social_updated_at", -1)]))
-
-    if not rows:
-        bot.send_message(
-            chat_id,
-            "⚠️ هنوز هیچ کاربری برای گزارش شرایط مسابقه یافت نشد.",
-            reply_markup=get_admin_reply_markup()
-        )
-        return
-
-    referral_ready_count = 0
-    wallet_ready_count = 0
-    instagram_ready_count = 0
-    quiz_passed_count = 0
-    bot_conditions_complete_count = 0
-
-    output = io.StringIO(newline="")
-    writer = csv.writer(output)
-    writer.writerow([
-        "Lottery Number",
-        "User ID",
-        "Telegram Username",
-        "Twitter/X ID",
-        "Instagram ID",
-        "Referrals",
-        "Referral Requirement (10+)",
-        "Wallet",
-        "Valid Wallet",
-        "Instagram ID Registered",
-        "Quiz Correct Answers (Current or Last)",
-        "Quiz Best Score",
-        "Quiz Completed Attempts",
-        "Quiz State",
-        "Quiz Passed (3/3)",
-        "All Bot Conditions Complete",
-        "Instagram Follow Like Comment",
-        "Social Registered At UTC",
-        "Social Updated At UTC"
-    ])
-
-    for lottery_number, user in enumerate(rows, 1):
-        ref_count = int(user.get("ref_count", 0) or 0)
-        referral_ready = ref_count >= CHALLENGE_REQUIRED_REFERRALS
-        wallet = user.get("wallet") or ""
-        wallet_valid = is_valid_wallet(wallet)
-        instagram_id = str(user.get("instagram_id") or "")
-        instagram_valid = bool(re.fullmatch(r"@[A-Za-z0-9._]{1,30}", instagram_id))
-        quiz_state = str(user.get("challenge_quiz_state") or "not_started")
-        quiz_attempts = int(user.get("challenge_quiz_attempts", 0) or 0)
-        if quiz_state == "in_progress":
-            current_or_last_score = int(user.get("challenge_quiz_score", 0) or 0)
-        else:
-            current_or_last_score = int(user.get("challenge_quiz_last_score", 0) or 0)
-
-        history_scores = [
-            int(item.get("score", 0) or 0)
-            for item in (user.get("challenge_quiz_history", []) or [])
-            if isinstance(item, dict)
-        ]
-        best_score = max(history_scores + [current_or_last_score])
-        quiz_passed = user.get("challenge_quiz_passed") is True
-        bot_conditions_complete = (
-            referral_ready and wallet_valid and instagram_valid and quiz_passed
-        )
-
-        if referral_ready:
-            referral_ready_count += 1
-        if wallet_valid:
-            wallet_ready_count += 1
-        if instagram_valid:
-            instagram_ready_count += 1
-        if quiz_passed:
-            quiz_passed_count += 1
-        if bot_conditions_complete:
-            bot_conditions_complete_count += 1
-
-        registered_at = int(user.get("social_registered_at", 0) or 0)
-        updated_at = int(user.get("social_updated_at", 0) or 0)
-        writer.writerow([
-            lottery_number,
-            user.get("user_id"),
-            user.get("telegram_username", ""),
-            user.get("twitter_id", ""),
-            instagram_id,
-            ref_count,
-            "Yes" if referral_ready else "No",
-            wallet,
-            "Yes" if wallet_valid else "No",
-            "Yes" if instagram_valid else "No",
-            current_or_last_score,
-            best_score,
-            quiz_attempts,
-            quiz_state,
-            "Yes" if quiz_passed else "No",
-            "Yes" if bot_conditions_complete else "No",
-            "Manual verification required",
-            datetime.utcfromtimestamp(registered_at).strftime("%Y-%m-%d %H:%M:%S") if registered_at else "",
-            datetime.utcfromtimestamp(updated_at).strftime("%Y-%m-%d %H:%M:%S") if updated_at else ""
-        ])
-
-    preview_lines = []
-    for index, user in enumerate(rows[:10], 1):
-        quiz_state = str(user.get("challenge_quiz_state") or "not_started")
-        if quiz_state == "in_progress":
-            score = int(user.get("challenge_quiz_score", 0) or 0)
-        else:
-            score = int(user.get("challenge_quiz_last_score", 0) or 0)
-        ref_count = int(user.get("ref_count", 0) or 0)
-        wallet_valid = is_valid_wallet(user.get("wallet"))
-        instagram_valid = bool(re.fullmatch(
-            r"@[A-Za-z0-9._]{1,30}",
-            str(user.get("instagram_id") or "")
-        ))
-        complete = (
-            ref_count >= CHALLENGE_REQUIRED_REFERRALS
-            and wallet_valid
-            and instagram_valid
-            and user.get("challenge_quiz_passed") is True
-        )
-        preview_lines.append(
-            f"{index}. `{user.get('user_id')}` | دعوت: `{ref_count}` | "
-            f"پاسخ صحیح: `{score}/3` | شرایط ربات: `{'کامل' if complete else 'ناقص'}`"
-        )
-    preview_text = "\n".join(preview_lines)
-    if len(rows) > 10:
-        preview_text += f"\n... و {len(rows) - 10:,} کاربر دیگر در فایل"
-
-    bot.send_message(
-        chat_id,
-        f"🎟 *گزارش کامل شرایط مسابقه و آیدی‌های قرعه‌کشی*\n\n"
-        f"👥 کاربران موجود در گزارش: `{len(rows):,}` نفر\n"
-        f"🔗 حداقل {CHALLENGE_REQUIRED_REFERRALS} دعوت: `{referral_ready_count:,}` نفر\n"
-        f"👝 ولت معتبر: `{wallet_ready_count:,}` نفر\n"
-        f"📸 آیدی Instagram ثبت‌شده: `{instagram_ready_count:,}` نفر\n"
-        f"📝 قبولی آزمون با ۳ پاسخ صحیح: `{quiz_passed_count:,}` نفر\n"
-        f"✅ تکمیل تمام شرایط قابل بررسی ربات: `{bot_conditions_complete_count:,}` نفر\n\n"
-        f"⚠️ فالو، لایک و کامنت Instagram همچنان باید دستی بررسی شود.\n\n"
-        f"{preview_text}",
-        reply_markup=get_admin_reply_markup(),
-        parse_mode="Markdown"
-    )
-
-    file_bytes = io.BytesIO(output.getvalue().encode("utf-8-sig"))
-    file_bytes.name = "lottery_full_conditions_report.csv"
-    bot.send_document(
-        chat_id,
-        file_bytes,
-        caption=(
-            "📁 گزارش کامل شرایط مسابقه، تعداد دعوت‌ها، وضعیت ولت و Instagram، "
-            "تعداد پاسخ‌های صحیح، دفعات آزمون و وضعیت قبولی"
-        ),
-        reply_markup=get_admin_reply_markup()
-    )
-
 def send_detailed_report_file(chat_id):
     rows = list(users_col.find({}).sort([("paid", 1), ("ref_count", -1)]))
 
@@ -2082,6 +2605,9 @@ def show_stats_direct(chat_id):
     bot.send_message(chat_id, f"📊 آمار کلی ربات:\n\n👤 کل کاربران استارت کرده: {t_u}\n📝 تعداد ثبت‌فرم‌ها: {t_s}\n💰 پرداخت‌شده‌ها: {t_p}\n🪙 کل توکن توزیع‌شده: {total_tokens_all:,} PRS", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
 
 def show_main_menu(chat_id, user_id, message_id=None, edit=False):
+    if BOT_PORTAL_ONLY:
+        send_portal_entry(user_id)
+        return
     if is_airdrop_finished():
         bot.send_message(chat_id, get_msg(user_id, "airdrop_finished"))
         return
@@ -2120,6 +2646,10 @@ def show_main_menu(chat_id, user_id, message_id=None, edit=False):
     markup.row(InlineKeyboardButton(get_msg(user_id, "btn_insta"), url=INSTAGRAM_URL))
     
     markup.row(InlineKeyboardButton(get_msg(user_id, "btn_ref"), callback_data="get_ref_link"))
+    if PORTAL_ENABLED:
+        markup.row(InlineKeyboardButton(portal_bridge.text(user_id, "🎯 مأموریت‌های جدید", "🎯 New missions"), callback_data="portal:list"))
+    if PORTAL_ENABLED and os.getenv("WEB_BASE_URL", "").strip():
+        markup.row(InlineKeyboardButton(portal_bridge.text(user_id, "🌐 پنل ایردراپ", "🌐 Airdrop portal"), callback_data="portal:open"))
     # جایگذاری دکمه جدید با قابلیت تایمر
     markup.row(InlineKeyboardButton(daily_btn_text, callback_data="daily_bonus"))
     markup.row(InlineKeyboardButton(get_msg(user_id, "btn_guide"), callback_data="wallet_guide"))
@@ -2179,62 +2709,161 @@ def show_main_menu(chat_id, user_id, message_id=None, edit=False):
     except Exception as e:
         print(f"Error sending reply markup: {e}")
 
+PAYMENT_UPLOAD_WAIT_SECONDS = 600
+PAYMENT_UPLOAD_MAX_ROWS = 5000
+
+
+def _payment_upload_table(file_bytes, file_name):
+    """Return the uploaded table as rows of strings (CSV with , or ; — or .xlsx)."""
+    if (file_name or "").lower().endswith(".xlsx"):
+        from openpyxl import load_workbook
+        sheet = load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True).active
+        return [["" if cell is None else str(cell) for cell in row] for row in sheet.iter_rows(values_only=True)]
+    text = file_bytes.decode("utf-8-sig", errors="ignore")
+    first = next((line for line in text.splitlines() if line.strip()), "")
+    delimiter = ";" if first.count(";") > first.count(",") else ","
+    return list(csv.reader(io.StringIO(text), delimiter=delimiter))
+
+
+def parse_payment_upload(table):
+    """Strict format: a "User ID" column is required, "Total Tokens" is optional.
+
+    Other numbers in the file (amounts, referral counts...) are never read as
+    user IDs. Returns (rows, skipped); each row is [user_id, paid_total or None].
+    """
+    header = None
+    uid_index = total_index = None
+    rows, skipped, seen = [], 0, set()
+    for record in table:
+        cells = [str(c).strip().lstrip("\ufeff") for c in record]
+        if not any(cells):
+            continue
+        if header is None:
+            lowered = [c.lower() for c in cells]
+            if "user id" not in lowered:
+                raise ValueError("missing_user_id_column")
+            header = lowered
+            uid_index = lowered.index("user id")
+            total_index = lowered.index("total tokens") if "total tokens" in lowered else None
+            continue
+        uid_text = cells[uid_index] if uid_index < len(cells) else ""
+        if uid_text.endswith(".0"):
+            uid_text = uid_text[:-2]
+        if not uid_text.isdigit() or int(uid_text) in seen:
+            skipped += 1
+            continue
+        paid_total = None
+        if total_index is not None:
+            total_text = (cells[total_index] if total_index < len(cells) else "").replace(",", "")
+            if total_text.endswith(".0"):
+                total_text = total_text[:-2]
+            if not total_text.isdigit():
+                skipped += 1
+                continue
+            paid_total = int(total_text)
+        seen.add(int(uid_text))
+        rows.append([int(uid_text), paid_total])
+    if header is None:
+        raise ValueError("missing_user_id_column")
+    return rows, skipped
+
+
+def payment_upload_target(user, paid_total):
+    """New paid_amount: the file's total (never above what the user earned, never lowering it)."""
+    total = calculate_total_tokens(int(user.get("ref_count", 0) or 0), int(user.get("daily_count", 0) or 0),
+                                   int(user.get("bonus_tokens", 0) or 0), int(user.get("manual_bonus_tokens", 0) or 0))
+    before = max(0, int(user.get("paid_amount", 0) or 0))
+    target = total if paid_total is None else min(total, max(before, paid_total))
+    return before, target, total
+
+
 @bot.message_handler(content_types=['document'])
 def handle_admin_documents(message):
     if not is_admin(message.from_user.id):
         return
-    
-    valid_users = {u["user_id"] for u in users_col.find({"submitted": {"$gt": 0}}, {"user_id": 1})}
-
+    admin_id = message.from_user.id
+    # A document only counts as a payment list right after the upload button.
+    # Forwarding a report or any other file to the bot must never mark payments.
+    waiting = settings_col.find_one_and_delete({"key": "admin_payment_upload_wait", "admin_id": admin_id})
+    if not waiting or int(waiting.get("until", 0)) < int(time.time()):
+        bot.send_message(message.chat.id,
+            "ℹ️ این فایل به‌عنوان لیست پرداخت پردازش نشد.\nبرای ثبت پرداخت‌ها، اول دکمه «📁 آپلود اکسل پرداختی‌ها» را بزن و بعد فایل را بفرست.",
+            reply_markup=get_admin_reply_markup())
+        return
     try:
         file_info = bot.get_file(message.document.file_id)
         downloaded_file = bot.download_file(file_info.file_path)
-        file_text = downloaded_file.decode('utf-8', errors='ignore')
-        
-        lines = file_text.splitlines()
-        updated_count = 0
-        not_found_count = 0
-
-        for line in lines:
-            line = line.strip()
-            if not line or line.startswith("User") or line.startswith("user"):
-                continue
-            
-            parts = [p.strip() for p in line.replace(';', ',').split(',')]
-            target_id = None
-            
-            for part in parts:
-                if part.isdigit():
-                    val = int(part)
-                    if val in valid_users or val > 10000:
-                        target_id = val
-                        break
-            
-            if target_id:
-                usr = users_col.find_one({"user_id": target_id})
-                if usr:
-                    r_cnt = usr.get("ref_count", 0)
-                    d_cnt = usr.get("daily_count", 0)
-                    tot = calculate_total_tokens(
-                        r_cnt, d_cnt, usr.get("bonus_tokens", 0), usr.get("manual_bonus_tokens", 0)
-                    )
-                    users_col.update_one({"user_id": target_id}, {"$set": {"paid": 1, "paid_amount": tot}})
-                    updated_count += 1
-                else:
-                    not_found_count += 1
-            else:
-                not_found_count += 1
-
-        bot.send_message(
-            message.chat.id,
-            f"✅ **فایل پرداختی با موفقیت پردازش شد!**\n\n"
-            f"🟢 تعداد کاربرانی که وضعیت‌شان به «پرداخت‌شده» تغییر یافت و موجودی‌شان ثبت شد: `{updated_count}` نفر\n"
-            f"⚠️ شناسایی‌نشده یا نامعتبر: `{not_found_count}` مورد",
-            reply_markup=get_admin_reply_markup(),
-            parse_mode="Markdown"
-        )
+        rows, skipped = parse_payment_upload(_payment_upload_table(downloaded_file, message.document.file_name))
+    except ValueError:
+        bot.send_message(message.chat.id,
+            "❌ ستون «User ID» در فایل پیدا نشد؛ هیچ تغییری ثبت نشد.\nخروجی «🟡 اکسل در انتظار پرداخت» را مبنا قرار بده (CSV یا XLSX).",
+            reply_markup=get_admin_reply_markup())
+        return
     except Exception as e:
-        bot.send_message(message.chat.id, f"❌ خطا در پردازش فایل اکسل/متنی:\n`{e}`", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
+        bot.send_message(message.chat.id, f"❌ خواندن فایل ممکن نشد ({type(e).__name__})؛ هیچ تغییری ثبت نشد.",
+                         reply_markup=get_admin_reply_markup())
+        return
+    if not rows:
+        bot.send_message(message.chat.id, "⚠️ هیچ ردیف معتبری در فایل نبود؛ هیچ تغییری ثبت نشد.", reply_markup=get_admin_reply_markup())
+        return
+    if len(rows) > PAYMENT_UPLOAD_MAX_ROWS:
+        bot.send_message(message.chat.id, f"⚠️ فایل بیش از {PAYMENT_UPLOAD_MAX_ROWS:,} ردیف دارد؛ آن را چند بخش کن.",
+                         reply_markup=get_admin_reply_markup())
+        return
+
+    found = {u["user_id"]: u for u in users_col.find(
+        {"user_id": {"$in": [uid for uid, _ in rows]}},
+        {"user_id": 1, "ref_count": 1, "daily_count": 1, "bonus_tokens": 1, "manual_bonus_tokens": 1, "paid_amount": 1})}
+    newly_paid, missing = 0, 0
+    for uid, paid_total in rows:
+        user = found.get(uid)
+        if not user:
+            missing += 1
+            continue
+        before, target, _ = payment_upload_target(user, paid_total)
+        newly_paid += max(0, target - before)
+
+    operation_id = uuid4().hex[:16]
+    settings_col.delete_many({"key": "admin_payment_upload", "admin_id": admin_id})
+    settings_col.insert_one({"key": "admin_payment_upload", "admin_id": admin_id, "operation_id": operation_id,
+                             "rows": rows, "created_at": int(time.time())})
+    markup = InlineKeyboardMarkup()
+    markup.row(InlineKeyboardButton("✅ تأیید و ثبت پرداخت‌ها", callback_data=f"admin_payupload_confirm_{operation_id}"),
+               InlineKeyboardButton("❌ انصراف", callback_data=f"admin_payupload_cancel_{operation_id}"))
+    amount_note = ("مبلغ هر نفر از ستون «Total Tokens» خوانده شد." if rows[0][1] is not None else
+                   "⚠️ ستون «Total Tokens» نبود؛ کل موجودی فعلی هر کاربر پرداخت‌شده ثبت می‌شود.")
+    bot.send_message(message.chat.id,
+        f"📋 پیش‌نمایش فایل پرداختی:\n\n"
+        f"👥 ردیف‌های معتبر: {len(rows):,}\n"
+        f"❓ آیدی‌های پیدانشده: {missing:,}\n"
+        f"⏭ ردیف‌های ردشده (نامعتبر/تکراری): {skipped:,}\n"
+        f"🪙 مجموع PRS که پرداخت‌شده ثبت می‌شود: {newly_paid:,}\n\n"
+        f"{amount_note}\nتا تأیید نکنی، هیچ تغییری ثبت نمی‌شود.",
+        reply_markup=markup)
+
+
+def apply_payment_upload(admin_id, rows):
+    updated = missing = blocked = 0
+    for uid, paid_total in rows:
+        if BOT_PORTAL_ONLY:
+            try:
+                portal_service.admin_bot_payment(admin_id, uid, "yes", paid_total=paid_total)
+                updated += 1
+            except PortalError as error:
+                if error.code == "user_not_found":
+                    missing += 1
+                else:
+                    blocked += 1
+            continue
+        user = users_col.find_one({"user_id": uid})
+        if not user:
+            missing += 1
+            continue
+        _, target, total = payment_upload_target(user, paid_total)
+        users_col.update_one({"user_id": uid}, {"$set": {"paid": int(target >= total), "paid_amount": target}})
+        updated += 1
+    return updated, missing, blocked
+
 
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
@@ -2245,7 +2874,8 @@ def handle_all_messages(message):
     persian_to_english = str.maketrans('۰۱۲۳۴۵۶۷۸۹', '0123456789')
     text = text.translate(persian_to_english)
     
-    if is_admin(user_id):
+    # An admin explicitly registering must be able to answer the usual captcha.
+    if is_admin(user_id) and not captcha_col.find_one({"user_id": user_id}):
         admin_state = settings_col.find_one({"key": "admin_state"})
         if admin_state:
             state_val = admin_state.get("state")
@@ -2331,7 +2961,14 @@ def handle_all_messages(message):
                     return
                 target_uid = admin_state.get("target_uid")
                 settings_col.delete_one({"key": "admin_state"})
-                users_col.update_one({"user_id": target_uid}, {"$set": {"wallet": text, "submitted": 1}})
+                if PORTAL_ENABLED:
+                    try:
+                        portal_service.admin_update_wallet(user_id, target_uid, text)
+                    except PortalError as error:
+                        bot.send_message(chat_id, portal_bridge.error_text(error, user_id), reply_markup=get_admin_reply_markup())
+                        return
+                else:
+                    users_col.update_one({"user_id": target_uid}, {"$set": {"wallet": text, "wallet_lc": text.lower(), "submitted": 1}})
                 bot.send_message(chat_id, f"✅ ولت کاربر `{target_uid}` با موفقیت به مقدار جدید تغییر یافت:\n`{text}`", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
                 return
 
@@ -2391,7 +3028,7 @@ def handle_all_messages(message):
                     bot.send_message(chat_id, "❌ کاربر موردنظر دیگر در دیتابیس وجود ندارد.", reply_markup=get_admin_reply_markup())
                     return
 
-                remaining_capacity = max(0, MAX_TOTAL_TOKENS_LIMIT - get_global_total_distributed_tokens())
+                remaining_capacity = remaining_reward_capacity()
                 if amount > remaining_capacity:
                     bot.send_message(
                         chat_id,
@@ -2427,7 +3064,7 @@ def handle_all_messages(message):
                     f"👝 ولت: `{target_user.get('wallet') or 'ثبت نشده'}`\n"
                     f"🎁 مبلغ پاداش: `{amount:,} PRS`\n"
                     f"📌 ظرفیت باقی‌مانده پس از ثبت: `{remaining_capacity - amount:,} PRS`\n\n"
-                    f"پس از تأیید، پاداش در موجودی کاربر ثبت و برای او پیام ارسال می‌شود.",
+                    f"پس از تأیید، پاداش در موجودی حساب کاربر ثبت می‌شود.",
                     reply_markup=confirm_markup,
                     parse_mode="Markdown"
                 )
@@ -2464,7 +3101,7 @@ def handle_all_messages(message):
                 eligible_count = users_col.count_documents(get_bonus_eligible_filter())
                 total_cost = amount * eligible_count
                 current_total = get_global_total_distributed_tokens()
-                remaining_capacity = max(0, MAX_TOTAL_TOKENS_LIMIT - current_total)
+                remaining_capacity = remaining_reward_capacity()
 
                 if eligible_count == 0:
                     settings_col.delete_one({"key": "admin_state"})
@@ -2517,12 +3154,39 @@ def handle_all_messages(message):
                 bot.send_message(chat_id, "⚠️ لطفاً برای انجام یا لغو عملیات از دکمه‌های تأیید نهایی استفاده کنید.")
                 return
 
-        if text == "🔴 خاموش کردن ربات":
-            settings_col.replace_one({"key": "bot_status"}, {"key": "bot_status", "status": "off"}, upsert=True)
-            bot.send_message(chat_id, "🔴 ربات با موفقیت **خاموش** شد. کاربران عادی دیگر قادر به استفاده از ربات نخواهند بود.", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
+        if text == "📂 گزارش‌های پنل سایت":
+            bot.send_message(chat_id, "📂 خروجی‌های پنل سایت را از این بخش بگیر:", reply_markup=get_admin_reports_markup())
+            return
+        elif text == "👥 کاربران پنل سایت (CSV)":
+            send_portal_csv_report(chat_id, "users")
+            return
+        elif text == "💳 پرداخت‌های پنل سایت (CSV)":
+            send_portal_csv_report(chat_id, "payments")
+            return
+        elif text == "🧾 سوابق مدیریت سایت (CSV)":
+            send_portal_csv_report(chat_id, "audit")
+            return
+        elif text == "✅ پرداخت‌های موفق سایت (Excel)":
+            send_portal_xlsx_report(chat_id, "paid")
+            return
+        elif text == "🌐 آیدی‌های اجتماعی سایت (Excel)":
+            send_portal_xlsx_report(chat_id, "social")
+            return
+        elif text == "↩️ بازگشت به پنل مدیریت":
+            bot.send_message(chat_id, "👑 پنل مدیریت:", reply_markup=get_admin_reply_markup())
+            return
+        elif text == "🔴 خاموش کردن ربات":
+            if BOT_PORTAL_ONLY:
+                portal_service.admin_controls(user_id, {"paused": True})
+            else:
+                settings_col.replace_one({"key": "bot_status"}, {"key": "bot_status", "status": "off"}, upsert=True)
+            bot.send_message(chat_id, ("⏸ پاداش‌های کمپین موقتاً متوقف شد؛ مدیریت و ورود سایت همچنان فعال است." if BOT_PORTAL_ONLY else "🔴 ربات با موفقیت **خاموش** شد. کاربران عادی دیگر قادر به استفاده از ربات نخواهند بود."), reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
             return
         elif text == "🟢 روشن کردن ربات":
-            settings_col.replace_one({"key": "bot_status"}, {"key": "bot_status", "status": "on"}, upsert=True)
+            if BOT_PORTAL_ONLY:
+                portal_service.admin_controls(user_id, {"paused": False})
+            else:
+                settings_col.replace_one({"key": "bot_status"}, {"key": "bot_status", "status": "on"}, upsert=True)
             bot.send_message(chat_id, "🟢 ربات با موفقیت **روشن** شد و به حالت عادی برگشت.", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
             return
         elif text == "📢 ارسال همگانی پیام":
@@ -2544,7 +3208,7 @@ def handle_all_messages(message):
                 upsert=True
             )
             eligible_count = users_col.count_documents(get_bonus_eligible_filter())
-            remaining_capacity = max(0, MAX_TOTAL_TOKENS_LIMIT - get_global_total_distributed_tokens())
+            remaining_capacity = remaining_reward_capacity()
             bot.send_message(
                 chat_id,
                 f"🎁 *ثبت پاداش همگانی PRS*\n\n"
@@ -2573,9 +3237,6 @@ def handle_all_messages(message):
             return
         elif text == "🚫 بررسی و خروجی بلاک‌کنندگان":
             start_blocked_users_scan(chat_id)
-            return
-        elif text == "🎟 گزارش آیدی‌های قرعه‌کشی":
-            send_social_lottery_report(chat_id)
             return
         elif text == "📣 پیام به واجدین بی‌ولت":
             recipients_count = len(get_eligible_no_wallet_users())
@@ -2606,11 +3267,22 @@ def handle_all_messages(message):
         elif text == "📊 گزارش کلی توکن‌ها":
             show_token_summary_direct(chat_id)
             return
-        elif text == "🔍 جستجوی کاربر (آیدی یا ولت)":
-            bot.send_message(chat_id, "🔍 برای جستجو، دستور زیر را ارسال کنید:\n`/search [آیدی عددی یا بخشی از ولت]`", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
+        elif text == "🔍 جستجوی کاربر (نام کاربری، آیدی یا ولت)":
+            bot.send_message(chat_id, "🔍 برای جستجو، دستور زیر را ارسال کنید:\n`/search [نام کاربری، آیدی عددی یا بخشی از ولت]`", reply_markup=get_admin_reply_markup(), parse_mode="Markdown")
             return
         elif text == "📁 آپلود اکسل پرداختی‌ها":
-            bot.send_message(chat_id, "📁 لطفاً فایل خروجی پرداختی خود (فرمت CSV یا متنی حاوی آیدی یا ولت کاربران) را مستقیماً در همین چت آپلود کنید تا وضعیت آن‌ها اتوماتیک به «پرداخت‌شده» تغییر يابد.", reply_markup=get_admin_reply_markup())
+            settings_col.replace_one(
+                {"key": "admin_payment_upload_wait", "admin_id": user_id},
+                {"key": "admin_payment_upload_wait", "admin_id": user_id,
+                 "until": int(time.time()) + PAYMENT_UPLOAD_WAIT_SECONDS},
+                upsert=True)
+            bot.send_message(chat_id,
+                "📁 فایل CSV پرداختی را در ۱۰ دقیقه آینده همین‌جا بفرست.\n\n"
+                "• فایل باید ستون «User ID» داشته باشد (مثل خروجی «🟡 اکسل در انتظار پرداخت»).\n"
+                "• فقط ردیف کاربرانی را نگه دار که واقعاً پرداخت کرده‌ای.\n"
+                "• اگر ستون «Total Tokens» باشد، فقط همان مبلغ پرداخت‌شده ثبت می‌شود؛ پاداش‌هایی که بعد از تهیه فایل گرفته‌اند پرداخت‌نشده باقی می‌ماند.\n\n"
+                "قبل از ثبت، خلاصه را می‌بینی و باید تأیید کنی.",
+                reply_markup=get_admin_reply_markup())
             return
         elif text == "🟢 اکسل پرداخت‌شده‌ها":
             send_status_excel_report(chat_id, status_filter=1)
@@ -2641,7 +3313,11 @@ def handle_all_messages(message):
             return
         elif text.startswith("/search "):
             query = text.replace("/search", "").strip()
-            query_filter = {"user_id": int(query)} if query.isdigit() else {"wallet": {"$regex": query, "$options": "i"}}
+            search_term = query.lstrip("@")
+            query_filter = {"user_id": int(query)} if query.isdigit() else {"$or": [
+                {field: {"$regex": re.escape(search_term), "$options": "i"}}
+                for field in ("wallet", "telegram_username", "instagram", "instagram_id", "twitter", "twitter_id")
+            ]}
             rows = list(users_col.find(query_filter))
             if not rows:
                 bot.send_message(chat_id, "❌ هیچ کاربری با این مشخصات پیدا نشد.", reply_markup=get_admin_reply_markup())
@@ -2659,6 +3335,7 @@ def handle_all_messages(message):
                 manual_bonus_tokens = r.get("manual_bonus_tokens", 0)
                 twitter_id = r.get("twitter_id") or "ثبت نشده"
                 instagram_id = r.get("instagram_id") or "ثبت نشده"
+                telegram_username = r.get("telegram_username") or "ثبت نشده"
                 total_tokens = calculate_total_tokens(ref_cnt, d_cnt, bonus_tokens, manual_bonus_tokens)
                 base_used, extra_count = get_ref_details(ref_cnt)
                 
@@ -2666,6 +3343,7 @@ def handle_all_messages(message):
                 
                 res += (
                     f"👤 آیدی عددی: `{uid}`\n"
+                    f"🔎 نام کاربری تلگرام: `{telegram_username}`\n"
                     f"👥 کل رفال: {ref_cnt} (ثابت: {base_used} | مازاد: {extra_count})\n"
                     f"🎁 پاداش همگانی: {bonus_tokens:,} | پاداش دستی: {manual_bonus_tokens:,} PRS\n"
                     f"🪙 توکن کل: {total_tokens:,} | پرداخت شده: {paid_amt:,} PRS\n"
@@ -2701,23 +3379,35 @@ def handle_all_messages(message):
         correct_ans = captcha_data["answer"]
         referrer_id = captcha_data["pending_referrer"]
 
+        remaining = captcha_lock_remaining(captcha_data)
+        if remaining:
+            send_captcha_locked(chat_id, user_id, remaining)
+            return
+
         if text.isdigit() and int(text) == correct_ans:
-            captcha_col.delete_one({"user_id": user_id})
+            captcha_col.update_one({"user_id": user_id}, {"$set": {"solved_at": int(time.time())}})
             
             if not check_membership(user_id):
                 ask_to_join(chat_id, referrer_id if referrer_id else 0, user_id)
                 return
 
             register_user_after_verify(user_id, referrer_id)
+            if getattr(message.from_user, "username", None):
+                users_col.update_one({"user_id": user_id}, {"$set": {"telegram_username": f"@{message.from_user.username}"}})
+            captcha_col.delete_one({"user_id": user_id})
             show_main_menu(chat_id, user_id)
         else:
-            new_n1 = random.randint(1, 10)
-            new_n2 = random.randint(1, 10)
+            locked = register_captcha_failure(user_id)
+            if locked:
+                send_captcha_locked(chat_id, user_id, locked)
+                return
+            new_n1 = random.randint(11, 49)
+            new_n2 = random.randint(2, 9)
             new_correct_ans = new_n1 + new_n2
 
             captcha_col.update_one(
                 {"user_id": user_id},
-                {"$set": {"num1": new_n1, "num2": new_n2, "answer": new_correct_ans}}
+                {"$set": {"num1": new_n1, "num2": new_n2, "answer": new_correct_ans, "solved_at": 0}}
             )
 
             wrong_text = get_msg(user_id, "captcha_wrong", new_n1, new_n2)
@@ -2767,24 +3457,11 @@ def handle_all_messages(message):
             bot.send_message(chat_id=chat_id, text=link_text)
         return
     elif text in [LANG["fa"]["main_kb_daily"], LANG["en"]["main_kb_daily"]]:
-        user_data = get_user_data(user_id)
-        ref_count = user_data[0] if user_data else 0
-        if ref_count < REQUIRED_REFERRALS:
-            bot.send_message(chat_id, get_msg(user_id, "daily_locked", REQUIRED_REFERRALS))
-            return
-        current_time = int(time.time())
-        last_daily = user_data[4] if user_data else 0
-        if current_time - last_daily < 86400:
-            remaining = 86400 - (current_time - last_daily)
-            hours = remaining // 3600
-            minutes = (remaining % 3600) // 60
-            bot.send_message(chat_id, get_msg(user_id, "daily_already", hours, minutes))
-        else:
-            users_col.update_one(
-                {"user_id": user_id},
-                {"$set": {"last_daily": current_time}, "$inc": {"daily_count": 1}}
-            )
+        try:
+            claim_bot_daily(user_id)
             bot.send_message(chat_id, get_msg(user_id, "daily_success", DAILY_REWARD))
+        except PortalError as error:
+            bot.send_message(chat_id, portal_bridge.error_text(error, user_id))
         return
     elif text in [LANG["fa"]["main_kb_guide"], LANG["en"]["main_kb_guide"]]:
         guide_text = get_msg(user_id, "wallet_guide_text")
@@ -2872,8 +3549,18 @@ def handle_all_messages(message):
             bot.send_message(chat_id, get_msg(user_id, "wallet_limit_err"))
             return
 
-        save_submission(user_id, wallet_address, submitted_status)
-        
+        if PORTAL_ENABLED:
+            try:
+                portal_service.update_wallet(user_id, wallet_address)
+            except PortalError as error:
+                bot.send_message(chat_id, portal_bridge.error_text(error, user_id))
+                return
+        else:
+            if wallet_used_by_other(user_id, wallet_address):
+                bot.send_message(chat_id, portal_bridge.error_text(PortalError("wallet_in_use", 409), user_id))
+                return
+            save_submission(user_id, wallet_address, submitted_status)
+
         if submitted_status == 0:
             bot.send_message(chat_id, get_msg(user_id, "wallet_saved"))
         else:
@@ -2983,6 +3670,30 @@ def handle_callbacks(call):
                 bot.answer_callback_query(call.id, "⚠️ این عملیات قبلاً انجام یا لغو شده است.", show_alert=True)
             return
 
+        if call.data.startswith("admin_payupload_"):
+            confirm = call.data.startswith("admin_payupload_confirm_")
+            operation_id = call.data.rsplit("_", 1)[-1]
+            pending = settings_col.find_one_and_delete({"key": "admin_payment_upload", "admin_id": user_id,
+                                                        "operation_id": operation_id})
+            try:
+                bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
+            except Exception:
+                pass
+            if not pending:
+                bot.answer_callback_query(call.id, "⚠️ این فایل قبلاً ثبت یا لغو شده است.", show_alert=True)
+                return
+            if not confirm:
+                bot.answer_callback_query(call.id, "❌ ثبت فایل پرداختی لغو شد.")
+                bot.send_message(chat_id, "❌ هیچ تغییری ثبت نشد.", reply_markup=get_admin_reply_markup())
+                return
+            bot.answer_callback_query(call.id, "⏳ در حال ثبت پرداخت‌ها...")
+            updated, missing, blocked = apply_payment_upload(user_id, pending.get("rows") or [])
+            bot.send_message(chat_id,
+                f"✅ فایل پرداختی ثبت شد.\n\n🟢 پرداخت‌شده ثبت شد: {updated:,} نفر\n❓ پیدانشده: {missing:,}"
+                + (f"\n⚠️ ثبت‌نشده (درخواست پرداخت باز در سایت دارند): {blocked:,} — آن‌ها را از سایت بررسی کن." if blocked else ""),
+                reply_markup=get_admin_reply_markup())
+            return
+
         if call.data.startswith("admin_pay_"):
             parts = call.data.split("_")
             target_uid = int(parts[2])
@@ -2996,11 +3707,23 @@ def handle_callbacks(call):
                     r_cnt, d_cnt, usr.get("bonus_tokens", 0), usr.get("manual_bonus_tokens", 0)
                 )
                 
-                if action == "yes":
+                if BOT_PORTAL_ONLY:
+                    try:
+                        portal_service.admin_bot_payment(user_id, target_uid, action)
+                    except PortalError as error:
+                        text = "این کاربر درخواست پرداخت باز در سایت دارد؛ ابتدا همان درخواست را بررسی کنید." if error.code == "payment_pending" else portal_bridge.error_text(error, user_id)
+                        text = text[:190]  # Telegram alert text limit
+                        bot.answer_callback_query(call.id, text, show_alert=True)
+                        return
+                elif action == "yes":
                     users_col.update_one({"user_id": target_uid}, {"$set": {"paid": 1, "paid_amount": tot_tokens}})
                 elif action == "no":
                     users_col.update_one({"user_id": target_uid}, {"$set": {"paid": 0}})
                 elif action == "unpaid":
+                    if db.portal_payments.find_one({"user_id": target_uid, "status": "recorded"}, {"_id": 1}):
+                        bot.answer_callback_query(call.id, portal_bridge.error_text(
+                            PortalError("onchain_payment_recorded", 409), user_id), show_alert=True)
+                        return
                     users_col.update_one({"user_id": target_uid}, {"$set": {"paid": 0, "paid_amount": 0}})
             
             bot.answer_callback_query(call.id, f"✅ وضعیت کاربر {target_uid} به‌روز شد.")
@@ -3052,6 +3775,9 @@ def handle_callbacks(call):
         parts = call.data.split("_")
         chosen_lang = parts[1]
         referrer_id = int(parts[2])
+        user = users_col.find_one({"user_id": user_id}) or {}
+        if int(user.get("verified", 0)) < 1 and user.get("registration_referrer"):
+            referrer_id = user["registration_referrer"]
         
         users_col.update_one(
             {"user_id": user_id},
@@ -3085,6 +3811,16 @@ def handle_callbacks(call):
 
     if call.data.startswith("check_join_"):
         referrer_id = int(call.data.split("_")[2])
+        user = users_col.find_one({"user_id": user_id}) or {}
+        captcha_data = captcha_col.find_one({"user_id": user_id})
+        if int(user.get("verified", 0)) < 1:
+            solved_at = (captcha_data or {}).get("solved_at", 0)
+            if not solved_at or int(time.time()) - solved_at > 900:
+                bot.answer_callback_query(call.id, "ابتدا سؤال امنیتی را درست پاسخ بده. / Answer the security question first.", show_alert=True)
+                send_captcha(chat_id, user_id, (captcha_data or {}).get("pending_referrer", referrer_id))
+                return
+            # Referral attribution comes from the solved challenge, not the button payload.
+            referrer_id = captcha_data.get("pending_referrer", 0)
         
         if not check_membership(user_id):
             no_join_msg = "❌ شما هنوز در کانال عضو نشده‌اید!" if get_msg(user_id, "lang")=="fa" else "❌ You have not joined the channel yet!"
@@ -3094,6 +3830,9 @@ def handle_callbacks(call):
         ok_join_msg = "✅ عضویت شما تایید شد!" if get_msg(user_id, "lang")=="fa" else "✅ Membership verified!"
         bot.answer_callback_query(call.id, ok_join_msg)
         register_user_after_verify(user_id, referrer_id if referrer_id != 0 else None)
+        if getattr(call.from_user, "username", None):
+            users_col.update_one({"user_id": user_id}, {"$set": {"telegram_username": f"@{call.from_user.username}"}})
+        captcha_col.delete_one({"user_id": user_id})
         
         try:
             bot.delete_message(chat_id, call.message.message_id)
@@ -3124,28 +3863,12 @@ def handle_callbacks(call):
         except Exception:
             bot.send_message(chat_id=chat_id, text=link_text)
     elif call.data == "daily_bonus":
-        if not check_membership(user_id):
-            bot.answer_callback_query(call.id, "❌ ابتدا در کانال عضو شوید!", show_alert=True)
-            return
-        user_data = get_user_data(user_id)
-        ref_count = user_data[0] if user_data else 0
-        
-        if ref_count < REQUIRED_REFERRALS:
-            bot.answer_callback_query(call.id, "⚠️ پاداش روزانه قفل است!", show_alert=True)
-            return
-            
-        current_time = int(time.time())
-        last_daily = user_data[4] if user_data else 0
-        
-        if current_time - last_daily < 86400:
-            bot.answer_callback_query(call.id, "⏳ شما قبلاً پاداش امروز خود را دریافت کرده‌اید!", show_alert=True)
-        else:
-            users_col.update_one(
-                {"user_id": user_id},
-                {"$set": {"last_daily": current_time}, "$inc": {"daily_count": 1}}
-            )
-            bot.answer_callback_query(call.id, "🎁 تبریک! پاداش روزانه اضافه شد.", show_alert=True)
+        try:
+            claim_bot_daily(user_id)
+            bot.answer_callback_query(call.id, portal_bridge.text(user_id, "🎁 پاداش روزانه ثبت شد.", "🎁 Daily reward recorded."), show_alert=True)
             show_main_menu(chat_id, user_id, message_id=call.message.message_id, edit=True)
+        except PortalError as error:
+            bot.answer_callback_query(call.id, portal_bridge.error_text(error, user_id), show_alert=True)
     elif call.data == "wallet_guide":
         if not check_membership(user_id):
             bot.answer_callback_query(call.id, "❌ ابتدا در کانال عضو شوید!", show_alert=True)
@@ -3237,17 +3960,91 @@ def handle_callbacks(call):
         else:
             bot.send_message(chat_id, get_msg(user_id, "submit_new_mode"))
 
+def bot_failure_label(error):
+    """Never log exception strings: Telegram request URLs contain the token."""
+    code = getattr(error, "error_code", None)
+    return f"Telegram API {code}" if type(code) is int else type(error).__name__
+
+
+def prepare_bot_polling():
+    print("BOT CHECK: validating Telegram connection", flush=True)
+    try:
+        identity = bot.get_me()
+    except Exception as error:
+        label = bot_failure_label(error)
+        print(f"BOT STARTUP FAILED: {label} during getMe", flush=True)
+        raise RuntimeError(f"Bot connection failed: {label}") from None
+    username = str(getattr(identity, "username", "") or "")
+    if not re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):
+        raise RuntimeError("Telegram returned an invalid bot username")
+    print(f"BOT CONNECTED: @{username}", flush=True)
+    if username.casefold() != BOT_USERNAME.strip().lstrip("@").casefold():
+        print(f"BOT CONFIG WARNING: set BOT_USERNAME to {username} in both services", flush=True)
+    print("BOT CHECK: clearing webhook before polling", flush=True)
+    try:
+        bot.delete_webhook(drop_pending_updates=not BOT_PORTAL_ONLY)
+    except Exception as error:
+        label = bot_failure_label(error)
+        print(f"BOT STARTUP FAILED: {label} during deleteWebhook", flush=True)
+        raise RuntimeError(f"Bot webhook setup failed: {label}") from None
+    print("BOT WEBHOOK: cleared", flush=True)
+
+
+def setup_panel_menu_button():
+    """The button next to the message box opens the user panel; Telegram signs who opened it."""
+    if not (PORTAL_ENABLED and os.getenv("WEB_BASE_URL", "").strip()):
+        return
+    try:
+        bot.set_chat_menu_button(menu_button=MenuButtonWebApp(text="پنل", web_app=WebAppInfo(portal_service.webapp_url())))
+        print("BOT MENU BUTTON: opens the user panel", flush=True)
+    except Exception as error:
+        print(f"BOT MENU BUTTON not set: {bot_failure_label(error)}", flush=True)
+
+
+def poll_bot_updates():
+    # Telegram retains a previous allowed_updates filter when it is omitted.
+    # Request both update types used by this bot explicitly on every poll.
+    print("BOT POLLING: message, callback_query and chat_member enabled", flush=True)
+    return bot.infinity_polling(timeout=30, long_polling_timeout=30,
+                                skip_pending=not BOT_PORTAL_ONLY,
+                                allowed_updates=["message", "callback_query", "chat_member"])
+
+
 if __name__ == "__main__":
-    print("Bot is starting with MongoDB & Dual-Language Support...")
-    bot.delete_webhook(drop_pending_updates=True)
+    if PORTAL_ENABLED:
+        if not portal_service.store.ready():
+            raise RuntimeError("Portal requires MongoDB transaction support; keep PORTAL_ENABLED=0 until ready")
+        if not portal_service.store.ensure_indexes():
+            print("PORTAL WARNING: users.user_id unique index missing; run scripts/prepare_portal.py", flush=True)
+        try:
+            portal_service.store.backfill_wallet_keys()
+        except Exception as error:
+            print(f"PORTAL WARNING: wallet key backfill failed ({type(error).__name__})", flush=True)
+    else:
+        try:
+            users_col.create_index("wallet_lc")
+            users_col.update_many({"wallet": {"$type": "string"}, "wallet_lc": {"$exists": False}},
+                                  [{"$set": {"wallet_lc": {"$toLower": "$wallet"}}}])
+        except Exception as error:
+            print(f"WALLET INDEX WARNING: {type(error).__name__}", flush=True)
+    print("PHASE 2: user website gateway and dual admin management starting..." if BOT_PORTAL_ONLY else "Bot is starting with MongoDB & Dual-Language Support...", flush=True)
+    prepare_bot_polling()
+    setup_panel_menu_button()
     time.sleep(2)
 
     backup_thread = threading.Thread(target=auto_backup_scheduler, daemon=True)
     backup_thread.start()
+    if PORTAL_ENABLED:
+        payment_notice_thread = threading.Thread(target=portal_payment_notification_scheduler, daemon=True)
+        payment_notice_thread.start()
+        threading.Thread(target=portal_maintenance_scheduler, daemon=True, name="prs-maintenance").start()
+        threading.Thread(target=portal_message_scheduler, daemon=True, name="prs-messages").start()
+        threading.Thread(target=referral_membership_scheduler, daemon=True, name="prs-referrals").start()
 
     while True:
         try:
-            bot.infinity_polling(timeout=30, long_polling_timeout=30, skip_pending=True)
+            poll_bot_updates()
         except Exception as e:
-            print(f"Polling error: {e}")
+            print(f"BOT POLLING FAILED: {bot_failure_label(e)}", flush=True)
             time.sleep(10)
+
