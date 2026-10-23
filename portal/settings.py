@@ -1,4 +1,5 @@
 import os
+import re
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
@@ -18,6 +19,24 @@ MINING_SECONDS = 8 * 3600
 CAPTCHA_MAX_ATTEMPTS = 5
 CAPTCHA_LOCK_SECONDS = 600
 MINING_DEFAULT_BUDGET = 135_000_000
+_TME = re.compile(r"^(?:https?://)?(?:www\.)?t(?:elegram)?\.me/", re.I)
+
+
+def clean_bot_username(value, default="PRS_Airdrop_Bot"):
+    """BOT_USERNAME as Telegram links need it: no @ and no t.me/ prefix."""
+    value = _TME.sub("", (value or "").strip()).strip().lstrip("@").strip().split("?")[0].strip("/")
+    return value or default
+
+
+def clean_channel(value, default="@persepolisToken6"):
+    """CHANNEL_ID as Telegram's API needs it: @name, or a numeric chat ID such as -100..."""
+    value = _TME.sub("", (value or "").strip()).strip().split("?")[0].strip("/")
+    if re.fullmatch(r"-?[0-9]+", value):
+        return value
+    value = value.lstrip("@").strip()
+    return "@" + value if value else default
+
+
 TIERS = (
     {"id": "bronze", "name": "برنز", "name_en": "Bronze", "referrals": 0, "balance": 0, "reward": 500},
     {"id": "silver", "name": "نقره", "name_en": "Silver", "referrals": 3, "balance": 10_000, "reward": 550},
@@ -63,8 +82,8 @@ class Settings:
         admins = tuple(int(x.strip()) for x in os.getenv("PORTAL_ADMIN_IDS", ",".join(map(str, DEFAULT_ADMINS))).split(",") if x.strip())
         return cls(
             mongo_url=os.getenv("MONGO_URL", ""), database=os.getenv("MONGO_DB", "persepolis_db"),
-            bot_token=os.getenv("BOT_TOKEN", ""), bot_username=os.getenv("BOT_USERNAME", "PRS_Airdrop_Bot"),
-            channel=os.getenv("CHANNEL_ID", "@persepolisToken6"), base_url=base_url,
+            bot_token=os.getenv("BOT_TOKEN", "").strip(), bot_username=clean_bot_username(os.getenv("BOT_USERNAME")),
+            channel=clean_channel(os.getenv("CHANNEL_ID")), base_url=base_url,
             admins=admins, demo=demo, enabled=os.getenv("PORTAL_ENABLED", "0") == "1",
             # Phase two uses Tehran even when an older deployment still has
             # PORTAL_TIMEZONE=Asia/Baghdad configured.
