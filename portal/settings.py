@@ -4,6 +4,9 @@ from urllib.parse import urlsplit
 
 # Existing campaign economics: keep these identical for the bot and website.
 REQUIRED_REFERRALS = 3
+# Each user's first referrals (in the order they were credited) stay counted even if
+# they later leave the channel. Leaves are deducted only from referral 4 onward.
+PROTECTED_REFERRALS = 3
 BASE_REWARD = 2000
 EXTRA_REWARD = 5000
 DAILY_REWARD = 1000

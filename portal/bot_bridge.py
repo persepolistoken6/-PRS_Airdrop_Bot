@@ -6,14 +6,15 @@ from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from .service import PortalError
 
-PANEL_LABELS = ("🌐 پنل ایردراپ", "🌐 Airdrop portal")
+PANEL_LABELS = ("🌐 پنل ایردراپ", "🌐 Airdrop portal")            # old text button (pressing it sends text)
+PANEL_BUTTON_LABELS = ("🌐 پنل کاربری", "🌐 User panel")          # button that opens the panel itself
 MISSION_LABELS = ("🎯 مأموریت‌های جدید", "🎯 New missions")
 
 
 class BotBridge:
     def __init__(self, bot, service, menu_factory, reserved_labels=()):
         self.bot, self.service, self.menu_factory = bot, service, menu_factory
-        self.reserved_labels = set(reserved_labels) | set(PANEL_LABELS) | set(MISSION_LABELS)
+        self.reserved_labels = set(reserved_labels) | set(PANEL_LABELS) | set(PANEL_BUTTON_LABELS) | set(MISSION_LABELS)
 
     def language(self, uid):
         return (self.service.store.get("users", uid) or {}).get("lang", "fa")
@@ -57,6 +58,25 @@ class BotBridge:
         return False
 
     def send_login(self, message):
+        """Show the panel button. It opens the user's panel directly inside Telegram; no link is shown."""
+        if not self._private(message):
+            return
+        uid = message.from_user.id
+        if uid in self.service.settings.admins:
+            return self.send_link(message)    # admins also need a link for Trust Wallet's browser
+        try:
+            self.service.panel_url(uid)       # fails early when the website address is not configured
+            self.bot.send_message(uid, self.text(uid,
+                "✅ حسابت فعال است.\n\n🌐 دکمهٔ «پنل کاربری» پایین صفحه را بزن تا مستقیم وارد پنلت شوی.",
+                "✅ Your account is active.\n\n🌐 Tap “User panel” below to open your panel directly."),
+                reply_markup=self.menu_factory(uid))
+        except PortalError as error:
+            self.bot.send_message(uid, self.error_text(error, uid))
+        except Exception:
+            self.bot.send_message(uid, self.text(uid, "ورود فعلاً در دسترس نیست؛ کمی بعد تلاش کن.", "Sign-in is temporarily unavailable. Please try again."))
+
+    def send_link(self, message):
+        """Personal one-time sign-in link (admins, and Telegram apps too old to open the panel button)."""
         if not self._private(message):
             return
         uid = message.from_user.id
@@ -133,6 +153,16 @@ class BotBridge:
 
         @self.bot.message_handler(func=lambda m: m.text in PANEL_LABELS)
         def panel_button(message):
+            self.send_login(message)
+
+        @self.bot.message_handler(func=lambda m: m.text in PANEL_BUTTON_LABELS)
+        def panel_button_without_mini_app(message):
+            # Only a Telegram app too old for Mini Apps sends the new button's text.
+            self.send_link(message)
+
+        @self.bot.message_handler(content_types=["web_app_data"])
+        def panel_key_refresh(message):
+            # The panel asks for a fresh button when the old one has expired.
             self.send_login(message)
 
         @self.bot.message_handler(commands=["missions"])
