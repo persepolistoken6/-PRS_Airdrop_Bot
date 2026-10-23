@@ -10,13 +10,12 @@ from uuid import uuid4
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from telebot import TeleBot
-from telebot.types import (InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
-                           WebAppInfo, MenuButtonWebApp)
+from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from pymongo import MongoClient, ReturnDocument
 from portal.settings import (Settings, REQUIRED_REFERRALS, BASE_REWARD, EXTRA_REWARD, DAILY_REWARD, MAX_TOTAL_TOKENS_LIMIT,
                              CAPTCHA_MAX_ATTEMPTS, CAPTCHA_LOCK_SECONDS)
 from portal.service import build_service, PortalError, with_burn
-from portal.bot_bridge import BotBridge, PANEL_LABELS, PANEL_BUTTON_LABELS, MISSION_LABELS
+from portal.bot_bridge import BotBridge, PANEL_LABELS, MISSION_LABELS
 
 TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
@@ -441,22 +440,11 @@ def get_msg(user_id_or_lang, key, *args, **kwargs):
     return text
 
 def get_main_reply_markup(user_id):
-    """One persistent user shortcut; existing commands and admin controls remain intact.
-
-    With the website configured, the button opens the user's panel directly inside
-    Telegram (Mini App): no link is shown and nothing is typed into the chat.
-    """
+    """One persistent user shortcut; existing commands and admin controls remain intact."""
     user = users_col.find_one({"user_id": user_id})
     lang = (user or {}).get("lang", "fa")
-    index = 0 if lang == "fa" else 1
     markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=1, is_persistent=True, one_time_keyboard=False)
-    if PORTAL_ENABLED and os.getenv("WEB_BASE_URL", "").strip():
-        try:
-            markup.row(KeyboardButton(PANEL_BUTTON_LABELS[index], web_app=WebAppInfo(portal_service.panel_url(user_id))))
-            return markup
-        except Exception as error:
-            print(f"PANEL BUTTON unavailable: {type(error).__name__}", flush=True)
-    markup.row(KeyboardButton(PANEL_LABELS[index]))
+    markup.row(KeyboardButton(PANEL_LABELS[0 if lang == "fa" else 1]))
     return markup
 
 def is_admin(user_id):
@@ -2081,8 +2069,8 @@ if PORTAL_ENABLED and not BOT_PORTAL_ONLY:
     portal_bridge.install()
 
 
-def send_portal_entry(user_id, link=False):
-    """Registration steps first; then the panel button (or, with link=True, a personal sign-in link)."""
+def send_portal_entry(user_id):
+    """The gateway always sends personal login links in the user's private chat."""
     user = users_col.find_one({"user_id": user_id}) or {}
     if user.get("portal_suspended"):
         bot.send_message(user_id, "حساب شما تعلیق شده است. / Your account is suspended.", reply_markup=ReplyKeyboardRemove())
@@ -2106,7 +2094,7 @@ def send_portal_entry(user_id, link=False):
         "from_user": type("User", (), {"id": user_id})(),
         "chat": type("Chat", (), {"id": user_id, "type": "private"})(),
     })()
-    (portal_bridge.send_link if link else portal_bridge.send_login)(message)
+    portal_bridge.send_login(message)
 
 
 def gateway_welcome(message):
@@ -2179,9 +2167,7 @@ def route_admin_message(message):
     text = (message.text or "").strip()
     parts = text.split()
     command = parts[0].split("@")[0] if parts else ""
-    if (command in ("/panel", "/site") or text in (*PANEL_LABELS, *PANEL_BUTTON_LABELS, "🌐 مدیریت سایت")
-            or getattr(message, "content_type", "text") == "web_app_data"
-            or (command == "/start" and parts[1:] == ["portal"])):
+    if command in ("/panel", "/site") or text in (*PANEL_LABELS, "🌐 مدیریت سایت") or (command == "/start" and parts[1:] == ["portal"]):
         send_admin_website(uid)
     elif command in ("/start", "/menu", "/admin"):
         captcha_col.delete_one({"user_id": uid})
@@ -2198,7 +2184,7 @@ def route_admin_message(message):
 
 if BOT_PORTAL_ONLY:
     # These handlers precede every legacy command, upload and reward handler.
-    @bot.message_handler(content_types=["text", "document", "photo", "video", "audio", "voice", "sticker", "contact", "location", "animation", "video_note", "web_app_data"])
+    @bot.message_handler(content_types=["text", "document", "photo", "video", "audio", "voice", "sticker", "contact", "location", "animation", "video_note"])
     def portal_only_message(message):
         if message.chat.type != "private":
             return
@@ -2214,9 +2200,6 @@ if BOT_PORTAL_ONLY:
         command = text.split()[0].split("@")[0] if text else ""
         if command in ("/start", "/menu", "/register"):
             send_welcome(message)
-        elif text in PANEL_BUTTON_LABELS:
-            # Only a Telegram app too old to open the panel button sends its text: give a sign-in link.
-            send_portal_entry(message.from_user.id, link=True)
         elif text and not text.startswith("/") and captcha_col.find_one({"user_id": message.from_user.id}):
             # Only the registration captcha can consume a text reply here.
             try:
@@ -3990,17 +3973,6 @@ def prepare_bot_polling():
     print("BOT WEBHOOK: cleared", flush=True)
 
 
-def setup_panel_menu_button():
-    """The button next to the message box opens the user panel; Telegram signs who opened it."""
-    if not (PORTAL_ENABLED and os.getenv("WEB_BASE_URL", "").strip()):
-        return
-    try:
-        bot.set_chat_menu_button(menu_button=MenuButtonWebApp(text="پنل", web_app=WebAppInfo(portal_service.webapp_url())))
-        print("BOT MENU BUTTON: opens the user panel", flush=True)
-    except Exception as error:
-        print(f"BOT MENU BUTTON not set: {bot_failure_label(error)}", flush=True)
-
-
 def poll_bot_updates():
     # Telegram retains a previous allowed_updates filter when it is omitted.
     # Request both update types used by this bot explicitly on every poll.
@@ -4029,7 +4001,6 @@ if __name__ == "__main__":
             print(f"WALLET INDEX WARNING: {type(error).__name__}", flush=True)
     print("PHASE 2: user website gateway and dual admin management starting..." if BOT_PORTAL_ONLY else "Bot is starting with MongoDB & Dual-Language Support...", flush=True)
     prepare_bot_polling()
-    setup_panel_menu_button()
     time.sleep(2)
 
     backup_thread = threading.Thread(target=auto_backup_scheduler, daemon=True)
