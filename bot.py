@@ -14,11 +14,11 @@ from telebot.types import (InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyb
                            WebAppInfo, MenuButtonWebApp)
 from pymongo import MongoClient, ReturnDocument
 from portal.settings import (Settings, REQUIRED_REFERRALS, BASE_REWARD, EXTRA_REWARD, DAILY_REWARD, MAX_TOTAL_TOKENS_LIMIT,
-                             CAPTCHA_MAX_ATTEMPTS, CAPTCHA_LOCK_SECONDS)
+                             CAPTCHA_MAX_ATTEMPTS, CAPTCHA_LOCK_SECONDS, clean_bot_username, clean_channel)
 from portal.service import build_service, PortalError, with_burn
 from portal.bot_bridge import BotBridge, PANEL_LABELS, PANEL_BUTTON_LABELS, MISSION_LABELS
 
-TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = (os.getenv("BOT_TOKEN") or "").strip()
 if not TOKEN:
     raise RuntimeError("BOT_TOKEN environment variable is not set")
 
@@ -35,8 +35,9 @@ settings_col = db.bot_settings
 PORTAL_ENABLED = os.getenv("PORTAL_ENABLED", "0") == "1"
 BOT_PORTAL_ONLY = PORTAL_ENABLED and os.getenv("BOT_PORTAL_ONLY", "1") == "1"
 
-BOT_USERNAME = os.getenv("BOT_USERNAME", "PRS_Airdrop_Bot")
-CHANNEL_ID = os.getenv("CHANNEL_ID", "@persepolisToken6")
+# Written with or without @ (or as a t.me link) in the variables, both work.
+BOT_USERNAME = clean_bot_username(os.getenv("BOT_USERNAME"))
+CHANNEL_ID = clean_channel(os.getenv("CHANNEL_ID"))
 TWITTER_URL = "https://x.com/PersepolisPRS"
 INSTAGRAM_URL = "https://www.instagram.com/persepolistoken6?igsh=eHBwbzdtd2ZoaWI5"
 
@@ -1817,10 +1818,18 @@ def send_database_backup(target_chat_id):
     except Exception as e:
         bot.send_message(target_chat_id, f"❌ خطا در تهیه بک‌آپ ({type(e).__name__}).", reply_markup=get_admin_reply_markup())
 
+AUTO_BACKUP_SECONDS = 86400
+
+
 def auto_backup_scheduler():
+    """Daily users backup to the first admin. The last send time is stored, so restarts
+    and deploys do not keep postponing it (the first one comes an hour after start)."""
     while True:
-        time.sleep(86400)
+        time.sleep(3600)
         try:
+            last = (settings_col.find_one({"key": "auto_backup"}) or {}).get("sent_at", 0)
+            if time.time() - float(last or 0) < AUTO_BACKUP_SECONDS:
+                continue
             file_bytes, count = build_database_backup("auto_backup")
             if file_bytes == "too_large":
                 bot.send_message(ADMIN_CHAT_ID, "⚠️ بک‌آپ خودکار ارسال نشد: حجم از سقف تلگرام بیشتر است. از بک‌آپ MongoDB استفاده کن.")
@@ -1830,8 +1839,21 @@ def auto_backup_scheduler():
                     file_bytes,
                     caption=f"⚙️ پشتیبان‌گیری خودکار روزانه ({count:,} کاربر) · فایل فشرده؛ شامل کیف پول‌ها."
                 )
+            settings_col.update_one({"key": "auto_backup"}, {"$set": {"sent_at": int(time.time())}}, upsert=True)
         except Exception as e:
             print(f"Auto backup error: {type(e).__name__}", flush=True)
+
+
+def clear_unfinished_admin_actions():
+    """Forget an admin action left waiting for its next message (for example "send to all
+    users" waiting for the text). After a restart, or after moving the old bot's data here,
+    the admin's next message must not be taken as that action's input."""
+    try:
+        cleared = settings_col.delete_many({"key": "admin_state"}).deleted_count
+        if cleared:
+            print(f"ADMIN STATE: cleared {cleared} unfinished admin action(s)", flush=True)
+    except Exception as error:
+        print(f"ADMIN STATE WARNING: {type(error).__name__}", flush=True)
 
 
 def portal_message_scheduler():
@@ -4028,8 +4050,15 @@ if __name__ == "__main__":
         except Exception as error:
             print(f"WALLET INDEX WARNING: {type(error).__name__}", flush=True)
     print("PHASE 2: user website gateway and dual admin management starting..." if BOT_PORTAL_ONLY else "Bot is starting with MongoDB & Dual-Language Support...", flush=True)
+    try:
+        # Compare with the website's deploy log: both services must show the same database and user count.
+        print(f"BOT DATABASE: '{db.name}' with {users_col.estimated_document_count():,} user document(s); "
+              f"channel {CHANNEL_ID}; bot @{BOT_USERNAME}", flush=True)
+    except Exception as error:
+        print(f"BOT DATABASE WARNING: {type(error).__name__}", flush=True)
     prepare_bot_polling()
     setup_panel_menu_button()
+    clear_unfinished_admin_actions()
     time.sleep(2)
 
     backup_thread = threading.Thread(target=auto_backup_scheduler, daemon=True)
