@@ -1933,7 +1933,7 @@ def referral_membership_scheduler():
                     state = channel_membership(uid)
                     if state is not None:
                         try:
-                            result = portal_service.update_referral_membership(uid, state)
+                            result = portal_service.update_referral_membership(uid, state, sweep=True)
                             changed += isinstance(result, dict)
                         except Exception as error:
                             print(f"Referral check failed: {type(error).__name__}", flush=True)
