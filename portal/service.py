@@ -73,6 +73,14 @@ def with_burn(payment):
     return {**payment, "net_amount": net, "burn_amount": burn}
 
 
+def _hex(value):
+    """Lower-case 0x-hex for a web3 value: HexBytes/bytes or an already-hex string."""
+    if isinstance(value, str):
+        value = value.lower()
+        return value if value.startswith("0x") else "0x" + value
+    return "0x" + bytes(value or b"").hex()
+
+
 def _expires(seconds_from_epoch):
     return datetime.fromtimestamp(seconds_from_epoch, timezone.utc)
 
@@ -951,6 +959,8 @@ class PortalService(PhaseTwoMixin):
             # The balance can drop after the request (e.g. a referral left the channel).
             if not owner or int(current["amount"]) > earned(owner) - int(owner.get("paid_amount", 0) or 0):
                 raise PortalError("payment_balance_changed", 409)
+            owner["portal_payment_version"] = int(owner.get("portal_payment_version", 0)) + 1
+            tx.put("users", owner["user_id"], owner)
             current.update(status="signing", signing_wallet=signer, signing_started_at=self.now(),
                            signing_block=signing_block, net_amount=net, burn_amount=burn,
                            burn_percent=WITHDRAWAL_BURN_PERCENT)
@@ -977,7 +987,8 @@ class PortalService(PhaseTwoMixin):
         if type(force) is not bool or type(not_sent) is not bool:
             raise PortalError("invalid_request")
         payment = self.store.get("portal_payments", payment_id)
-        if not payment or payment.get("status") != "signing" or payment.get("tx_hash") or payment.get("submitted_tx_hash"):
+        if (not payment or payment.get("status") != "signing" or payment.get("tx_hash")
+                or (payment.get("submitted_tx_hash") and not_sent)):
             raise PortalError("payment_not_cancellable", 409)
         # not_sent: the payout page knows the transfer never reached a signature
         # (wrong wallet, admin declined the summary, or the wallet returned
@@ -985,13 +996,26 @@ class PortalService(PhaseTwoMixin):
         if not not_sent:
             found = self._find_sent_payout(payment, force)
             if found:
+                if (payment.get("submitted_tx_hash") or "").lower() not in ("", found.lower()):
+                    # The chain shows the real transfer; replace the wrong hash that was submitted.
+                    def use_found_hash(tx):
+                        current = tx.get("portal_payments", payment_id)
+                        if not current or current.get("status") != "signing" or current.get("tx_hash"):
+                            raise PortalError("payment_not_cancellable", 409)
+                        current["submitted_tx_hash"] = found
+                        tx.put("portal_payments", payment_id, current)
+                    self.store.transaction(use_found_hash)
                 result = self.confirm_wallet_payout(admin_id, payment_id, found)
                 return {"recovered": True, **result}
         def cancel(tx):
             current = tx.get("portal_payments", payment_id)
-            if not current or current.get("status") != "signing" or current.get("tx_hash") or current.get("submitted_tx_hash"):
+            if (not current or current.get("status") != "signing" or current.get("tx_hash")
+                    or (current.get("submitted_tx_hash") and not_sent)):
                 raise PortalError("payment_not_cancellable", 409)
-            current.update(status="pending", signing_wallet="", signing_started_at=0, signing_block=None)
+            # A submitted hash reaches this point only after the chain search found no transfer
+            # (and no treasury transaction waiting in the mempool), so it moved no tokens.
+            current.update(status="pending", signing_wallet="", signing_started_at=0, signing_block=None,
+                           submitted_tx_hash="")
             tx.put("portal_payments", payment_id, current)
             self._audit(tx, admin_id, "wallet_payout_cancelled", payment_id,
                         {"forced": force, "not_sent": not_sent})
@@ -1104,7 +1128,7 @@ class PortalService(PhaseTwoMixin):
         expected_data = "0xa9059cbb" + recipient[2:].lower().rjust(64, "0") + format(amount_units, "064x")
         if (int(tx.get("chainId", 0)) != 56 or str(tx.get("from", "")).lower() != signer.lower()
                 or str(tx.get("to", "")).lower() != token_address.lower()
-                or int(tx.get("value", 0)) != 0 or str(tx.get("input", tx.get("data", ""))).lower() != expected_data.lower()):
+                or int(tx.get("value", 0)) != 0 or _hex(tx.get("input", tx.get("data", b""))) != expected_data.lower()):
             raise PortalError("transaction_mismatch", 400)
         def mark_sending(store_tx):
             current = store_tx.get("portal_payments", payment_id)
