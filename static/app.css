@@ -376,3 +376,36 @@ html[data-motion=off] .heritage-atmosphere span,html[data-motion=off] .heritage-
 /* Long wallets / transaction hashes in admin rows must wrap instead of widening the page on phones */
 .admin-row>div:first-child{min-width:0;max-width:100%}
 .admin-row .mono,.payment-item .mono{overflow-wrap:anywhere;word-break:break-all}
+/* Phone bottom bar: show that it continues. A part of the next item stays visible, and an
+   arrow with a fade sits on each side that has more items. Tapping the arrow scrolls. */
+.nav-scroll{display:none}
+@media(max-width:640px){
+  .sidebar nav{scroll-behavior:smooth;scroll-padding-inline:44px}
+  .sidebar nav .nav-item{flex:0 0 max(62px,calc((100vw - 50px) / 5));min-width:0}
+  .nav-scroll{position:absolute;top:5px;bottom:calc(5px + env(safe-area-inset-bottom,0px));width:40px;display:flex;align-items:center;justify-content:center;border:0;padding:0;margin:0;background:none;color:#f2cc83;z-index:2;opacity:0;visibility:hidden;transition:opacity .2s,visibility .2s}
+  .nav-scroll-start{inset-inline-start:0}
+  .nav-scroll-end{inset-inline-end:0}
+  html[dir=rtl] .nav-scroll-start,html[dir=ltr] .nav-scroll-end{background:linear-gradient(to left,#101010 55%,#10101000)}
+  html[dir=rtl] .nav-scroll-end,html[dir=ltr] .nav-scroll-start{background:linear-gradient(to right,#101010 55%,#10101000)}
+  .nav-scroll-chev{display:flex;align-items:center;justify-content:center;width:27px;height:27px;border-radius:50%;background:#2a2014;border:1px solid #c29a4573;box-shadow:0 0 10px #e9c47730}
+  .nav-scroll .icon{width:15px;height:15px;stroke-width:2.2}
+  html[dir=rtl] .nav-scroll-start .icon,html[dir=ltr] .nav-scroll-end .icon{transform:scaleX(-1)}
+  html[dir=rtl] .nav-scroll-start,html[dir=ltr] .nav-scroll-end{--nudge:1}
+  html[dir=rtl] .nav-scroll-end,html[dir=ltr] .nav-scroll-start{--nudge:-1}
+  .sidebar.more-start .nav-scroll-start,.sidebar.more-end .nav-scroll-end{opacity:1;visibility:visible}
+  html[data-motion=on] .sidebar.more-end .nav-scroll-end .nav-scroll-chev,html[data-motion=on] .sidebar.more-start .nav-scroll-start .nav-scroll-chev{animation:prs-nav-nudge 1.6s ease-in-out infinite}
+}
+@keyframes prs-nav-nudge{0%,100%{transform:translateX(0)}50%{transform:translateX(calc(var(--nudge,1) * 3px))}}
+@media(prefers-reduced-motion:reduce){.nav-scroll-chev{animation:none!important}.sidebar nav{scroll-behavior:auto}}
+/* Telegram Mini App: a short sign-in screen, then the panel; help in place of the web login if it fails */
+.tg-splash{display:none}
+html[data-telegram=signing] .tg-splash{position:fixed;inset:0;z-index:60;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;background:#090909;color:#d9c08b;font-size:12px;text-align:center}
+.tg-splash small{color:#8f846f;font-size:10px;letter-spacing:.5px}
+.tg-splash img{margin-bottom:6px}
+html[data-telegram=signing][data-motion=on] .tg-splash img{animation:prs-tg-pulse 1.6s ease-in-out infinite}
+@keyframes prs-tg-pulse{0%,100%{opacity:.55;transform:scale(.95)}50%{opacity:1;transform:scale(1)}}
+html[data-telegram=signing] #login-screen,html[data-telegram=signing] #app-shell{display:none!important}
+html[data-telegram=help] #login-help,html[data-telegram=help] #demo-actions,html[data-telegram=help] #official-site-link,html[data-telegram=help] #login-status:empty{display:none}
+html[data-telegram=help] #login-description{color:#f2dfb5}
+html[data-telegram=help] .login-story{display:none}
+html[data-telegram=help] .login-form-wrap{min-height:100svh}
