@@ -373,3 +373,6 @@ html[data-motion=off] .heritage-atmosphere span,html[data-motion=off] .heritage-
 .rules-section ul{margin:0;padding-inline-start:20px;display:flex;flex-direction:column;gap:8px}
 .rules-section li{font-size:12px;line-height:2;color:var(--muted)}
 .rules-section li::marker{color:var(--gold)}
+/* Long wallets / transaction hashes in admin rows must wrap instead of widening the page on phones */
+.admin-row>div:first-child{min-width:0;max-width:100%}
+.admin-row .mono,.payment-item .mono{overflow-wrap:anywhere;word-break:break-all}
