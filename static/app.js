@@ -95,6 +95,8 @@ function applyTelegramHelp() {
 }
 const e = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const n = (value) => new Intl.NumberFormat(state.lang === "fa" ? "fa-IR" : "en-US").format(value || 0);
+// Two-digit minutes/seconds in the same digits as the rest of the page (۰۸ in Persian, 08 in English).
+const n2 = (value) => new Intl.NumberFormat(state.lang === "fa" ? "fa-IR" : "en-US", {minimumIntegerDigits: 2, useGrouping: false}).format(value || 0);
 const now = () => Math.floor(Date.now()/1000) + state.offset;
 const date = (value, full=false) => value ? new Intl.DateTimeFormat(state.lang === "fa" ? "fa-IR" : "en-GB", {dateStyle: "medium", timeZone:"Asia/Tehran", ...(full ? {timeStyle:"short"} : {})}).format(new Date(value*1000)) : "—";
 const payoutHashKey = (id) => `prs-payout-hash:${id}`;
@@ -363,7 +365,7 @@ function updatePhaseTwoClocks() {
  const cycle=state.me?.mining?.cycle;
  if(cycle) {
   const wait=Math.max(0,cycle.ends_at-now());
-  document.querySelectorAll("[data-mining-timer]").forEach(node=>node.textContent=wait?`${n(Math.floor(wait/3600))}:${String(Math.floor(wait%3600/60)).padStart(2,"0")}:${String(wait%60).padStart(2,"0")}`:t("آماده دریافت","Ready to collect"));
+  document.querySelectorAll("[data-mining-timer]").forEach(node=>node.textContent=wait?`${n(Math.floor(wait/3600))}:${n2(Math.floor(wait%3600/60))}:${n2(wait%60)}`:t("آماده دریافت","Ready to collect"));
   document.querySelectorAll('[data-action="mining-claim"]').forEach(node=>node.disabled=wait>0||state.me.paused);
   document.querySelectorAll("[data-mining-progress]").forEach(node=>node.value=Math.min(28800,Math.max(0,now()-cycle.started_at)));
  }
