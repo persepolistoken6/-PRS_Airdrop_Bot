@@ -1,9 +1,11 @@
 """Non-destructive production readiness check. Never prints connection strings."""
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from portal.service import build_service
 from portal.settings import Settings
@@ -16,6 +18,11 @@ def main():
     service = build_service(settings)
     if not service.store.ready():
         raise RuntimeError("MongoDB must support replica-set/sharded transactions. Do not enable the portal on a standalone server.")
+    legacy_url = os.getenv("LEGACY_MONGO_URL", "").strip()
+    if legacy_url:
+        # One-time copy of the old bot's database into this (empty) database. See import_legacy_db.py.
+        from import_legacy_db import import_legacy
+        import_legacy(service.store.database, legacy_url, os.getenv("LEGACY_MONGO_DB", "persepolis_db").strip() or "persepolis_db")
     duplicate = next(service.store.database.users.aggregate([
         {"$group": {"_id": "$user_id", "count": {"$sum": 1}}},
         {"$match": {"count": {"$gt": 1}}}, {"$limit": 1}
