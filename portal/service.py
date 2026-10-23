@@ -955,8 +955,13 @@ class PortalService(PhaseTwoMixin):
         inviter["referral_total"] = int(inviter.get("referral_total", 0) or 0) + 1
         return inviter["referral_total"]
 
-    def update_referral_membership(self, invitee_id, is_member):
+    def update_referral_membership(self, invitee_id, is_member, sweep=False):
         """An invited user left (or rejoined) the official channel.
+
+        sweep=True marks a periodic membership check (not a live channel event).
+        Referrals credited by the old bot, which never removed anyone, get their
+        first state recorded by that check: one already outside the channel left
+        before this rule existed and stays counted. Leaves after that are applied.
 
         Each inviter's first PROTECTED_REFERRALS referrals, in the order they were
         credited, always stay counted: their leaving changes nothing. From the next
@@ -995,11 +1000,24 @@ class PortalService(PhaseTwoMixin):
                     invitee["referral_number"] = number   # keep the copy written below in step
             protected = 0 < number <= PROTECTED_REFERRALS
             should_count = protected or is_member
+            # First look at a referral credited by the old bot (no state recorded yet).
+            first_legacy_check = (sweep and "referral_in_channel" not in invitee
+                                  and not invitee.get("referral_credited_at"))
+            left_before_rule = invitee.get("referral_left_before_rule") is True
             if should_count == counted:
                 # The referral count stays as it is; only remember the channel state.
-                if in_channel != is_member:
+                if in_channel != is_member or first_legacy_check or (is_member and left_before_rule):
                     invitee["referral_in_channel"] = is_member
-                    invitee["referral_left_at" if not is_member else "referral_rejoined_at"] = now
+                    if in_channel != is_member:
+                        invitee["referral_left_at" if not is_member else "referral_rejoined_at"] = now
+                    if is_member:
+                        invitee.pop("referral_left_before_rule", None)   # back in the channel: a later leave counts
+                    tx.put("users", invitee_id, invitee)
+                return None
+            if not is_member and (first_legacy_check or left_before_rule):
+                # Already outside the channel when this rule started: keep the referral and its reward.
+                if first_legacy_check:
+                    invitee.update(referral_in_channel=False, referral_left_before_rule=True)
                     tx.put("users", invitee_id, invitee)
                 return None
             open_ref = tx.get("portal_open_payments", inviter_id)
