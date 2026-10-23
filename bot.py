@@ -14,7 +14,7 @@ from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeybo
 from pymongo import MongoClient, ReturnDocument
 from portal.settings import (Settings, REQUIRED_REFERRALS, BASE_REWARD, EXTRA_REWARD, DAILY_REWARD, MAX_TOTAL_TOKENS_LIMIT,
                              CAPTCHA_MAX_ATTEMPTS, CAPTCHA_LOCK_SECONDS)
-from portal.service import build_service, PortalError
+from portal.service import build_service, PortalError, with_burn
 from portal.bot_bridge import BotBridge, PANEL_LABELS, MISSION_LABELS
 
 TOKEN = os.getenv("BOT_TOKEN")
@@ -487,8 +487,10 @@ def send_portal_csv_report(chat_id, report_kind):
     reports = {
         "users": ("گزارش کاربران پنل سایت", "portal_site_users.csv", list(db.users.find({})),
                   ["user_id", "telegram_username", "registered", "referrals", "referred_by", "earned", "paid", "unpaid", "wallet", "instagram", "twitter", "suspended", "mining_total"]),
-        "payments": ("گزارش درخواست‌ها و پرداخت‌های سایت", "portal_site_payments.csv", list(db.portal_payments.find({})),
-                     ["id", "user_id", "amount", "wallet", "status", "tx_hash", "block_number", "reason", "created_at", "reviewed_at", "reviewed_by"]),
+        "payments": ("گزارش درخواست‌ها و پرداخت‌های سایت", "portal_site_payments.csv",
+                     [with_burn(p) for p in db.portal_payments.find({})],
+                     ["id", "user_id", "amount", "net_amount", "burn_amount", "wallet", "status", "tx_hash", "block_number",
+                      "reason", "created_at", "reviewed_at", "reviewed_by"]),
         "audit": ("گزارش سوابق مدیریت سایت", "portal_site_admin_audit.csv", list(db.portal_audit.find({})),
                   ["id", "admin_id", "action", "target", "details", "created_at"]),
     }
@@ -527,9 +529,11 @@ def send_portal_xlsx_report(chat_id, report_kind):
     from openpyxl.utils import get_column_letter
 
     if report_kind == "paid":
-        rows = list(db.portal_payments.find({"status": "recorded"}))
-        headers = ["هش تراکنش", "آیدی عددی تلگرام", "مبلغ PRS", "کیف پول", "وضعیت", "بلاک", "زمان درخواست", "زمان پرداخت", "آیدی مدیر"]
-        fields = ["tx_hash", "user_id", "amount", "wallet", "status", "block_number", "created_at", "reviewed_at", "reviewed_by"]
+        rows = [with_burn(p) for p in db.portal_payments.find({"status": "recorded"})]
+        headers = ["هش تراکنش", "آیدی عددی تلگرام", "PRS ارسال‌شده", "سهم توکن‌سوزی PRS", "مبلغ کل PRS", "کیف پول", "وضعیت",
+                   "بلاک", "زمان درخواست", "زمان پرداخت", "آیدی مدیر"]
+        fields = ["tx_hash", "user_id", "net_amount", "burn_amount", "amount", "wallet", "status", "block_number",
+                  "created_at", "reviewed_at", "reviewed_by"]
         filename, title, sheet_title = "portal_site_paid_transactions.xlsx", "پرداخت‌های موفق سایت", "پرداخت‌های موفق"
     elif report_kind == "social":
         rows = list(db.users.find({}))
