@@ -44,6 +44,9 @@ def main():
     }))
     print(f"INFO: wallet keys added for {added} user(s); wallets shared by several accounts: "
           f"{shared[0]['wallets'] if shared else 0} (new registrations of a used wallet are now refused).")
+    database = service.store.database
+    print(f"DATABASE: '{database.name}' with {database.users.estimated_document_count():,} user document(s); "
+          f"channel {settings.channel}; bot @{settings.bot_username}")
     print("READY: transaction support, unique user IDs and portal indexes checked. Existing balances were not modified.")
 
 
