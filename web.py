@@ -1,4 +1,4 @@
-"""Standalone HTTPS web portal. No Telegram Mini App SDK and no polling here."""
+"""HTTPS web portal; also opens inside Telegram as a Mini App (/tg). No polling here."""
 import os
 import ipaddress
 import secrets
@@ -63,7 +63,7 @@ def create_app(settings=None, service=None):
         # address after moving to app.prstoken.com) would fail every POST at the
         # Origin check below. Send page visits to WEB_BASE_URL instead.
         # Browsers keep the #token fragment across this redirect.
-        if (canonical_host and request.method == "GET" and request.path in ("/", "/login")
+        if (canonical_host and request.method == "GET" and request.path in ("/", "/login", "/tg")
                 and request.host.lower() != canonical_host):
             return redirect(settings.base_url + request.full_path.rstrip("?"), code=302)
 
@@ -77,6 +77,8 @@ def create_app(settings=None, service=None):
 
     @app.after_request
     def security_headers(response):
+        # Telegram Web (web.telegram.org) shows Mini Apps in a frame; the apps use their own window.
+        framers = "https://web.telegram.org" if request.path == "/tg" else "'none'"
         response.headers["Content-Security-Policy"] = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data: https://walletconnect.com https://*.walletconnect.com https://walletconnect.org https://*.walletconnect.org "
             "https://reown.com https://*.reown.com https://api.web3modal.org https://explorer-api.walletconnect.com; "
@@ -87,9 +89,10 @@ def create_app(settings=None, service=None):
             "https://verify.walletconnect.org https://secure.walletconnect.org https://secure-mobile.walletconnect.com "
             "https://secure-mobile.walletconnect.org https://echo.walletconnect.com https://rpc.walletconnect.org "
             "https://cloud.walletconnect.com https://metadata.walletconnect.com; "
-            "base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+            f"base-uri 'none'; frame-ancestors {framers}; form-action 'self'")
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
+        if framers == "'none'":
+            response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
         if not settings.demo:
@@ -111,8 +114,10 @@ def create_app(settings=None, service=None):
 
     @app.get("/")
     @app.get("/login")
+    @app.get("/tg")
     def index():
-        return render_template("index.html", asset_versions=asset_versions)
+        # /tg is the address the bot's buttons open inside Telegram; it starts on a short sign-in screen.
+        return render_template("index.html", asset_versions=asset_versions, telegram_page=request.path == "/tg")
 
     @app.get("/healthz")
     def health():
@@ -130,15 +135,19 @@ def create_app(settings=None, service=None):
                        channel_url=f"https://t.me/{settings.channel.lstrip('@')}", timezone=CAMPAIGN_TIMEZONE,
                        server_time=service.now(), phase=2)
 
-    def finish_login(result):
+    def finish_login(result, framed=False):
         response = jsonify(csrf=result["csrf"])
-        response.set_cookie(cookie_name, result["token"], httponly=True, secure=not settings.demo,
-                            samesite="Lax", max_age=settings.session_ttl, path="/")
+        if framed and not settings.demo:
+            # Inside Telegram Web's frame the cookie is third-party: it must be SameSite=None,
+            # partitioned to that frame. Writes still need the CSRF header and our Origin.
+            response.set_cookie(cookie_name, result["token"], httponly=True, secure=True, samesite="None",
+                                partitioned=True, max_age=settings.session_ttl, path="/")
+        else:
+            response.set_cookie(cookie_name, result["token"], httponly=True, secure=not settings.demo,
+                                samesite="Lax", max_age=settings.session_ttl, path="/")
         return response
 
-    @app.post("/api/auth/exchange")
-    def exchange():
-        # No raw Telegram user IDs are accepted as authentication.
+    def client_address():
         address = request.remote_addr or "unknown"
         if os.getenv("RAILWAY_ENVIRONMENT_ID") and not settings.demo:
             # Railway's public HTTP edge supplies X-Real-IP. Never use arbitrary
@@ -147,8 +156,25 @@ def create_app(settings=None, service=None):
                 address = str(ipaddress.ip_address(request.headers.get("X-Real-IP", "")))
             except ValueError:
                 pass
-        service.limit("exchange:" + digest(address), 120, 300)
+        return address
+
+    @app.post("/api/auth/exchange")
+    def exchange():
+        # No raw Telegram user IDs are accepted as authentication.
+        service.limit("exchange:" + digest(client_address()), 120, 300)
         return finish_login(service.exchange_login(body().get("token")))
+
+    @app.post("/api/auth/telegram")
+    def telegram_login():
+        # Opened from the bot: Telegram-signed Mini App data, or the personal key of the
+        # bot's keyboard button. Never a bare Telegram user ID.
+        # Mobile carriers put many users behind one address; each account has its own limit too.
+        service.limit("telegram-auth:" + digest(client_address()), 600, 300)
+        data = body()
+        init_data, key = data.get("init_data"), data.get("key")
+        result = service.telegram_login(init_data=init_data if isinstance(init_data, str) else None,
+                                        panel_key=key if isinstance(key, str) else None)
+        return finish_login(result, framed=data.get("framed") is True)
 
     @app.post("/api/auth/demo")
     def demo_login():
@@ -173,6 +199,8 @@ def create_app(settings=None, service=None):
         service.logout(request.cookies.get(cookie_name))
         response = jsonify(ok=True)
         response.delete_cookie(cookie_name, path="/", secure=not settings.demo, httponly=True, samesite="Lax")
+        if not settings.demo:   # the Telegram Web frame keeps a separate, partitioned copy
+            response.delete_cookie(cookie_name, path="/", secure=True, httponly=True, samesite="None", partitioned=True)
         return response
 
     @app.get("/api/missions")
