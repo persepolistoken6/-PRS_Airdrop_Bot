@@ -6,7 +6,8 @@ from datetime import datetime
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from .settings import CAMPAIGN_TIMEZONE, MAX_TOTAL_TOKENS_LIMIT, MINING_DEFAULT_BUDGET, MINING_SECONDS, REQUIRED_REFERRALS, TIERS
+from .settings import (CAMPAIGN_TIMEZONE, MAX_TOTAL_TOKENS_LIMIT, MINING_DEFAULT_BUDGET, MINING_SECONDS, PROTECTED_REFERRALS,
+                       REQUIRED_REFERRALS, TIERS)
 
 BONUS_BATCH_SIZE = 200
 ADMIN_USER_FIELDS = ("user_id", "wallet", "paid_amount", "ref_count", "daily_count", "bonus_tokens",
@@ -171,6 +172,9 @@ class PhaseTwoMixin:
                 inviter["ref_count"] = int(inviter.get("ref_count", 0)) + 1
                 delta = earned(inviter) - old_total
                 self._credit_lock(tx, delta)
+                # Fixed order number: the inviter's first three referrals are never deducted.
+                user["referral_number"] = self._next_referral_number(tx, candidate, inviter)
+                user["referral_credited_at"] = self.now()
                 tx.put("users", candidate, inviter)
                 user["referred_by"] = candidate
                 self._history(tx, f"referral:{user_id}:{candidate}", candidate, "referral", delta,
@@ -433,7 +437,12 @@ class PhaseTwoMixin:
         invited = self.store.find("users", {"referred_by": user_id})
         referrals = [{"user_id": u["user_id"], "registered": int(u.get("verified", 0)) >= 1,
                       "telegram_username": u.get("telegram_username") or "",
-                      "active": u.get("referral_active", True) is not False} for u in invited]
+                      "active": u.get("referral_active", True) is not False,
+                      "in_channel": u.get("referral_in_channel", u.get("referral_active", True)) is not False,
+                      "number": u.get("referral_number") if type(u.get("referral_number")) is int else None,
+                      "protected": type(u.get("referral_number")) is int and 0 < u["referral_number"] <= PROTECTED_REFERRALS}
+                     for u in invited]
+        referrals.sort(key=lambda r: (r["number"] is None, r["number"] or 0, r["user_id"]))
         # Referral quality: accounts that never claimed a daily reward and never
         # saved a wallet are a common sign of farmed (fake) invitations.
         inactive = sum(1 for u in invited if int(u.get("daily_count", 0) or 0) == 0 and not u.get("wallet"))
