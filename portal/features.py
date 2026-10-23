@@ -6,8 +6,8 @@ from datetime import datetime
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from .settings import (CAMPAIGN_TIMEZONE, MAX_TOTAL_TOKENS_LIMIT, MINING_DEFAULT_BUDGET, MINING_SECONDS, PROTECTED_REFERRALS,
-                       REQUIRED_REFERRALS, TIERS)
+from .settings import (BASE_REWARD, CAMPAIGN_TIMEZONE, MAX_TOTAL_TOKENS_LIMIT, MINING_DEFAULT_BUDGET, MINING_SECONDS,
+                       PROTECTED_REFERRALS, REQUIRED_REFERRALS, TIERS)
 
 BONUS_BATCH_SIZE = 200
 ADMIN_USER_FIELDS = ("user_id", "wallet", "paid_amount", "ref_count", "daily_count", "bonus_tokens",
@@ -150,10 +150,11 @@ class PhaseTwoMixin:
         return self.store.transaction(operation)
 
     def register_gateway_user(self, user_id, referrer_id):
-        """Complete a solved captcha + membership flow without bot notifications.
+        """Complete a solved captcha + membership flow.
 
         The user document and inviter count commit together. Concurrent replies
-        or old join buttons cannot credit the same invitation twice.
+        or old join buttons cannot credit the same invitation twice. The inviter
+        gets a congratulation message in Telegram (sent by the bot's outbox).
         """
         from .service import PortalError, earned
         def operation(tx):
@@ -167,7 +168,8 @@ class PhaseTwoMixin:
                 raise PortalError("account_suspended", 403)
             candidate = user.get("registration_referrer") or referrer_id
             if type(candidate) is int and candidate > 0 and candidate != user_id and not user.get("referred_by") and int(user.get("verified", 0)) < 1:
-                inviter = tx.get("users", candidate) or {"user_id": candidate, "verified": 0, "ref_count": 0}
+                known_inviter = tx.get("users", candidate)
+                inviter = known_inviter or {"user_id": candidate, "verified": 0, "ref_count": 0}
                 old_total = earned(inviter)
                 inviter["ref_count"] = int(inviter.get("ref_count", 0)) + 1
                 delta = earned(inviter) - old_total
@@ -179,10 +181,29 @@ class PhaseTwoMixin:
                 user["referred_by"] = candidate
                 self._history(tx, f"referral:{user_id}:{candidate}", candidate, "referral", delta,
                               "دعوت تأییدشده · Verified referral")
+                if known_inviter:
+                    self._queue_message(tx, candidate, self._referral_welcome_text(inviter, delta),
+                                        key=f"referral-new:{user_id}")
             user["verified"] = max(1, int(user.get("verified", 0)))
             user.setdefault("registered_at", self.now())
             tx.put("users", user_id, user)
         self.store.transaction(operation)
+
+    def _referral_welcome_text(self, inviter, delta):
+        from .service import earned
+        count, total = int(inviter.get("ref_count", 0) or 0), earned(inviter)
+        if count < REQUIRED_REFERRALS:
+            left = REQUIRED_REFERRALS - count
+            fa_next = f"🎯 با {left} دعوت دیگر، پاداش {BASE_REWARD:,} PRS برایت فعال می‌شود."
+            en_next = f"🎯 {left} more referral(s) and your {BASE_REWARD:,} PRS reward unlocks."
+        else:
+            fa_next = f"🪙 پاداش این دعوت: {delta:+,} PRS\n💰 مجموع توکن کسب‌شده: {total:,} PRS"
+            en_next = f"🪙 Reward for this referral: {delta:+,} PRS\n💰 Total tokens earned: {total:,} PRS"
+        return self._lang(inviter,
+            f"🎉 تبریک! یک دعوت موفق داشتی.\nدوستت با لینک تو ثبت‌نام کرد و عضو کانال رسمی شد.\n\n"
+            f"👥 تعداد دعوت‌های تو: {count}\n{fa_next}",
+            f"🎉 Congratulations! You have a new successful referral.\nYour friend joined with your link and "
+            f"joined the official channel.\n\n👥 Your referrals: {count}\n{en_next}")
 
     def check_access(self, user_id):
         from .service import PortalError
